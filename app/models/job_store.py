@@ -76,6 +76,19 @@ class JobStore:
         with self._lock:
             return list(self._jobs.values())
 
+    def list_filtered(
+        self, status: Optional[str] = None,
+    ) -> list[Job]:
+        """Return jobs optionally filtered by status, sorted by created_at descending."""
+        with self._lock:
+            jobs = list(self._jobs.values())
+
+        if status:
+            jobs = [j for j in jobs if j.status.value == status]
+
+        jobs.sort(key=lambda j: j.created_at, reverse=True)
+        return jobs
+
 
 # Module-level singleton
 job_store = JobStore()

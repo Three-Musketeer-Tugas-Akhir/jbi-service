@@ -71,6 +71,7 @@ Deliver a FastAPI service that exposes the full detect-segment-crop pipeline as 
 - **FR-3.2** Expose progress metadata: `current_second`, `total_seconds`, `percent_complete`.
 - **FR-3.3** Support cancelling a queued or in-progress job.
 - **FR-3.4** Retain job results for a configurable TTL (default 24 h), then auto-cleanup.
+- **FR-3.5** List all jobs with optional status filtering, supporting pagination via `limit` and `offset` query parameters.
 
 ### FR-4 — Results & Downloads
 - **FR-4.1** Return structured JSON with detection timeline (per-second boolean array).
@@ -241,7 +242,48 @@ Response 200:
 { "job_id": "abc-123-def", "status": "cancelled" }
 ```
 
-### 6.6 Health Check
+### 6.6 List All Jobs
+
+```
+GET /api/v1/jobs?status=processing&limit=20&offset=0
+
+Query parameters (all optional):
+  status:   Filter by job status (queued, processing, completed, failed, cancelled)
+  limit:    Maximum number of jobs to return (default 20, max 100)
+  offset:   Number of jobs to skip for pagination (default 0)
+
+Response 200:
+{
+  "jobs": [
+    {
+      "job_id": "abc-123-def",
+      "status": "processing",
+      "progress": {
+        "phase": "detection",
+        "current": 340,
+        "total": 3400,
+        "percent": 10.0
+      },
+      "error": null,
+      "created_at": "2026-02-11T10:00:00Z",
+      "updated_at": "2026-02-11T10:02:15Z"
+    },
+    {
+      "job_id": "xyz-789-ghi",
+      "status": "completed",
+      "progress": null,
+      "error": null,
+      "created_at": "2026-02-11T09:00:00Z",
+      "updated_at": "2026-02-11T09:30:00Z"
+    }
+  ],
+  "total": 42,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+### 6.7 Health Check
 
 ```
 GET /api/v1/health
@@ -306,6 +348,7 @@ Response 200:
 | 4.5   | Implement `GET /api/v1/jobs/{job_id}` — return current status + progress | P0 |
 | 4.6   | Implement `DELETE /api/v1/jobs/{job_id}` — cancel a queued/in-progress job | P1 |
 | 4.7   | Implement job TTL: auto-delete job data and output files after configurable expiry | P2 |
+| 4.8   | Implement `GET /api/v1/jobs` — list all jobs with optional status filter and pagination | P1 |
 
 ### Epic 5: Results & File Serving
 > *Structure and serve detection results and cropped video files.*

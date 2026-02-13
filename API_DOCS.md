@@ -11,14 +11,15 @@ All responses use `Content-Type: application/json` unless otherwise noted.
 ## Table of Contents
 
 1. [Create Job](#1-create-job)
-2. [Get Job Status](#2-get-job-status)
-3. [Cancel Job](#3-cancel-job)
-4. [Get Job Results](#4-get-job-results)
-5. [Download Segment](#5-download-segment)
-6. [Health Check](#6-health-check)
-7. [Job Lifecycle](#7-job-lifecycle)
-8. [Error Responses](#8-error-responses)
-9. [Client Polling Guide](#9-client-polling-guide)
+2. [List Jobs](#2-list-jobs)
+3. [Get Job Status](#3-get-job-status)
+4. [Cancel Job](#4-cancel-job)
+5. [Get Job Results](#5-get-job-results)
+6. [Download Segment](#6-download-segment)
+7. [Health Check](#7-health-check)
+8. [Job Lifecycle](#8-job-lifecycle)
+9. [Error Responses](#9-error-responses)
+10. [Client Polling Guide](#10-client-polling-guide)
 
 ---
 
@@ -86,7 +87,106 @@ curl -X POST http://localhost:8000/api/v1/jobs \
 
 ---
 
-## 2. Get Job Status
+## 2. List Jobs
+
+Retrieve a paginated list of all jobs, optionally filtered by status.
+
+```
+GET /api/v1/jobs
+```
+
+### Query Parameters
+
+| Parameter | Type   | Default | Description                                                     |
+| --------- | ------ | ------- | --------------------------------------------------------------- |
+| `status`  | string | (none)  | Filter by status: `queued`, `processing`, `completed`, `failed`, `cancelled` |
+| `limit`   | int    | 20      | Max number of jobs to return (1–100)                            |
+| `offset`  | int    | 0       | Number of jobs to skip for pagination                           |
+
+### Response — `200 OK`
+
+```json
+{
+  "jobs": [
+    {
+      "job_id": "550e8400-e29b-41d4-a716-446655440000",
+      "status": "processing",
+      "progress": {
+        "phase": "detection",
+        "current": 340,
+        "total": 3400,
+        "percent": 10.0
+      },
+      "error": null,
+      "created_at": "2026-02-11T10:00:00.000000Z",
+      "updated_at": "2026-02-11T10:02:15.000000Z"
+    },
+    {
+      "job_id": "660f9500-f39c-52e5-b827-557766551111",
+      "status": "completed",
+      "progress": null,
+      "error": null,
+      "created_at": "2026-02-11T09:00:00.000000Z",
+      "updated_at": "2026-02-11T09:30:00.000000Z"
+    }
+  ],
+  "total": 42,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+**Filtered by status:**
+
+```bash
+curl "http://localhost:8000/api/v1/jobs?status=completed&limit=10"
+```
+
+**Empty result:**
+
+```json
+{
+  "jobs": [],
+  "total": 0,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+### Response Fields
+
+| Field    | Type              | Description                                              |
+| -------- | ----------------- | -------------------------------------------------------- |
+| `jobs`   | array             | Array of job status objects (same shape as Get Job Status) |
+| `total`  | int               | Total number of jobs matching the filter (before pagination) |
+| `limit`  | int               | Page size used                                           |
+| `offset` | int               | Offset used                                              |
+
+Each item in `jobs` follows the same schema as the [Get Job Status](#3-get-job-status) response.
+
+### Errors
+
+| Status | Condition          | Detail                                                                 |
+| ------ | ------------------ | ---------------------------------------------------------------------- |
+| 400    | Invalid status     | `"Invalid status 'foo'. Must be one of: cancelled, completed, ..."` |
+
+### Examples
+
+**All jobs (default pagination):**
+
+```bash
+curl http://localhost:8000/api/v1/jobs
+```
+
+**Second page of failed jobs:**
+
+```bash
+curl "http://localhost:8000/api/v1/jobs?status=failed&limit=10&offset=10"
+```
+
+---
+
+## 3. Get Job Status
 
 Poll the current status and processing progress of a job.
 
@@ -200,7 +300,7 @@ GET /api/v1/jobs/{job_id}
 
 ---
 
-## 3. Cancel Job
+## 4. Cancel Job
 
 Cancel a queued or in-progress job. Queued jobs are cancelled immediately. Processing jobs are marked as cancelled and the background worker stops cooperatively on its next progress callback.
 
@@ -238,7 +338,7 @@ curl -X DELETE http://localhost:8000/api/v1/jobs/550e8400-e29b-41d4-a716-4466554
 
 ---
 
-## 4. Get Job Results
+## 5. Get Job Results
 
 Retrieve structured detection and segmentation results for a completed job.
 
@@ -352,7 +452,7 @@ GET /api/v1/jobs/{job_id}/results
 
 ---
 
-## 5. Download Segment
+## 6. Download Segment
 
 Stream a cropped MP4 segment file.
 
@@ -406,7 +506,7 @@ curl -I http://localhost:8000/api/v1/jobs/550e8400-.../segments/0/download
 
 ---
 
-## 6. Health Check
+## 7. Health Check
 
 Check service health including model status, GPU availability, and disk space.
 
@@ -446,7 +546,7 @@ GET /api/v1/health
 
 ---
 
-## 7. Job Lifecycle
+## 8. Job Lifecycle
 
 ### Status Flow
 
@@ -483,7 +583,7 @@ Jobs still in `processing` state are never deleted by the cleanup scheduler, reg
 
 ---
 
-## 8. Error Responses
+## 9. Error Responses
 
 All errors use a consistent JSON structure:
 
@@ -521,7 +621,7 @@ For validation errors (422):
 
 ---
 
-## 9. Client Polling Guide
+## 10. Client Polling Guide
 
 Recommended polling pattern after creating a job:
 

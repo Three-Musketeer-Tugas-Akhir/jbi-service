@@ -76,6 +76,14 @@ class JobResultsResponse(BaseModel):
     segments: list[SegmentResponse]
 
 
+class JobListResponse(BaseModel):
+    """Response for GET /api/v1/jobs (list all jobs)."""
+    jobs: list[JobStatusResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class HealthResponse(BaseModel):
     """Response for GET /api/v1/health."""
     status: str  # "healthy", "degraded", "unhealthy"

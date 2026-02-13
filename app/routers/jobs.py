@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from app.config import settings
@@ -13,6 +13,7 @@ from app.models.schemas import (
     JobProgressResponse,
     JobCancelResponse,
     JobResultsResponse,
+    JobListResponse,
     VideoMetadataResponse,
     DetectionSummaryResponse,
     SegmentResponse,
@@ -31,6 +32,59 @@ from app.workers.tasks import process_job
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ── GET /jobs ─────────────────────────────────────────────────────────────
+
+VALID_STATUSES = {"queued", "processing", "completed", "failed", "cancelled"}
+
+
+@router.get(
+    "/jobs",
+    response_model=JobListResponse,
+    responses={400: {"model": ErrorResponse}},
+)
+async def list_jobs(
+    status: Optional[str] = Query(None, description="Filter by job status"),
+    limit: int = Query(20, ge=1, le=100, description="Max jobs to return"),
+    offset: int = Query(0, ge=0, description="Number of jobs to skip"),
+):
+    """List all jobs with optional status filtering and pagination.
+
+    Jobs are sorted by creation time (newest first).
+    """
+    if status is not None and status not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status '{status}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
+        )
+
+    all_jobs = job_store.list_filtered(status=status)
+    total = len(all_jobs)
+    page = all_jobs[offset : offset + limit]
+
+    jobs = []
+    for job in page:
+        progress = None
+        if job.status == JobStatus.PROCESSING and job.progress.total > 0:
+            progress = JobProgressResponse(
+                phase=job.progress.phase,
+                current=job.progress.current,
+                total=job.progress.total,
+                percent=job.progress.percent,
+            )
+        jobs.append(
+            JobStatusResponse(
+                job_id=job.job_id,
+                status=job.status.value,
+                progress=progress,
+                error=job.error,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        )
+
+    return JobListResponse(jobs=jobs, total=total, limit=limit, offset=offset)
 
 
 # ── POST /jobs ───────────────────────────────────────────────────────────
