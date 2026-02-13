@@ -1,0 +1,80 @@
+# ============================================================
+# JBI Detection & Segmentation API — Dockerfile.gpu (CUDA)
+# ============================================================
+# Requires: NVIDIA Container Toolkit on the host
+# Build:    docker build -f Dockerfile.gpu -t jbi-api:gpu .
+# Run:      docker run --gpus all -p 8000:8000 jbi-api:gpu
+# ============================================================
+
+# --- Stage 1: Build dependencies ---
+FROM nvidia/cuda:12.6.3-runtime-ubuntu22.04 AS builder
+
+# Install Python 3.11
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
+    python3-pip \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+WORKDIR /build
+
+# Create virtualenv
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip
+
+# Install PyTorch with CUDA first
+COPY requirements-torch-gpu.txt .
+RUN pip install --no-cache-dir -r requirements-torch-gpu.txt
+
+# Install remaining dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+
+# --- Stage 2: Runtime ---
+FROM nvidia/cuda:12.6.3-runtime-ubuntu22.04 AS runtime
+
+WORKDIR /app
+
+# Install Python 3.11 + runtime system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# Copy virtualenv from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# NVIDIA environment variables
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Copy application code and entry point
+COPY app/ ./app/
+COPY run.py .
+
+# Create storage directories
+RUN mkdir -p storage/uploads storage/outputs model_weights
+
+# Expose port
+EXPOSE 8000
+
+# Health check (longer start-period for CUDA initialization)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')" || exit 1
+
+# Start via run.py (reads ENVIRONMENT from .env / env vars)
+CMD ["python", "run.py"]

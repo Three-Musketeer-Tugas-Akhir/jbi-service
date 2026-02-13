@@ -1,0 +1,35 @@
+# Version control
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Environment
+.env
+
+# Storage (mounted at runtime)
+storage/
+
+# Notebooks & data (not needed in container)
+*.ipynb
+output.txt
+output2.txt
+object_detection_times*.txt
+
+# Docker
+Dockerfile
+Dockerfile.gpu
+docker-compose.yml
+.dockerignore
+
+# Docs & tests (not needed in production image)
+docs/
+tests/
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,51 @@
+# ============================================================
+# JBI Detection & Segmentation API — Docker Compose
+# ============================================================
+# Usage:
+#   CPU mode:  docker compose --profile cpu up --build
+#   GPU mode:  docker compose --profile gpu up --build
+# ============================================================
+
+services:
+  # ── CPU API Service ──────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["cpu"]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./model_weights:/app/model_weights:ro
+      - uploads_data:/app/storage/uploads
+      - outputs_data:/app/storage/outputs
+    restart: unless-stopped
+
+  # ── GPU API Service ──────────────────────────────────────
+  api-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    profiles: ["gpu"]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./model_weights:/app/model_weights:ro
+      - uploads_data:/app/storage/uploads
+      - outputs_data:/app/storage/outputs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  uploads_data:
+  outputs_data:
