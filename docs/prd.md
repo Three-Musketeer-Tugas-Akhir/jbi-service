@@ -349,6 +349,7 @@ Response 200:
 | 4.6   | Implement `DELETE /api/v1/jobs/{job_id}` — cancel a queued/in-progress job | P1 |
 | 4.7   | Implement job TTL: auto-delete job data and output files after configurable expiry | P2 |
 | 4.8   | Implement `GET /api/v1/jobs` — list all jobs with optional status filter and pagination | P1 |
+| 4.9   | Migrate in-memory job store to PostgreSQL with SQLAlchemy async + Alembic migrations | P1 |
 
 ### Epic 5: Results & File Serving
 > *Structure and serve detection results and cropped video files.*

@@ -20,7 +20,7 @@ async def _cleanup_loop():
     while True:
         await asyncio.sleep(interval)
         try:
-            cleaned = cleanup_expired_jobs()
+            cleaned = await cleanup_expired_jobs()
             if cleaned > 0:
                 logger.info("Scheduled cleanup removed %d jobs", cleaned)
         except Exception:

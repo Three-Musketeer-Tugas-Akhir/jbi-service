@@ -1,93 +1,131 @@
-import threading
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from app.models.job import (
-    Job, JobStatus, JobProgress, can_transition, is_terminal,
-)
+from sqlalchemy import select, delete, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.job import JobStatus, can_transition, is_terminal
+from app.models.job_model import JobRecord
 
 logger = logging.getLogger(__name__)
 
 
 class JobStore:
-    """Thread-safe in-memory job store with transition validation."""
+    """PostgreSQL-backed job store with async SQLAlchemy."""
 
-    def __init__(self):
-        self._jobs: dict[str, Job] = {}
-        self._lock = threading.Lock()
+    async def create(
+        self, session: AsyncSession, job_id: str, video_path: str,
+    ) -> JobRecord:
+        """Create a new job record."""
+        record = JobRecord(id=job_id, video_path=video_path)
+        session.add(record)
+        await session.flush()
+        return record
 
-    def create(self, job: Job) -> Job:
-        with self._lock:
-            self._jobs[job.job_id] = job
-        return job
+    async def get(
+        self, session: AsyncSession, job_id: str,
+    ) -> Optional[JobRecord]:
+        """Fetch a single job by ID."""
+        result = await session.execute(
+            select(JobRecord).where(JobRecord.id == job_id)
+        )
+        return result.scalar_one_or_none()
 
-    def get(self, job_id: str) -> Optional[Job]:
-        with self._lock:
-            return self._jobs.get(job_id)
-
-    def update_status(
-        self, job_id: str, status: JobStatus, error: str = None,
+    async def update_status(
+        self, session: AsyncSession, job_id: str,
+        status: JobStatus, error: str = None,
     ) -> bool:
         """Update job status with transition validation."""
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if not job:
-                return False
+        record = await self.get(session, job_id)
+        if not record:
+            return False
 
-            if not can_transition(job.status, status):
-                logger.warning(
-                    "Invalid transition for job %s: %s -> %s",
-                    job_id, job.status.value, status.value,
-                )
-                return False
+        current = JobStatus(record.status)
+        if not can_transition(current, status):
+            logger.warning(
+                "Invalid transition for job %s: %s -> %s",
+                job_id, current.value, status.value,
+            )
+            return False
 
-            job.status = status
-            job.updated_at = datetime.now(timezone.utc)
-            if error:
-                job.error = error
-            return True
+        record.status = status.value
+        record.updated_at = datetime.now(timezone.utc)
+        if error:
+            record.error = error
+        await session.flush()
+        return True
 
-    def update_progress(
-        self, job_id: str, phase: str, current: int, total: int,
+    async def update_progress(
+        self, session: AsyncSession, job_id: str,
+        phase: str, current: int, total: int,
     ):
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if job and not is_terminal(job.status):
-                job.progress = JobProgress(
-                    phase=phase,
-                    current=current,
-                    total=total,
-                    percent=round((current / total * 100) if total > 0 else 0, 1),
-                )
-                job.updated_at = datetime.now(timezone.utc)
+        """Update progress fields for a running job."""
+        record = await self.get(session, job_id)
+        if record and not is_terminal(JobStatus(record.status)):
+            record.progress_phase = phase
+            record.progress_current = current
+            record.progress_total = total
+            record.progress_percent = round(
+                (current / total * 100) if total > 0 else 0, 1,
+            )
+            record.updated_at = datetime.now(timezone.utc)
+            await session.flush()
 
-    def set_result(self, job_id: str, result: object):
-        with self._lock:
-            job = self._jobs.get(job_id)
-            if job:
-                job.result = result
+    async def set_result(
+        self, session: AsyncSession, job_id: str, result_data: dict,
+    ):
+        """Store the serialized pipeline result as JSONB."""
+        record = await self.get(session, job_id)
+        if record:
+            record.result_data = result_data
+            await session.flush()
 
-    def delete(self, job_id: str) -> bool:
-        with self._lock:
-            return self._jobs.pop(job_id, None) is not None
+    async def delete(
+        self, session: AsyncSession, job_id: str,
+    ) -> bool:
+        """Delete a job record."""
+        result = await session.execute(
+            delete(JobRecord).where(JobRecord.id == job_id)
+        )
+        return result.rowcount > 0
 
-    def list_all(self) -> list[Job]:
-        with self._lock:
-            return list(self._jobs.values())
+    async def list_all(
+        self, session: AsyncSession,
+    ) -> list[JobRecord]:
+        """Return all jobs sorted newest first."""
+        result = await session.execute(
+            select(JobRecord).order_by(JobRecord.created_at.desc())
+        )
+        return list(result.scalars().all())
 
-    def list_filtered(
-        self, status: Optional[str] = None,
-    ) -> list[Job]:
-        """Return jobs optionally filtered by status, sorted by created_at descending."""
-        with self._lock:
-            jobs = list(self._jobs.values())
+    async def list_filtered(
+        self, session: AsyncSession,
+        status: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[JobRecord], int]:
+        """Return paginated jobs with optional status filter.
+
+        Returns (page_of_records, total_count).
+        """
+        query = select(JobRecord)
+        count_query = select(func.count()).select_from(JobRecord)
 
         if status:
-            jobs = [j for j in jobs if j.status.value == status]
+            query = query.where(JobRecord.status == status)
+            count_query = count_query.where(JobRecord.status == status)
 
-        jobs.sort(key=lambda j: j.created_at, reverse=True)
-        return jobs
+        query = query.order_by(JobRecord.created_at.desc())
+        query = query.limit(limit).offset(offset)
+
+        result = await session.execute(query)
+        records = list(result.scalars().all())
+
+        count_result = await session.execute(count_query)
+        total = count_result.scalar()
+
+        return records, total
 
 
 # Module-level singleton

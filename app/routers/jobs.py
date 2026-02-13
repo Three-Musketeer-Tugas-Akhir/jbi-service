@@ -3,10 +3,12 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import get_db
 from app.models.schemas import (
     JobCreateResponse,
     JobStatusResponse,
@@ -20,18 +22,40 @@ from app.models.schemas import (
     BboxResponse,
     ErrorResponse,
 )
-from app.models.job import Job, JobStatus, is_terminal
+from app.models.job import JobStatus, is_terminal
 from app.models.job_store import job_store
+from app.models.result_serializer import deserialize_pipeline_result
 from app.services.validator import (
     validate_upload, validate_video_file, VideoValidationError,
 )
 from app.services.downloader import download_video, infer_extension, DownloadError
-from app.services.pipeline import PipelineResult
 from app.workers.tasks import process_job
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ── Helper: build status response from a DB record ──────────────────────
+
+def _record_to_status_response(record) -> JobStatusResponse:
+    """Convert a JobRecord ORM instance to a JobStatusResponse."""
+    progress = None
+    if record.status == JobStatus.PROCESSING.value and record.progress_total > 0:
+        progress = JobProgressResponse(
+            phase=record.progress_phase,
+            current=record.progress_current,
+            total=record.progress_total,
+            percent=record.progress_percent,
+        )
+    return JobStatusResponse(
+        job_id=record.id,
+        status=record.status,
+        progress=progress,
+        error=record.error,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
 
 
 # ── GET /jobs ─────────────────────────────────────────────────────────────
@@ -45,6 +69,7 @@ VALID_STATUSES = {"queued", "processing", "completed", "failed", "cancelled"}
     responses={400: {"model": ErrorResponse}},
 )
 async def list_jobs(
+    session: AsyncSession = Depends(get_db),
     status: Optional[str] = Query(None, description="Filter by job status"),
     limit: int = Query(20, ge=1, le=100, description="Max jobs to return"),
     offset: int = Query(0, ge=0, description="Number of jobs to skip"),
@@ -59,30 +84,11 @@ async def list_jobs(
             detail=f"Invalid status '{status}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
         )
 
-    all_jobs = job_store.list_filtered(status=status)
-    total = len(all_jobs)
-    page = all_jobs[offset : offset + limit]
+    records, total = await job_store.list_filtered(
+        session, status=status, limit=limit, offset=offset,
+    )
 
-    jobs = []
-    for job in page:
-        progress = None
-        if job.status == JobStatus.PROCESSING and job.progress.total > 0:
-            progress = JobProgressResponse(
-                phase=job.progress.phase,
-                current=job.progress.current,
-                total=job.progress.total,
-                percent=job.progress.percent,
-            )
-        jobs.append(
-            JobStatusResponse(
-                job_id=job.job_id,
-                status=job.status.value,
-                progress=progress,
-                error=job.error,
-                created_at=job.created_at,
-                updated_at=job.updated_at,
-            )
-        )
+    jobs = [_record_to_status_response(r) for r in records]
 
     return JobListResponse(jobs=jobs, total=total, limit=limit, offset=offset)
 
@@ -97,6 +103,7 @@ async def list_jobs(
 )
 async def create_job(
     background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_db),
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
 ):
@@ -118,9 +125,8 @@ async def create_job(
     else:
         file_path = _handle_url_download(job_id, url)
 
-    # --- Create job record ---
-    job = Job(job_id=job_id, video_path=str(file_path))
-    job_store.create(job)
+    # --- Create job record in DB ---
+    record = await job_store.create(session, job_id, str(file_path))
 
     logger.info("Job created: id=%s, source=%s", job_id, "upload" if file else "url")
 
@@ -128,9 +134,9 @@ async def create_job(
     background_tasks.add_task(process_job, job_id, str(file_path))
 
     return JobCreateResponse(
-        job_id=job.job_id,
-        status=job.status.value,
-        created_at=job.created_at,
+        job_id=record.id,
+        status=record.status,
+        created_at=record.created_at,
     )
 
 
@@ -202,35 +208,18 @@ def _handle_url_download(job_id: str, url: str) -> Path:
     response_model=JobStatusResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def get_job_status(job_id: str):
+async def get_job_status(job_id: str, session: AsyncSession = Depends(get_db)):
     """Get the current status and progress of a job.
 
     Clients poll this endpoint to track processing progress.
     Progress details are available when status is "processing".
     Error details are available when status is "failed".
     """
-    job = job_store.get(job_id)
-    if not job:
+    record = await job_store.get(session, job_id)
+    if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    # Build progress object only when processing
-    progress = None
-    if job.status == JobStatus.PROCESSING and job.progress.total > 0:
-        progress = JobProgressResponse(
-            phase=job.progress.phase,
-            current=job.progress.current,
-            total=job.progress.total,
-            percent=job.progress.percent,
-        )
-
-    return JobStatusResponse(
-        job_id=job.job_id,
-        status=job.status.value,
-        progress=progress,
-        error=job.error,
-        created_at=job.created_at,
-        updated_at=job.updated_at,
-    )
+    return _record_to_status_response(record)
 
 
 # ── DELETE /jobs/{job_id} ────────────────────────────────────────────────
@@ -243,7 +232,7 @@ async def get_job_status(job_id: str):
         409: {"model": ErrorResponse},
     },
 )
-async def cancel_job(job_id: str):
+async def cancel_job(job_id: str, session: AsyncSession = Depends(get_db)):
     """Cancel a queued or in-progress job.
 
     - Queued jobs are cancelled immediately.
@@ -252,25 +241,25 @@ async def cancel_job(job_id: str):
     - Jobs already in a terminal state (completed, failed, cancelled)
       cannot be cancelled and return 409 Conflict.
     """
-    job = job_store.get(job_id)
-    if not job:
+    record = await job_store.get(session, job_id)
+    if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    if is_terminal(job.status):
+    if is_terminal(JobStatus(record.status)):
         raise HTTPException(
             status_code=409,
-            detail=f"Job '{job_id}' is already '{job.status.value}' and cannot be cancelled",
+            detail=f"Job '{job_id}' is already '{record.status}' and cannot be cancelled",
         )
 
-    success = job_store.update_status(job_id, JobStatus.CANCELLED)
+    success = await job_store.update_status(session, job_id, JobStatus.CANCELLED)
     if not success:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot cancel job '{job_id}' in state '{job.status.value}'",
+            detail=f"Cannot cancel job '{job_id}' in state '{record.status}'",
         )
 
     # Clean up uploaded video file
-    _cleanup_upload(job.video_path)
+    _cleanup_upload(record.video_path)
 
     logger.info("Job cancelled: %s", job_id)
 
@@ -301,7 +290,7 @@ def _cleanup_upload(video_path: str):
         409: {"model": ErrorResponse},
     },
 )
-async def get_job_results(job_id: str):
+async def get_job_results(job_id: str, session: AsyncSession = Depends(get_db)):
     """Get the detection and segmentation results of a completed job.
 
     Only available when job status is "completed". For other states:
@@ -309,22 +298,23 @@ async def get_job_results(job_id: str):
     - failed/cancelled: 409 (no results available)
     - not found: 404
     """
-    job = job_store.get(job_id)
-    if not job:
+    record = await job_store.get(session, job_id)
+    if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    if job.status != JobStatus.COMPLETED:
+    if record.status != JobStatus.COMPLETED.value:
         raise HTTPException(
             status_code=409,
-            detail=f"Job '{job_id}' is '{job.status.value}' — results are only available for completed jobs",
+            detail=f"Job '{job_id}' is '{record.status}' — results are only available for completed jobs",
         )
 
-    result: PipelineResult = job.result
-    if not result:
+    if not record.result_data:
         raise HTTPException(
             status_code=500,
             detail=f"Job '{job_id}' is completed but result data is missing",
         )
+
+    result = deserialize_pipeline_result(job_id, record.result_data)
 
     # Build video metadata
     video_metadata = VideoMetadataResponse(
@@ -363,7 +353,7 @@ async def get_job_results(job_id: str):
 
     return JobResultsResponse(
         job_id=job_id,
-        status=job.status.value,
+        status=record.status,
         video_metadata=video_metadata,
         detection_summary=detection_summary,
         segments=segments,
@@ -380,29 +370,30 @@ async def get_job_results(job_id: str):
         409: {"model": ErrorResponse},
     },
 )
-async def download_segment(job_id: str, index: int):
+async def download_segment(job_id: str, index: int, session: AsyncSession = Depends(get_db)):
     """Download a cropped segment video file.
 
     Streams the MP4 file for the given segment index.
     Only available when job status is "completed".
     """
     # --- Validate job ---
-    job = job_store.get(job_id)
-    if not job:
+    record = await job_store.get(session, job_id)
+    if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    if job.status != JobStatus.COMPLETED:
+    if record.status != JobStatus.COMPLETED.value:
         raise HTTPException(
             status_code=409,
-            detail=f"Job '{job_id}' is '{job.status.value}' — downloads are only available for completed jobs",
+            detail=f"Job '{job_id}' is '{record.status}' — downloads are only available for completed jobs",
         )
 
-    result: PipelineResult = job.result
-    if not result:
+    if not record.result_data:
         raise HTTPException(
             status_code=500,
             detail=f"Job '{job_id}' is completed but result data is missing",
         )
+
+    result = deserialize_pipeline_result(job_id, record.result_data)
 
     # --- Validate segment index ---
     if index < 0 or index >= len(result.crop.segments):

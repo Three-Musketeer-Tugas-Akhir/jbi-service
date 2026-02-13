@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.database import engine
+from app.models.job_model import Base
 from app.routers import health, jobs
 from app.services.scheduler import start_cleanup_scheduler, stop_cleanup_scheduler
 from app.exception_handlers import register_exception_handlers
@@ -27,9 +29,13 @@ async def lifespan(app: FastAPI):
         settings.upload_dir,
         settings.output_dir,
     )
+    # Create DB tables (safety net — Alembic is the primary migration tool)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     start_cleanup_scheduler()
     yield
     stop_cleanup_scheduler()
+    await engine.dispose()
     logger.info("Shutting down")
 
 

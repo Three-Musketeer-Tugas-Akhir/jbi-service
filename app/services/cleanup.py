@@ -4,17 +4,18 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from app.config import settings
+from app.database import async_session
 from app.models.job import JobStatus
 from app.models.job_store import job_store
 
 logger = logging.getLogger(__name__)
 
 
-def cleanup_expired_jobs() -> int:
+async def cleanup_expired_jobs() -> int:
     """Delete jobs that have exceeded their TTL.
 
     Deletes:
-    - The job record from the in-memory store.
+    - The job record from the database.
     - The uploaded video file.
     - The output directory and all contents.
 
@@ -25,30 +26,33 @@ def cleanup_expired_jobs() -> int:
     now = datetime.now(timezone.utc)
     cutoff = now - ttl
 
-    all_jobs = job_store.list_all()
-    cleaned = 0
+    async with async_session() as session:
+        all_jobs = await job_store.list_all(session)
+        cleaned = 0
 
-    for job in all_jobs:
-        # Never clean up jobs still processing
-        if job.status == JobStatus.PROCESSING:
-            continue
+        for record in all_jobs:
+            # Never clean up jobs still processing
+            if record.status == JobStatus.PROCESSING.value:
+                continue
 
-        # Clean up terminal jobs past TTL
-        # Also clean up queued jobs past TTL (assumed stuck/orphaned)
-        if job.updated_at < cutoff:
-            try:
-                _delete_job_files(job.job_id, job.video_path)
-                job_store.delete(job.job_id)
-                cleaned += 1
-                logger.info(
-                    "Cleaned up expired job %s (status=%s, age=%s)",
-                    job.job_id, job.status.value, now - job.updated_at,
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to clean up job %s — will retry next cycle",
-                    job.job_id,
-                )
+            # Clean up terminal jobs past TTL
+            # Also clean up queued jobs past TTL (assumed stuck/orphaned)
+            if record.updated_at < cutoff:
+                try:
+                    _delete_job_files(record.id, record.video_path)
+                    await job_store.delete(session, record.id)
+                    cleaned += 1
+                    logger.info(
+                        "Cleaned up expired job %s (status=%s, age=%s)",
+                        record.id, record.status, now - record.updated_at,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to clean up job %s — will retry next cycle",
+                        record.id,
+                    )
+
+        await session.commit()
 
     if cleaned > 0:
         logger.info("Cleanup cycle complete: %d jobs removed", cleaned)

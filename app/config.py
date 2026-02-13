@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # --- Logging ---
     log_level: str = "INFO"
 
+    # --- Database ---
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/anotasi_db"
+    database_echo: bool = False  # SQLAlchemy SQL logging (enable in dev)
+
     # --- Server ---
     cors_origins: str = "*"
     api_v1_prefix: str = "/api/v1"
