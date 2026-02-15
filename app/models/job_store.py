@@ -16,9 +16,10 @@ class JobStore:
 
     async def create(
         self, session: AsyncSession, job_id: str, video_path: str,
+        video_title: str = "",
     ) -> JobRecord:
         """Create a new job record."""
-        record = JobRecord(id=job_id, video_path=video_path)
+        record = JobRecord(id=job_id, video_path=video_path, video_title=video_title)
         session.add(record)
         await session.flush()
         return record

@@ -51,6 +51,7 @@ def _record_to_status_response(record) -> JobStatusResponse:
     return JobStatusResponse(
         job_id=record.id,
         status=record.status,
+        video_title=record.video_title or None,
         progress=progress,
         error=record.error,
         created_at=record.created_at,
@@ -112,59 +113,88 @@ async def create_job(
     Provide either a `file` (multipart upload) or a `url` (public video link).
     If both are provided, `file` takes priority.
     """
+    logger.debug(
+        "create_job called — file=%s, url=%s",
+        file.filename if file else None, url,
+    )
+
     if file is None and url is None:
+        logger.debug("create_job rejected — no file or url provided")
         raise HTTPException(
             status_code=400,
             detail="Either 'file' or 'url' must be provided",
         )
 
     job_id = str(uuid.uuid4())
+    logger.debug("Generated job_id=%s", job_id)
 
     if file is not None:
+        logger.debug(
+            "Processing file upload — filename=%s, content_type=%s",
+            file.filename, file.content_type,
+        )
         file_path = await _handle_file_upload(job_id, file)
+        video_title = file.filename or ""
+        logger.debug("File saved to %s", file_path)
     else:
+        logger.debug("Processing URL download — url=%s", url)
         file_path = _handle_url_download(job_id, url)
+        # Extract filename from URL path
+        video_title = Path(url).name.split("?")[0] if url else ""
+        logger.debug("URL downloaded to %s", file_path)
 
     # --- Create job record in DB ---
-    record = await job_store.create(session, job_id, str(file_path))
+    logger.debug("Creating DB record — job_id=%s, video_title=%s", job_id, video_title)
+    record = await job_store.create(session, job_id, str(file_path), video_title=video_title)
+    logger.debug("DB record created — status=%s, created_at=%s", record.status, record.created_at)
 
     logger.info("Job created: id=%s, source=%s", job_id, "upload" if file else "url")
 
     # --- Enqueue background processing ---
+    logger.debug("Enqueuing background task for job_id=%s", job_id)
     background_tasks.add_task(process_job, job_id, str(file_path))
 
     return JobCreateResponse(
         job_id=record.id,
         status=record.status,
+        video_title=record.video_title,
         created_at=record.created_at,
     )
 
 
 async def _handle_file_upload(job_id: str, file: UploadFile) -> Path:
     """Process a multipart file upload. Returns saved file path."""
+    logger.debug("_handle_file_upload — reading file into memory")
     content = await file.read()
     file_size = len(content)
+    logger.debug("_handle_file_upload — file_size=%d bytes (%.1f MB)", file_size, file_size / (1024 * 1024))
 
     try:
         validate_upload(file.filename, file_size)
+        logger.debug("_handle_file_upload — upload validation passed")
     except VideoValidationError as exc:
+        logger.debug("_handle_file_upload — upload validation failed: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc))
 
     ext = Path(file.filename).suffix.lower()
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
     file_path = upload_dir / f"{job_id}{ext}"
+    logger.debug("_handle_file_upload — saving to %s", file_path)
 
     try:
         with open(file_path, "wb") as f:
             f.write(content)
+        logger.debug("_handle_file_upload — file written successfully")
     except IOError:
         logger.exception("Failed to save uploaded file for job %s", job_id)
         raise HTTPException(status_code=500, detail="Failed to save uploaded file")
 
     try:
         validate_video_file(str(file_path))
+        logger.debug("_handle_file_upload — video validation passed")
     except VideoValidationError as exc:
+        logger.debug("_handle_file_upload — video validation failed: %s", exc)
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -174,27 +204,35 @@ async def _handle_file_upload(job_id: str, file: UploadFile) -> Path:
 def _handle_url_download(job_id: str, url: str) -> Path:
     """Download a video from URL. Returns saved file path."""
     ext = infer_extension(url)
+    logger.debug("_handle_url_download — inferred extension=%s from url=%s", ext, url)
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)
     file_path = upload_dir / f"{job_id}{ext}"
 
     # Download
     try:
+        logger.debug("_handle_url_download — downloading to %s", file_path)
         file_size = download_video(url, str(file_path))
+        logger.debug("_handle_url_download — downloaded %d bytes (%.1f MB)", file_size, file_size / (1024 * 1024))
     except DownloadError as exc:
+        logger.debug("_handle_url_download — download failed: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc))
 
     # Validate extension (inferred ext might not match actual content)
     try:
         validate_upload(f"video{ext}", file_size)
+        logger.debug("_handle_url_download — upload validation passed")
     except VideoValidationError as exc:
+        logger.debug("_handle_url_download — upload validation failed: %s", exc)
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc))
 
     # Validate video content
     try:
         validate_video_file(str(file_path))
+        logger.debug("_handle_url_download — video validation passed")
     except VideoValidationError as exc:
+        logger.debug("_handle_url_download — video validation failed: %s", exc)
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc))
 

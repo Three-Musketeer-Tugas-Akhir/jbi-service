@@ -7,6 +7,7 @@ class JobCreateResponse(BaseModel):
     """Response for POST /api/v1/jobs."""
     job_id: str
     status: str
+    video_title: str
     created_at: datetime
 
 
@@ -22,6 +23,7 @@ class JobStatusResponse(BaseModel):
     """Response for GET /api/v1/jobs/{job_id}."""
     job_id: str
     status: str
+    video_title: Optional[str] = None
     progress: Optional[JobProgressResponse] = None
     error: Optional[str] = None
     created_at: datetime

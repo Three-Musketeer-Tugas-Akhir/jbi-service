@@ -21,6 +21,9 @@ class JobRecord(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="queued", index=True,
     )
+    video_title: Mapped[str] = mapped_column(
+        Text, nullable=False, default="",
+    )
     video_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
     output_dir: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
