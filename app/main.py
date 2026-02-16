@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.formparsers import MultiPartParser
 
 from app.config import settings
 from app.database import engine
@@ -14,6 +15,10 @@ from app.middleware import RequestLoggingMiddleware
 
 # Initialize logging before anything else
 setup_logging()
+
+# Raise Starlette's multipart file-size limit to match our configured max
+# (default is 1 GB, which rejects uploads above that with a generic 400)
+MultiPartParser.max_file_size = settings.max_upload_size_bytes
 
 import logging
 logger = logging.getLogger("app")
