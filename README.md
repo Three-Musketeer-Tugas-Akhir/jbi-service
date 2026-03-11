@@ -1,5 +1,3 @@
-# FOR STAGING
-
 # JBI Detection & Segmentation API
 
 FastAPI backend for detecting and segmenting JBI (Juru Bahasa Isyarat) overlays in news broadcast videos using a custom-trained YOLOv8 model.
