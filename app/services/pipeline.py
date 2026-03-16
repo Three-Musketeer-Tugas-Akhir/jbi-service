@@ -12,11 +12,13 @@ from app.services.segmenter import (
     format_detection_times,
 )
 from app.services.cropper import CropResult, crop_segments
+from app.services.transcoder import transcode_to_h264, TranscodeError
 
 logger = logging.getLogger(__name__)
 
 
 class PipelinePhase(str, Enum):
+    TRANSCODING = "transcoding"
     DETECTION = "detection"
     SEGMENTATION = "segmentation"
     CROPPING = "cropping"
@@ -57,6 +59,9 @@ def run_pipeline(
 
     logger.info("Pipeline started — job=%s, video=%s", job_id, video_path)
 
+    # Phase 0: Transcode if needed (e.g. AV1 → H.264)
+    video_path = _run_transcoding(video_path, on_progress)
+
     # Phase 1: Detection
     detection_result = _run_detection(video_path, on_progress)
 
@@ -89,6 +94,30 @@ def run_pipeline(
     )
 
     return result
+
+
+def _run_transcoding(
+    video_path: str,
+    on_progress: Optional[PipelineProgressCallback],
+) -> str:
+    """Phase 0: Transcode video to H.264 if OpenCV can't decode it."""
+    logger.info("Phase 0: Transcode check — starting")
+
+    def transcode_progress(current: int, total: int):
+        if on_progress:
+            on_progress(PipelinePhase.TRANSCODING, current, total)
+
+    try:
+        new_path = transcode_to_h264(video_path, on_progress=transcode_progress)
+    except TranscodeError as exc:
+        raise PipelineError(PipelinePhase.TRANSCODING, str(exc)) from exc
+
+    if new_path != video_path:
+        logger.info("Phase 0: Transcode — done (transcoded to %s)", new_path)
+    else:
+        logger.info("Phase 0: Transcode — skipped (codec already compatible)")
+
+    return new_path
 
 
 def _run_detection(
