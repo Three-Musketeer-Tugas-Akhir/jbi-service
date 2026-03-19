@@ -1,0 +1,121 @@
+# generated: 2026-03-18
+# last_updated: 2026-03-18
+# project: Unified SIBI Pipeline API
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: jbi-service/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: "2026-03-18"
+last_updated: "2026-03-19"
+project: "Unified SIBI Pipeline API"
+project_key: "NOKEY"
+tracking_system: "file-system"
+story_location: "jbi-service/_bmad-output/implementation-artifacts"
+
+development_status:
+  # =====================
+  # EPIC 1: Foundation & Authentication
+  # =====================
+  epic-1: in-progress
+  1-1-database-schema-setup-auth-domain: done
+  1-2-jwt-authentication-service: backlog
+  1-3-user-login-api-endpoint: backlog
+  1-4-jwt-refresh-token-flow: backlog
+  1-5-role-based-access-control-middleware: backlog
+  1-6-admin-create-user-accounts: backlog
+  1-7-admin-modify-user-roles: backlog
+  1-8-admin-deactivate-user-accounts: backlog
+  1-9-admin-list-and-view-users: backlog
+  epic-1-retrospective: optional
+  
+  # =====================
+  # EPIC 2: Video Processing Pipeline
+  # =====================
+  epic-2: backlog
+  2-1-database-schema-pipeline-domain: backlog
+  2-2-minio-storage-integration: backlog
+  2-3-video-upload-api: backlog
+  2-4-postgresql-queue-implementation: backlog
+  2-5-detection-worker-yolov8-integration: backlog
+  2-6-asr-worker-faster-whisper-integration: backlog
+  2-7-cropping-worker-jbi-buffer: backlog
+  2-8-job-status-api-and-polling: backlog
+  2-9-job-cancellation: backlog
+  2-10-health-check-and-system-monitoring: backlog
+  epic-2-retrospective: optional
+  
+  # =====================
+  # EPIC 3: Annotation Workflow
+  # =====================
+  epic-3: backlog
+  3-1-database-schema-annotation-domain: backlog
+  3-2-annotation-queue-api: backlog
+  3-3-submit-annotation-edit: backlog
+  3-4-preview-and-save-annotations: backlog
+  3-5-submit-for-review: backlog
+  3-6-asr-review-queue-optional: backlog
+  3-7-asr-approval-and-flagging: backlog
+  3-8-asr-confidence-scores: backlog
+  epic-3-retrospective: optional
+  
+  # =====================
+  # EPIC 4: Curation & Export
+  # =====================
+  epic-4: backlog
+  4-1-curator-review-queue-api: backlog
+  4-2-approve-and-reject-annotations: backlog
+  4-3-slang-dictionary-management: backlog
+  4-4-auto-normalization-engine: backlog
+  4-5-learning-from-corrections: backlog
+  4-6-dataset-export: backlog
+  epic-4-retrospective: optional
+  
+  # =====================
+  # EPIC 5: Audit & Compliance
+  # =====================
+  epic-5: backlog
+  5-1-database-schema-audit-domain: backlog
+  5-2-audit-logging-middleware: backlog
+  5-3-state-transition-tracking: backlog
+  5-4-audit-log-query-api: backlog
+  5-5-per-user-activity-metrics: backlog
+  epic-5-retrospective: optional
+  
+  # =====================
+  # EPIC 6: User Onboarding
+  # =====================
+  epic-6: backlog
+  6-1-interactive-tour-system: backlog
+  6-2-help-documentation: backlog
+  6-3-contextual-tooltips: backlog
+  6-4-accessibility-compliance: backlog
+  epic-6-retrospective: optional
