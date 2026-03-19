@@ -120,12 +120,14 @@ def upgrade() -> None:
         sa.Column(
             'user_id',
             postgresql.UUID(as_uuid=True),
-            nullable=False
+            nullable=False,
+            index=True
         ),
         sa.Column(
             'role_id',
             postgresql.UUID(as_uuid=True),
-            nullable=False
+            nullable=False,
+            index=True
         ),
         sa.Column(
             'created_at',
@@ -146,6 +148,25 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('user_id', 'role_id')
     )
     
+    # Create auto-update trigger function for updated_at
+    op.execute("""
+        CREATE OR REPLACE FUNCTION update_updated_at_column()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+        END;
+        $$ language 'plpgsql';
+    """)
+    
+    # Apply trigger to auth_users
+    op.execute("""
+        CREATE TRIGGER update_auth_users_updated_at
+            BEFORE UPDATE ON auth_users
+            FOR EACH ROW
+            EXECUTE FUNCTION update_updated_at_column();
+    """)
+    
     # Seed initial roles
     op.execute("""
         INSERT INTO auth_roles (name, permissions) VALUES 
@@ -158,7 +179,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Drop auth domain tables."""
     
+    # Drop trigger first
+    op.execute("DROP TRIGGER IF EXISTS update_auth_users_updated_at ON auth_users;")
+    
     # Drop in reverse order to respect foreign key constraints
+    op.drop_index('ix_auth_user_roles_role_id', table_name='auth_user_roles')
+    op.drop_index('ix_auth_user_roles_user_id', table_name='auth_user_roles')
     op.drop_table('auth_user_roles')
     op.drop_index('idx_auth_users_is_active', table_name='auth_users')
     op.drop_index('idx_auth_users_role', table_name='auth_users')

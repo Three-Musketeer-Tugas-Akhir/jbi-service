@@ -7,7 +7,8 @@ role-based access control, and user-role relationships.
 
 from datetime import datetime
 from typing import List, Optional
-import uuid
+import uuid as uuid_module
+from uuid import UUID
 
 from sqlalchemy import (
     Boolean,
@@ -34,10 +35,10 @@ class User(Base):
     
     __tablename__ = "auth_users"
     
-    id: Mapped[str] = mapped_column(
+    id: Mapped[UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        default=uuid.uuid4,
+        default=uuid_module.uuid4,
         comment="Unique user identifier (UUID)"
     )
     email: Mapped[str] = mapped_column(
@@ -99,10 +100,10 @@ class Role(Base):
     
     __tablename__ = "auth_roles"
     
-    id: Mapped[str] = mapped_column(
+    id: Mapped[UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
-        default=uuid.uuid4,
+        default=uuid_module.uuid4,
         comment="Unique role identifier (UUID)"
     )
     name: Mapped[str] = mapped_column(
@@ -111,7 +112,7 @@ class Role(Base):
         nullable=False,
         comment="Role name: admin, annotator, or curator"
     )
-    permissions: Mapped[dict] = mapped_column(
+    permissions: Mapped[List[str]] = mapped_column(
         JSONB,
         default=list,
         nullable=False,
