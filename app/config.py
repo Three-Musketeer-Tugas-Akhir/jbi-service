@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     uvicorn_host: str = "0.0.0.0"
     uvicorn_port: int = 8000
 
+    # --- JWT Authentication ---
+    jwt_secret_key: str = ""  # MUST be set via environment variable
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 1440  # 24 hours
+    jwt_refresh_token_expire_days: int = 7  # 7 days
+
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"
