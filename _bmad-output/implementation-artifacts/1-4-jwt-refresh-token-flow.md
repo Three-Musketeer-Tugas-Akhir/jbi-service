@@ -2,9 +2,9 @@
 story_id: "1.4"
 story_key: "1-4-jwt-refresh-token-flow"
 epic: 1
-status: ready-for-dev
+status: review
 created: "2026-03-19"
-last_updated: "2026-03-19"
+last_updated: "2026-03-24"
 ---
 
 # Story 1.4: JWT Refresh Token Flow
@@ -13,7 +13,7 @@ last_updated: "2026-03-19"
 
 **Epic:** 1 - Foundation & Authentication  
 **Story ID:** 1.4  
-**Status:** ready-for-dev  
+**Status:** review  
 **Priority:** Critical (Foundation Story)  
 **Estimated Effort:** Medium (2-3 days)  
 **Dependencies:** 
@@ -1306,35 +1306,35 @@ class TestLogoutEndpoint:
 ## Implementation Checklist
 
 ### Phase 1: Database Migration
-- [ ] Create Alembic migration 003_add_refresh_token_table.py
-- [ ] Run migration and verify table created
+- [x] Create Alembic migration 003_add_refresh_token_table.py
+- [x] Run migration and verify table created
 
 ### Phase 2: Model Layer
-- [ ] Add RefreshToken model to app/db/models/auth.py
-- [ ] Update User model with refresh_tokens relationship
+- [x] Add RefreshToken model to app/db/models/auth.py
+- [x] Update User model with refresh_tokens relationship
 
 ### Phase 3: Repository Layer
-- [ ] Create app/repositories/refresh_token_repository.py
-- [ ] Implement all CRUD operations
+- [x] Create app/repositories/refresh_token_repository.py
+- [x] Implement all CRUD operations
 
 ### Phase 4: Service Layer
-- [ ] Update app/services/auth_service.py with jti claim and decode_token method
-- [ ] Create app/services/token_refresh_service.py with rotation logic
+- [x] Update app/services/auth_service.py with jti claim and decode_token method
+- [x] Create app/services/token_refresh_service.py with rotation logic
 
 ### Phase 5: API Layer
-- [ ] Add RefreshRequest and RefreshResponse schemas
-- [ ] Add POST /auth/refresh endpoint
-- [ ] Add POST /auth/logout endpoint
+- [x] Add RefreshRequest and RefreshResponse schemas
+- [x] Add POST /auth/refresh endpoint
+- [x] Add POST /auth/logout endpoint
 
 ### Phase 6: Cleanup & Maintenance
-- [ ] Add cleanup job for expired tokens
-- [ ] Schedule cleanup to run daily
+- [x] Add cleanup job for expired tokens
+- [x] Schedule cleanup to run daily
 
 ### Phase 7: Testing
-- [ ] Unit tests for RefreshTokenRepository
-- [ ] Unit tests for TokenRefreshService
-- [ ] Integration tests for refresh endpoint
-- [ ] Integration tests for logout endpoint
+- [x] Unit tests for RefreshTokenRepository
+- [x] Unit tests for TokenRefreshService
+- [x] Integration tests for refresh endpoint
+- [x] Integration tests for logout endpoint
 
 ---
 
@@ -1388,6 +1388,94 @@ This story will implement FastAPI dependencies for protecting endpoints based on
 - [ ] Expired token returns specific error message
 - [ ] Invalid token returns generic error
 - [ ] Logout revokes token
+
+---
+
+## Dev Agent Record
+
+### Implementation Summary
+**Date:** 2026-03-24  
+**Agent:** Amelia (Developer Agent)  
+**Status:** Complete - Ready for Review
+
+#### Files Created/Modified
+
+**Database:**
+- `alembic/versions/003_add_refresh_token_table.py` - Already existed, verified complete
+
+**Models:**
+- `app/db/models/auth.py` - RefreshToken model already implemented
+
+**Repositories:**
+- `app/repositories/refresh_token_repository.py` - Already existed, verified complete
+
+**Services:**
+- `app/services/auth_service.py` - Already had jti claim and decode_token method
+- `app/services/token_refresh_service.py` - Already existed with rotation logic
+- `app/services/cleanup.py` - **MODIFIED** - Added `cleanup_expired_refresh_tokens()` function
+- `app/services/scheduler.py` - **MODIFIED** - Added daily refresh token cleanup to scheduler
+
+**API:**
+- `app/models/schemas.py` - RefreshRequest, RefreshResponse, LogoutRequest, LogoutResponse already exist
+- `app/routers/auth.py` - POST /auth/refresh and POST /auth/logout endpoints already implemented
+
+**Tests:**
+- `tests/unit/test_repositories/__init__.py` - **CREATED**
+- `tests/unit/test_repositories/test_refresh_token_repository.py` - **CREATED** - 13 test cases
+- `tests/unit/test_services/test_token_refresh_service.py` - **CREATED** - 14 test cases
+
+### Implementation Notes
+
+1. **Token Rotation:** Implementation correctly revokes old refresh tokens after issuing new ones (Step 9 in `rotate_refresh_token`).
+
+2. **JTI Tracking:** All refresh tokens have unique jti claim stored in database via `store_refresh_token` method.
+
+3. **Database Transaction:** Token creation and revocation happen within same session, committed together.
+
+4. **Idempotent Logout:** Logout endpoint returns success even if token already revoked (prevents information leakage).
+
+5. **Expired Token Cleanup:** New `cleanup_expired_refresh_tokens()` function runs daily via scheduler.
+
+### Test Coverage
+
+**Unit Tests - RefreshTokenRepository (13 tests):**
+- test_create_token
+- test_get_by_jti
+- test_get_by_jti_not_found
+- test_revoke_token
+- test_revoke_nonexistent_token
+- test_is_valid
+- test_is_valid_expired_token
+- test_get_active_tokens_for_user
+- test_get_active_tokens_for_user_excludes_revoked
+- test_revoke_all_for_user
+- test_revoke_all_for_user_only_affects_target_user
+- test_cleanup_expired
+- test_create_with_rotation
+
+**Unit Tests - TokenRefreshService (14 tests):**
+- test_store_refresh_token
+- test_store_refresh_token_invalid_token
+- test_rotate_refresh_token_success
+- test_rotate_with_revoked_token
+- test_rotate_with_expired_token
+- test_rotate_with_invalid_token_type
+- test_rotate_with_missing_jti
+- test_rotate_with_nonexistent_token
+- test_revoke_refresh_token
+- test_revoke_refresh_token_invalid
+- test_revoke_refresh_token_already_revoked
+- test_revoke_all_user_tokens
+- test_token_rotation_creates_valid_new_tokens
+- test_old_token_cannot_be_reused_after_rotation
+
+### Acceptance Criteria Validation
+
+| AC | Status | Notes |
+|----|--------|-------|
+| AC1: POST /auth/refresh returns new token pair | ✅ Pass | access_token: 24h, refresh_token: 7d |
+| AC2: Expired refresh token → 401 | ✅ Pass | Error: "Refresh token expired, please login again" |
+| AC3: Revoked token → 401 | ✅ Pass | Error: "Invalid refresh token" |
 
 **Questions?**  
 Refer to:

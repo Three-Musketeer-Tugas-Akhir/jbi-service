@@ -11,6 +11,41 @@ from app.models.job_store import job_store
 logger = logging.getLogger(__name__)
 
 
+async def cleanup_expired_refresh_tokens(batch_size: int = 1000) -> int:
+    """
+    Clean up expired refresh tokens from the database.
+    
+    Deletes refresh tokens that have passed their expiration date.
+    
+    Args:
+        batch_size: Maximum number of tokens to delete per run
+        
+    Returns:
+        Number of tokens deleted
+    """
+    from sqlalchemy import delete
+    from app.db.models.auth import RefreshToken
+    
+    async with async_session() as session:
+        # Delete expired tokens
+        stmt = (
+            delete(RefreshToken)
+            .where(RefreshToken.expires_at < datetime.now(timezone.utc))
+            .limit(batch_size)
+        )
+        result = await session.execute(stmt)
+        deleted_count = result.rowcount
+        await session.commit()
+        
+        if deleted_count > 0:
+            logger.info(
+                "Cleaned up %d expired refresh tokens",
+                deleted_count
+            )
+        
+        return deleted_count
+
+
 async def cleanup_expired_jobs() -> int:
     """Delete jobs that have exceeded their TTL.
 
