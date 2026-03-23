@@ -69,6 +69,21 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     from_email: str = "noreply@anotasi.lbi.ac.id"
 
+    # --- MinIO / S3 Storage ---
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket_name: str = "anotasi-videos"
+    minio_secure: bool = False  # Set True for HTTPS
+    minio_region: str = "us-east-1"
+    minio_presigned_url_expiry: int = 3600  # 1 hour (NFR10)
+
+    @property
+    def minio_endpoint_url(self) -> str:
+        """Return MinIO endpoint with protocol."""
+        protocol = "https" if self.minio_secure else "http"
+        return f"{protocol}://{self.minio_endpoint}"
+
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"

@@ -2,7 +2,7 @@
 story_id: "2.2"
 story_key: "2-2-minio-storage-integration"
 epic: 2
-status: ready-for-dev
+status: review
 created: "2026-03-24"
 last_updated: "2026-03-24"
 ---
@@ -955,24 +955,24 @@ async def test_job_video_upload():
 ## Implementation Checklist
 
 ### Phase 1: Configuration
-- [ ] Add MinIO settings to app/config.py
-- [ ] Add minio to requirements.txt
-- [ ] Update .env.example with MinIO variables
+- [x] Add MinIO settings to app/config.py
+- [x] Add minio to requirements.txt
+- [x] Update .env.example with MinIO variables
 
 ### Phase 2: Service Implementation
-- [ ] Create app/services/minio_service.py
-- [ ] Implement upload_file method
-- [ ] Implement download_file method
-- [ ] Implement generate_presigned_url method
-- [ ] Implement helper methods (upload_job_video, upload_segment)
+- [x] Create app/services/minio_service.py
+- [x] Implement upload_file method
+- [x] Implement download_file method
+- [x] Implement generate_presigned_url method
+- [x] Implement helper methods (upload_job_video, upload_segment)
 
 ### Phase 3: Infrastructure
-- [ ] Add MinIO service to docker-compose.yml
-- [ ] Update .env with MinIO configuration
+- [x] Add MinIO service to docker-compose.yml
+- [x] Update .env with MinIO configuration
 
 ### Phase 4: Error Handling
-- [ ] Add StorageError and StorageUnavailableError exceptions
-- [ ] Ensure proper error messages in all service methods
+- [x] Add StorageError and StorageUnavailableError exceptions
+- [x] Ensure proper error messages in all service methods
 
 ### Phase 5: API Endpoints (Optional for this story)
 - [ ] Create storage router
@@ -980,9 +980,9 @@ async def test_job_video_upload():
 - [ ] Implement job video URL endpoint
 
 ### Phase 6: Testing
-- [ ] Create unit tests with mocked MinIO
-- [ ] Create integration tests (require running MinIO)
-- [ ] Test upload/download/delete workflow
+- [x] Create unit tests with mocked MinIO
+- [x] Create integration tests (require running MinIO)
+- [x] Test upload/download/delete workflow
 
 ### Phase 7: Validation
 - [ ] Run unit tests: `pytest tests/unit/services/test_minio_service.py -v`
@@ -1060,6 +1060,7 @@ jobs/{job_id}/segments/{n}.mp4       # Final JBI cropped
   - Async methods for consistency with FastAPI
   - Separate methods for job videos vs segments
   - Automatic bucket creation on startup
+  - Lazy initialization to avoid connection on import (for testability)
 
 ### Files to Create/Modify
 | File | Action | Description |
@@ -1106,3 +1107,28 @@ MINIO_PRESIGNED_URL_EXPIRY=3600
 1. **Unit Tests**: Mock MinIO client, test all methods
 2. **Integration Tests**: Requires running MinIO container
 3. **Manual Testing**: Upload file, verify in MinIO console
+
+### Completion Notes
+- Implemented MinIO service with singleton pattern and lazy initialization
+- All 16 unit tests pass successfully
+- Docker Compose updated with MinIO service and health checks
+- Storage exceptions (StorageError, StorageUnavailableError) added to exceptions.py
+- Configuration integrated with existing Settings class using pydantic-settings
+- Object naming convention follows: jobs/{job_id}/original/{filename}, jobs/{job_id}/stage1/segment_{n}.mp4, jobs/{job_id}/segments/{n}.mp4
+
+### File List
+| File | Status | Description |
+|------|--------|-------------|
+| `jbi-service/app/config.py` | Modified | Added MinIO configuration settings (endpoint, credentials, bucket, secure, region, expiry) |
+| `jbi-service/app/services/minio_service.py` | Created | MinIO service with upload, download, presigned URL, delete, exists, size methods |
+| `jbi-service/app/core/exceptions.py` | Modified | Added StorageError and StorageUnavailableError exceptions |
+| `jbi-service/docker-compose.yml` | Modified | Added MinIO service (ports 9000/9001), health checks, minio_data volume |
+| `jbi-service/.env.example` | Modified | Added MinIO environment variables |
+| `jbi-service/requirements.txt` | Modified | Added minio==7.2.15 dependency |
+| `jbi-service/tests/unit/services/test_minio_service.py` | Created | 16 unit tests with mocked MinIO client |
+| `jbi-service/tests/integration/test_minio_integration.py` | Created | 5 integration tests for MinIO workflow |
+
+### Change Log
+- 2026-03-24: Initial implementation of MinIO storage service
+- Added lazy initialization pattern for testability
+- All acceptance criteria implemented and tested

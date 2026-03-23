@@ -62,6 +62,18 @@ class RateLimitError(AppException):
     code = "RATE_LIMITED"
 
 
+class StorageError(AppException):
+    """Storage operation failed."""
+    status_code = 500
+    code = "STORAGE_ERROR"
+
+
+class StorageUnavailableError(StorageError):
+    """Storage service is unavailable."""
+    status_code = 503
+    code = "STORAGE_UNAVAILABLE"
+
+
 # =============================================================================
 # Exception Handlers
 # =============================================================================
