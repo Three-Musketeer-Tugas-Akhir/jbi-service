@@ -27,7 +27,7 @@ def _current_user_to_profile_response(user: CurrentUser) -> UserProfileResponse:
     return UserProfileResponse(
         id=str(user.id),
         email=user.email,
-        role=user.role,
+        roles=user.roles,
         is_active=user.is_active,
         email_verified=user.email_verified,
         created_at=user.created_at.isoformat(),
@@ -48,7 +48,7 @@ async def get_current_user_profile(
     """
     Get the current authenticated user's profile.
     
-    Returns user details including id, email, role, and verification status.
+    Returns user details including id, email, roles, and verification status.
     Requires valid JWT access token.
     """
     return _current_user_to_profile_response(current_user)

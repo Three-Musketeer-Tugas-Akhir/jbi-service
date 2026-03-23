@@ -29,7 +29,7 @@ class AuditService:
         actor_id: UUID,
         new_user_id: UUID,
         email: str,
-        role: str,
+        roles: list[str],
         ip_address: Optional[str] = None
     ) -> None:
         """
@@ -39,7 +39,7 @@ class AuditService:
             actor_id: Admin who created the user
             new_user_id: ID of created user
             email: Email of created user
-            role: Role assigned
+            roles: Roles assigned
             ip_address: Request IP address
         """
         await self.repository.create(
@@ -49,13 +49,47 @@ class AuditService:
             resource_id=new_user_id,
             details={
                 "email": email,
-                "role": role
+                "roles": roles
             },
             ip_address=ip_address
         )
         logger.info(
-            "User created: %s created user %s (%s) with role %s",
-            actor_id, new_user_id, email, role
+            "User created: %s created user %s (%s) with roles %s",
+            actor_id, new_user_id, email, roles
+        )
+    
+    async def log_user_roles_changed(
+        self,
+        actor_id: UUID,
+        target_user_id: UUID,
+        old_roles: list[str],
+        new_roles: list[str],
+        ip_address: Optional[str] = None
+    ) -> None:
+        """
+        Log a user roles change.
+        
+        Args:
+            actor_id: Admin who made the change
+            target_user_id: User whose roles were changed
+            old_roles: Previous roles list
+            new_roles: New roles list
+            ip_address: Request IP address
+        """
+        await self.repository.create(
+            action=AuditAction.USER_ROLE_CHANGED,
+            resource_type="user",
+            actor_id=actor_id,
+            resource_id=target_user_id,
+            details={
+                "old_roles": old_roles,
+                "new_roles": new_roles
+            },
+            ip_address=ip_address
+        )
+        logger.info(
+            "User roles changed: %s changed %s from %s to %s",
+            actor_id, target_user_id, old_roles, new_roles
         )
     
     async def log_user_role_changed(

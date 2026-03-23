@@ -76,9 +76,13 @@ async def login(
                 headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Generate tokens
-        access_token = jwt_auth_service.create_access_token(user.id, user.role)
-        refresh_token, _ = jwt_auth_service.create_refresh_token(user.id, user.role)
+        # Get primary role (first in list) for backward compatibility
+        user_roles = [r.name for r in user.roles] if user.roles else []
+        primary_role = user_roles[0] if user_roles else "annotator"
+        
+        # Generate tokens with primary role
+        access_token = jwt_auth_service.create_access_token(user.id, primary_role)
+        refresh_token, _ = jwt_auth_service.create_refresh_token(user.id, primary_role)
         
         # Store refresh token in database for rotation tracking
         token_refresh_service = TokenRefreshService(db_session)

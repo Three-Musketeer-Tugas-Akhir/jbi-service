@@ -23,8 +23,11 @@ from app.models.schemas import (
     AdminUpdateUserResponse,
     AdminDeactivateUserResponse,
     AdminReactivateUserResponse,
-    AuthErrorResponse
+    AuthErrorResponse,
+    UserRoleUpdateRequest,
+    UserRoleUpdateResponse
 )
+from app.db.models.auth import User
 from app.services.audit_service import AuditService
 from app.services.user_service import UserService
 
@@ -36,7 +39,7 @@ def _user_to_list_item(user: User) -> AdminUserListItem:
     return AdminUserListItem(
         id=str(user.id),
         email=user.email,
-        role=user.role,
+        roles=[r.name for r in user.roles] if user.roles else [],
         is_active=user.is_active,
         email_verified=user.is_email_verified,
         created_at=user.created_at.isoformat(),
@@ -49,7 +52,7 @@ def _user_to_detail_response(user: User) -> AdminUserDetailResponse:
     return AdminUserDetailResponse(
         id=str(user.id),
         email=user.email,
-        role=user.role,
+        roles=[r.name for r in user.roles] if user.roles else [],
         is_active=user.is_active,
         email_verified=user.is_email_verified,
         created_at=user.created_at.isoformat(),
@@ -138,12 +141,14 @@ async def create_user(
     Create a new user.
     
     - **email**: User email address (unique)
-    - **password**: Initial password (min 8 chars, must include uppercase, lowercase, digit, special char)
+    - **password**: Initial password (optional, auto-generated if not provided)
     - **role**: User role (admin, annotator, curator) - default: annotator
     - **is_active**: Whether user is active - default: true
     - **email_verified**: Whether email is pre-verified - default: false
     
     Admin access required. Email must be unique.
+    If password is not provided, a secure temporary password is generated
+    and returned in the response.
     """
     user_service = UserService(db_session)
     audit_service = AuditService(db_session)
@@ -151,7 +156,7 @@ async def create_user(
     result = await user_service.create_user(
         email=user_data.email,
         password=user_data.password,
-        role=user_data.role,
+        roles=user_data.roles,
         is_active=user_data.is_active,
         email_verified=user_data.email_verified
     )
@@ -163,23 +168,30 @@ async def create_user(
         )
     
     user = result["user"]
+    user_roles = [r.name for r in user.roles] if user.roles else []
     
     # Log audit event
     await audit_service.log_user_created(
         actor_id=current_user.id,
         new_user_id=user.id,
         email=user.email,
-        role=user.role,
+        roles=user_roles,
         ip_address=_get_client_ip(request)
     )
     await db_session.commit()
     
-    return AdminCreateUserResponse(
-        id=str(user.id),
-        email=user.email,
-        role=user.role,
-        message=result["message"]
-    )
+    # Include temporary password in response if auto-generated
+    response_data = {
+        "id": str(user.id),
+        "email": user.email,
+        "roles": user_roles,
+        "message": result["message"]
+    }
+    
+    if "temporary_password" in result:
+        response_data["temporary_password"] = result["temporary_password"]
+    
+    return AdminCreateUserResponse(**response_data)
 
 
 @router.get(
@@ -236,7 +248,7 @@ async def update_user(
     Update a user's information.
     
     - **email**: New email address (optional)
-    - **role**: New role (admin, annotator, curator) (optional)
+    - **roles**: New roles list (admin, annotator, curator) (optional)
     - **is_active**: Active status (optional)
     - **email_verified**: Email verification status (optional)
     
@@ -254,12 +266,12 @@ async def update_user(
             detail="User not found.",
         )
     
-    old_role = original_user.role
+    old_roles = [r.name for r in original_user.roles] if original_user.roles else []
     
     result = await user_service.admin_update_user(
         user_id=user_id,
         email=update_data.email,
-        role=update_data.role,
+        roles=update_data.roles,
         is_active=update_data.is_active,
         email_verified=update_data.email_verified
     )
@@ -279,17 +291,18 @@ async def update_user(
         )
     
     user = result["user"]
+    new_roles = [r.name for r in user.roles] if user.roles else []
     
     # Log audit events based on what changed
     client_ip = _get_client_ip(request)
     
     # Log role change if applicable
-    if update_data.role is not None and update_data.role != old_role:
-        await audit_service.log_user_role_changed(
+    if update_data.roles is not None and set(update_data.roles) != set(old_roles):
+        await audit_service.log_user_roles_changed(
             actor_id=current_user.id,
             target_user_id=user_id,
-            old_role=old_role,
-            new_role=update_data.role,
+            old_roles=old_roles,
+            new_roles=update_data.roles,
             ip_address=client_ip
         )
     
@@ -315,12 +328,82 @@ async def update_user(
     
     await db_session.commit()
     
-    return AdminUpdateUserResponse(
+    # Build response with previous_roles if roles were changed
+    response_data = {
+        "id": str(user.id),
+        "email": user.email,
+        "roles": new_roles,
+        "is_active": user.is_active,
+        "message": result["message"]
+    }
+    
+    # Include previous_roles in response if roles were changed
+    if "previous_roles" in result:
+        response_data["previous_roles"] = result["previous_roles"]
+    
+    return AdminUpdateUserResponse(**response_data)
+
+
+@router.put(
+    "/users/{user_id}/role",
+    response_model=UserRoleUpdateResponse,
+    responses={
+        400: {"model": AuthErrorResponse, "description": "Self-modification, invalid role, or same role"},
+        403: {"model": AuthErrorResponse, "description": "Admin access required"},
+        404: {"model": AuthErrorResponse, "description": "User not found"},
+    },
+)
+async def update_user_role(
+    user_id: UUID,
+    role_data: UserRoleUpdateRequest,
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    db_session: AsyncSession = Depends(get_db),
+):
+    """
+    Update a user's role (Admin only).
+    
+    - **user_id**: UUID of user to update
+    - **role**: New role (admin, annotator, curator)
+    
+    Role change takes effect on next token refresh.
+    Current sessions remain valid until token expiry.
+    """
+    user_service = UserService(db_session)
+    
+    result = await user_service.update_role(
+        admin_id=current_user.id,
+        target_user_id=user_id,
+        new_role=role_data.role,
+        ip_address=_get_client_ip(request)
+    )
+    
+    if not result["success"]:
+        # Determine appropriate status code
+        error_msg = result["message"].lower()
+        
+        if "not found" in error_msg:
+            status_code = status.HTTP_404_NOT_FOUND
+        else:
+            status_code = status.HTTP_400_BAD_REQUEST
+        
+        raise HTTPException(
+            status_code=status_code,
+            detail=result["message"],
+        )
+    
+    user = result["user"]
+    new_roles = [r.name for r in user.roles] if user.roles else []
+    primary_role = new_roles[0] if new_roles else None
+    previous_roles = result.get("previous_roles", [])
+    previous_role = previous_roles[0] if previous_roles else None
+    
+    return UserRoleUpdateResponse(
         id=str(user.id),
         email=user.email,
-        role=user.role,
-        is_active=user.is_active,
-        message=result["message"]
+        role=primary_role,
+        previous_role=previous_role,
+        updated_at=user.updated_at.isoformat()
     )
 
 

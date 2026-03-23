@@ -14,6 +14,7 @@ from app.config import settings
 from app.db.models.auth import User
 from app.repositories.user_repository import UserRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.utils.password import generate_temporary_password, validate_password_strength
 
 
 class UserService:
@@ -402,23 +403,26 @@ class UserService:
     async def create_user(
         self,
         email: str,
-        password: str,
-        role: str = "annotator",
+        password: Optional[str] = None,
+        roles: Optional[list] = None,
         is_active: bool = True,
         email_verified: bool = False
     ) -> dict:
         """
         Create a new user (admin only).
         
+        If password is not provided, a secure temporary password will be
+        auto-generated and returned in the response.
+        
         Args:
             email: User email
-            password: Plain text password
-            role: User role
+            password: Plain text password (optional, auto-generated if not provided)
+            roles: List of role names (default: ["annotator"])
             is_active: Whether user is active
             email_verified: Whether email is pre-verified
             
         Returns:
-            Dict with success status, user, and message
+            Dict with success status, user, message, and temporary_password if generated
         """
         try:
             # Validate email
@@ -431,21 +435,33 @@ class UserService:
             
             email = email.lower().strip()
             
-            # Validate password
-            error = self._validate_new_password(password)
-            if error:
-                return {
-                    "success": False,
-                    "message": error
-                }
+            # Generate or validate password
+            generated_password = None
+            if password is None:
+                # Auto-generate temporary password
+                generated_password = generate_temporary_password()
+                password = generated_password
+            else:
+                # Validate provided password
+                error = self._validate_new_password(password)
+                if error:
+                    return {
+                        "success": False,
+                        "message": error
+                    }
             
-            # Validate role
-            error = self._validate_role(role)
-            if error:
-                return {
-                    "success": False,
-                    "message": error
-                }
+            # Default roles
+            if roles is None:
+                roles = ["annotator"]
+            
+            # Validate roles
+            for role in roles:
+                error = self._validate_role(role)
+                if error:
+                    return {
+                        "success": False,
+                        "message": error
+                    }
             
             # Check if email exists
             if await self.repository.email_exists(email):
@@ -457,11 +473,11 @@ class UserService:
             # Hash password
             password_hash = self.hash_password(password)
             
-            # Create user
+            # Create user with roles
             user = await self.repository.create_user(
                 email=email,
                 password_hash=password_hash,
-                role=role,
+                roles=roles,
                 is_active=is_active,
                 email_verified=email_verified
             )
@@ -469,13 +485,19 @@ class UserService:
             await self.session.commit()
             
             logger = __import__('logging').getLogger(__name__)
-            logger.info(f"User created by admin: {user.email} (role: {role})")
+            logger.info(f"User created by admin: {user.email} (roles: {', '.join(roles)})")
             
-            return {
+            result = {
                 "success": True,
                 "user": user,
                 "message": "User created successfully."
             }
+            
+            # Include generated password in response if auto-generated
+            if generated_password:
+                result["temporary_password"] = generated_password
+            
+            return result
             
         except Exception as e:
             await self.session.rollback()
@@ -502,7 +524,7 @@ class UserService:
         self,
         user_id: UUID,
         email: Optional[str] = None,
-        role: Optional[str] = None,
+        roles: Optional[list] = None,
         is_active: Optional[bool] = None,
         email_verified: Optional[bool] = None
     ) -> dict:
@@ -512,21 +534,25 @@ class UserService:
         Args:
             user_id: User UUID to update
             email: New email (optional)
-            role: New role (optional)
+            roles: New roles list (optional)
             is_active: New active status (optional)
             email_verified: Set email verification (optional)
             
         Returns:
-            Dict with success status, user, and message
+            Dict with success status, user, message, and previous_roles (if roles changed)
         """
         try:
-            # Get user
+            # Get user with roles
             user = await self.repository.get_by_id(user_id)
             if user is None:
                 return {
                     "success": False,
                     "message": "User not found."
                 }
+            
+            # Store previous values for response and audit
+            current_roles = [r.name for r in user.roles] if user.roles else []
+            previous_roles = current_roles.copy() if roles is not None else None
             
             # Validate email if provided
             if email is not None:
@@ -551,36 +577,47 @@ class UserService:
                             "message": "This email address is already in use by another user."
                         }
             
-            # Validate role if provided
-            if role is not None:
-                error = self._validate_role(role)
-                if error:
+            # Validate roles if provided
+            if roles is not None:
+                for role in roles:
+                    error = self._validate_role(role)
+                    if error:
+                        return {
+                            "success": False,
+                            "message": error
+                        }
+                
+                # Check if roles are actually changing (same roles check)
+                if set(roles) == set(current_roles):
                     return {
                         "success": False,
-                        "message": error
+                        "message": f"User already has roles: {', '.join(roles)}."
                     }
             
             # Prevent deactivating the last admin
-            if is_active is False and user.role == "admin":
-                # Count active admins
-                result = await self.repository.list_users(
-                    limit=100,
-                    role="admin",
-                    is_active=True
-                )
-                active_admins = result[0]
-                
-                if len(active_admins) <= 1:
-                    return {
-                        "success": False,
-                        "message": "Cannot deactivate the last active admin user."
-                    }
+            if is_active is False:
+                # Check if user has admin role
+                is_admin = any(r.name == "admin" for r in user.roles)
+                if is_admin:
+                    # Count active admins
+                    result = await self.repository.list_users(
+                        limit=100,
+                        role="admin",
+                        is_active=True
+                    )
+                    active_admins = result[0]
+                    
+                    if len(active_admins) <= 1:
+                        return {
+                            "success": False,
+                            "message": "Cannot deactivate the last active admin user."
+                        }
             
             # Update user
             updated = await self.repository.update_user(
                 user_id=user_id,
                 email=email,
-                role=role,
+                roles=roles,
                 is_active=is_active,
                 email_verified=email_verified
             )
@@ -599,11 +636,18 @@ class UserService:
             logger = __import__('logging').getLogger(__name__)
             logger.info(f"User updated by admin: {user.email}")
             
-            return {
+            # Build response
+            result = {
                 "success": True,
                 "user": user,
                 "message": "User updated successfully."
             }
+            
+            # Include previous_roles in response if roles were changed
+            if previous_roles is not None:
+                result["previous_roles"] = previous_roles
+            
+            return result
             
         except Exception as e:
             await self.session.rollback()
@@ -658,6 +702,111 @@ class UserService:
             return {
                 "success": False,
                 "message": "An error occurred while deactivating the user."
+            }
+    
+    async def update_role(
+        self,
+        admin_id: UUID,
+        target_user_id: UUID,
+        new_role: str,
+        ip_address: Optional[str] = None
+    ) -> dict:
+        """
+        Update a user's role (admin only).
+        
+        Dedicated method for role updates with audit logging.
+        Replaces all existing roles with the single new role.
+        
+        Args:
+            admin_id: ID of admin making the change
+            target_user_id: ID of user to update
+            new_role: New role value (admin, annotator, curator)
+            ip_address: Request IP address for audit logging
+            
+        Returns:
+            Dict with success status, user, previous_role, and message
+            
+        Raises:
+            ValueError: If validation fails (same role, self-modification, etc.)
+        """
+        from app.services.audit_service import AuditService
+        
+        try:
+            # Validate role
+            allowed_roles = {"admin", "annotator", "curator"}
+            if new_role not in allowed_roles:
+                return {
+                    "success": False,
+                    "message": f"Invalid role. Must be one of: {', '.join(sorted(allowed_roles))}"
+                }
+            
+            # Get target user
+            user = await self.repository.get_by_id(target_user_id)
+            if user is None:
+                return {
+                    "success": False,
+                    "message": "User not found."
+                }
+            
+            # Check for self-modification
+            if str(admin_id) == str(target_user_id):
+                return {
+                    "success": False,
+                    "message": "Cannot modify your own role."
+                }
+            
+            # Check if role is actually changing (compare primary role)
+            current_roles = [r.name for r in user.roles] if user.roles else []
+            old_role = current_roles[0] if current_roles else None
+            if len(current_roles) == 1 and old_role == new_role:
+                return {
+                    "success": False,
+                    "message": f"User already has role '{new_role}'."
+                }
+            
+            # Update role (replaces all roles with single new role)
+            updated = await self.repository.update_user(
+                user_id=target_user_id,
+                roles=[new_role]
+            )
+            
+            if not updated:
+                return {
+                    "success": False,
+                    "message": "Failed to update user role."
+                }
+            
+            await self.session.commit()
+            await self.session.refresh(user)
+            
+            # Log audit event
+            audit_service = AuditService(self.session)
+            await audit_service.log_user_roles_changed(
+                actor_id=admin_id,
+                target_user_id=target_user_id,
+                old_roles=current_roles,
+                new_roles=[new_role],
+                ip_address=ip_address
+            )
+            await self.session.commit()
+            
+            logger = __import__('logging').getLogger(__name__)
+            logger.info(f"User role changed by admin: {user.email} from {old_role} to {new_role}")
+            
+            return {
+                "success": True,
+                "user": user,
+                "previous_role": old_role,
+                "message": "User role updated successfully."
+            }
+            
+        except Exception as e:
+            await self.session.rollback()
+            logger = __import__('logging').getLogger(__name__)
+            logger.exception("Error updating user role")
+            return {
+                "success": False,
+                "message": "An error occurred while updating the user role."
             }
     
     async def reactivate_user(self, user_id: UUID) -> dict:

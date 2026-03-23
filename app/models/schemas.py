@@ -203,7 +203,7 @@ class UserProfileResponse(BaseModel):
     """Response for GET /api/v1/users/me."""
     id: str
     email: str
-    role: str
+    roles: list[str]
     is_active: bool
     email_verified: bool
     created_at: str  # ISO format datetime
@@ -240,7 +240,7 @@ class AdminUserListItem(BaseModel):
     """User item in admin user list."""
     id: str
     email: str
-    role: str
+    roles: list[str]
     is_active: bool
     email_verified: bool
     created_at: str
@@ -258,8 +258,8 @@ class AdminUserListResponse(BaseModel):
 class AdminCreateUserRequest(BaseModel):
     """Request body for POST /api/v1/admin/users."""
     email: str
-    password: str
-    role: str = "annotator"  # Default role
+    password: Optional[str] = None  # Optional, auto-generated if not provided
+    roles: list[str] = ["annotator"]  # Default roles
     is_active: bool = True
     email_verified: bool = False
 
@@ -268,15 +268,16 @@ class AdminCreateUserResponse(BaseModel):
     """Response for successful user creation."""
     id: str
     email: str
-    role: str
+    roles: list[str]
     message: str
+    temporary_password: Optional[str] = None  # Only present if auto-generated
 
 
 class AdminUserDetailResponse(BaseModel):
     """Response for GET /api/v1/admin/users/{id}."""
     id: str
     email: str
-    role: str
+    roles: list[str]
     is_active: bool
     email_verified: bool
     created_at: str
@@ -286,7 +287,7 @@ class AdminUserDetailResponse(BaseModel):
 class AdminUpdateUserRequest(BaseModel):
     """Request body for PATCH /api/v1/admin/users/{id}."""
     email: Optional[str] = None
-    role: Optional[str] = None
+    roles: Optional[list[str]] = None
     is_active: Optional[bool] = None
     email_verified: Optional[bool] = None
 
@@ -295,9 +296,10 @@ class AdminUpdateUserResponse(BaseModel):
     """Response for successful user update."""
     id: str
     email: str
-    role: str
+    roles: list[str]
     is_active: bool
     message: str
+    previous_roles: Optional[list[str]] = None  # Only present when roles are changed
 
 
 class AdminDeactivateUserResponse(BaseModel):
@@ -310,3 +312,19 @@ class AdminReactivateUserResponse(BaseModel):
     """Response for successful user reactivation."""
     id: str
     message: str
+
+
+# Dedicated Role Update Endpoint Schemas (Story 1.7)
+
+class UserRoleUpdateRequest(BaseModel):
+    """Request body for PUT /api/v1/admin/users/{id}/role."""
+    role: str
+
+
+class UserRoleUpdateResponse(BaseModel):
+    """Response for successful role update."""
+    id: str
+    email: str
+    role: str
+    previous_role: str
+    updated_at: str

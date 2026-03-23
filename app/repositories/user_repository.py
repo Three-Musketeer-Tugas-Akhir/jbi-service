@@ -11,7 +11,7 @@ from uuid import UUID
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models.auth import User
+from app.db.models.auth import User, Role
 
 
 class UserRepository:
@@ -38,19 +38,25 @@ class UserRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
     
-    async def get_by_id(self, user_id) -> Optional[User]:
+    async def get_by_id(self, user_id, load_roles: bool = True) -> Optional[User]:
         """
         Get user by ID.
         
         Args:
             user_id: User UUID
+            load_roles: Whether to eagerly load roles (default: True)
             
         Returns:
             User instance or None if not found
         """
         stmt = select(User).where(User.id == user_id)
+        
+        if load_roles:
+            from sqlalchemy.orm import joinedload
+            stmt = stmt.options(joinedload(User.roles))
+        
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        return result.scalars().first()
     
     async def update_password(self, user_id, password_hash: str) -> bool:
         """
@@ -128,20 +134,20 @@ class UserRepository:
         Args:
             limit: Maximum number of users to return
             offset: Number of users to skip
-            role: Filter by role (optional)
+            role: Filter by role name (optional)
             is_active: Filter by active status (optional)
             search: Search in email (optional, case-insensitive)
             
         Returns:
             Tuple of (list of users, total count)
         """
-        # Build base query
-        base_stmt = select(User)
+        from sqlalchemy.orm import joinedload
+        
+        # Build base query with roles eager loaded
+        base_stmt = select(User).options(joinedload(User.roles))
         
         # Apply filters
         filters = []
-        if role:
-            filters.append(User.role == role)
         if is_active is not None:
             filters.append(User.is_active == is_active)
         if search:
@@ -152,43 +158,50 @@ class UserRepository:
         if filters:
             base_stmt = base_stmt.where(and_(*filters))
         
-        # Get total count
-        count_stmt = select(func.count()).select_from(base_stmt.subquery())
-        total_result = await self.session.execute(count_stmt)
-        total = total_result.scalar()
+        # Execute query to get users
+        result = await self.session.execute(base_stmt)
+        users = result.scalars().unique().all()
         
-        # Get paginated results
-        stmt = base_stmt.order_by(User.created_at.desc()).offset(offset).limit(limit)
-        result = await self.session.execute(stmt)
-        users = result.scalars().all()
+        # Filter by role in Python (since it's many-to-many)
+        if role:
+            users = [
+                u for u in users 
+                if any(r.name == role for r in u.roles)
+            ]
         
-        return list(users), total
+        # Get total count after filtering
+        total = len(users)
+        
+        # Apply pagination
+        paginated_users = users[offset:offset + limit]
+        
+        return list(paginated_users), total
     
     async def create_user(
         self,
         email: str,
         password_hash: str,
-        role: str = "annotator",
+        roles: Optional[List[str]] = None,
         is_active: bool = True,
         email_verified: bool = False
     ) -> User:
         """
-        Create a new user.
+        Create a new user with roles.
         
         Args:
             email: User email address
             password_hash: Bcrypt password hash
-            role: User role (default: annotator)
+            roles: List of role names (default: ["annotator"])
             is_active: Whether user is active (default: True)
             email_verified: Whether email is verified (default: False)
             
         Returns:
             Created User instance
         """
+        # Create user without roles first
         user = User(
             email=email.lower(),
             password_hash=password_hash,
-            role=role,
             is_active=is_active
         )
         
@@ -199,14 +212,50 @@ class UserRepository:
         
         self.session.add(user)
         await self.session.flush()
+        
+        # Assign roles
+        if roles:
+            await self._assign_roles_to_user(user, roles)
+        
         await self.session.refresh(user)
         return user
+    
+    async def _assign_roles_to_user(self, user: User, role_names: List[str]) -> None:
+        """
+        Assign roles to a user via the junction table.
+        
+        Args:
+            user: User instance
+            role_names: List of role names to assign
+        """
+        # Get role entities
+        role_stmt = select(Role).where(Role.name.in_(role_names))
+        role_result = await self.session.execute(role_stmt)
+        role_entities = role_result.scalars().all()
+        
+        # Assign roles to user
+        user.roles = list(role_entities)
+        await self.session.flush()
+    
+    async def get_roles_by_name(self, role_names: List[str]) -> List[Role]:
+        """
+        Get role entities by their names.
+        
+        Args:
+            role_names: List of role names
+            
+        Returns:
+            List of Role entities
+        """
+        stmt = select(Role).where(Role.name.in_(role_names))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
     
     async def update_user(
         self,
         user_id: UUID,
         email: Optional[str] = None,
-        role: Optional[str] = None,
+        roles: Optional[List[str]] = None,
         is_active: Optional[bool] = None,
         email_verified: Optional[bool] = None
     ) -> bool:
@@ -216,22 +265,28 @@ class UserRepository:
         Args:
             user_id: User UUID
             email: New email (optional)
-            role: New role (optional)
+            roles: New list of role names (optional)
             is_active: New active status (optional)
             email_verified: Set email as verified (optional)
             
         Returns:
             True if user was found and updated, False otherwise
         """
-        user = await self.get_by_id(user_id)
+        from sqlalchemy.orm import joinedload
+        
+        # Load user with roles
+        stmt = select(User).where(User.id == user_id).options(joinedload(User.roles))
+        result = await self.session.execute(stmt)
+        user = result.scalars().first()
+        
         if user is None:
             return False
         
         if email is not None:
             user.email = email.lower()
         
-        if role is not None:
-            user.role = role
+        if roles is not None:
+            await self._assign_roles_to_user(user, roles)
         
         if is_active is not None:
             user.is_active = is_active
