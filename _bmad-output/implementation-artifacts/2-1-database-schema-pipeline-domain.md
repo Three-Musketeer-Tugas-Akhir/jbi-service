@@ -2,7 +2,7 @@
 story_id: "2.1"
 story_key: "2-1-database-schema-pipeline-domain"
 epic: 2
-status: review
+status: done
 created: "2026-03-24"
 last_updated: "2026-03-24"
 ---

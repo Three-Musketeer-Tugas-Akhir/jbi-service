@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from app.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 

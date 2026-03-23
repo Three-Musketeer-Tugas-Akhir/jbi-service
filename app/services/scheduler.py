@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 
-from app.config import settings
+from app.core.config import settings
 from app.services.cleanup import cleanup_expired_jobs, cleanup_expired_refresh_tokens
 
 logger = logging.getLogger(__name__)

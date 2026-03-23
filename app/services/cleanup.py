@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from app.config import settings
+from app.core.config import settings
 from app.database import async_session
 from app.models.job import JobStatus
 from app.models.job_store import job_store

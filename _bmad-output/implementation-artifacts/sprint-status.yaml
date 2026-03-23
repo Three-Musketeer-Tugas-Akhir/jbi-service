@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-03-18"
-last_updated: "2026-03-24T01:30:00"
+last_updated: "2026-03-24T02:59:00"
 project: "Unified SIBI Pipeline API"
 project_key: "NOKEY"
 tracking_system: "file-system"
@@ -61,8 +61,8 @@ development_status:
   # EPIC 2: Video Processing Pipeline
   # =====================
   epic-2: in-progress
-  2-1-database-schema-pipeline-domain: review
-  2-2-minio-storage-integration: backlog
+  2-1-database-schema-pipeline-domain: done
+  2-2-minio-storage-integration: ready-for-dev
   2-3-video-upload-api: backlog
   2-4-postgresql-queue-implementation: backlog
   2-5-detection-worker-yolov8-integration: backlog

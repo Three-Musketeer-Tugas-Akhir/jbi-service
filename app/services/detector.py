@@ -7,7 +7,7 @@ import cv2
 import torch
 from ultralytics import YOLO
 
-from app.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 

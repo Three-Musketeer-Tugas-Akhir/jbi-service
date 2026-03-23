@@ -10,12 +10,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+from app.core.config import settings
 from app.db.models.auth import User
 from app.repositories.user_repository import UserRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.services.email_service import email_service
-from app.utils.password import generate_temporary_password, validate_password_strength
+from app.core.security import generate_temporary_password, validate_password_strength
 from math import ceil
 from typing import List
 

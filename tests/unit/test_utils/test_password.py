@@ -3,7 +3,7 @@
 import pytest
 import re
 
-from app.utils.password import (
+from app.core.security import (
     generate_temporary_password,
     validate_password_strength
 )

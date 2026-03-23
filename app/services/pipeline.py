@@ -4,7 +4,7 @@ from typing import Callable, Optional
 from enum import Enum
 import logging
 
-from app.config import settings
+from app.core.config import settings
 from app.services.detector import DetectionResult, get_detector
 from app.services.segmenter import (
     SegmentationResult,

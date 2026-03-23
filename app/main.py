@@ -4,12 +4,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.formparsers import MultiPartParser
 
-from app.config import settings
+from app.core.config import settings
 from app.database import engine
 from app.models.job_model import Base
-from app.routers import admin, auth, health, jobs, users
+from app.api.v1 import admin, auth, health, jobs, users
 from app.services.scheduler import start_cleanup_scheduler, stop_cleanup_scheduler
-from app.exception_handlers import register_exception_handlers
+from app.core.exceptions import register_exception_handlers
 from app.logging_config import setup_logging
 from app.middleware import RequestLoggingMiddleware
 from app.middleware.rate_limiter import LoginRateLimitMiddleware

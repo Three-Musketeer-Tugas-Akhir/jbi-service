@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
 from app.database import get_async_session
-from app.dependencies import require_admin, CurrentUser
+from app.api.deps import require_admin, CurrentUser
 from app.services.user_service import UserService
 
 

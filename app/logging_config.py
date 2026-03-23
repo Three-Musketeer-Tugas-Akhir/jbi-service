@@ -4,7 +4,7 @@ import sys
 from contextvars import ContextVar
 from datetime import datetime, timezone
 
-from app.config import settings
+from app.core.config import settings
 
 # Context variables for request-scoped data
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")

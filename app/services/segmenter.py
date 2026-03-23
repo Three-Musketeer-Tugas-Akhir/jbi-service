@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
 
-from app.config import settings
+from app.core.config import settings
 from app.services.detector import DetectionResult
 
 logger = logging.getLogger(__name__)

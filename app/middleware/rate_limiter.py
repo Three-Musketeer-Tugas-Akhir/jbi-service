@@ -10,7 +10,7 @@ from typing import Dict, Tuple, Optional
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import settings
+from app.core.config import settings
 
 
 class RateLimiter:

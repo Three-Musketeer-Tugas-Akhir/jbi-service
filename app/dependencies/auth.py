@@ -11,8 +11,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 
-from app.services.auth_service import jwt_auth_service
-from app.config import settings
+from app.core.security import jwt_auth_service
+from app.core.config import settings
 
 # Security scheme for OpenAPI documentation
 security_scheme = HTTPBearer(auto_error=False)
