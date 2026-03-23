@@ -2,7 +2,7 @@
 story_id: "2.4"
 story_key: "2-4-postgresql-queue-implementation"
 epic: 2
-status: ready-for-dev
+status: implemented
 created: "2026-03-24"
 last_updated: "2026-03-24"
 ---
@@ -556,3 +556,100 @@ class RedisQueue(QueueBackend): ...
 - Architecture: `docs/architecture.md` - Pipeline State Machine
 - Story 2.1: Database schema for `queue_jobs` table
 - Story 2.3: Initial queue service implementation (partial)
+
+---
+
+## Dev Agent Record
+
+### Implementation Summary
+
+**Agent:** Amelia (Developer Agent)  
+**Date:** 2026-03-24  
+**Status:** ✅ COMPLETE
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `app/services/queue_service.py` | Added get_metrics(), cleanup_completed(), max_attempts parameter, db parameter for dequeue(), updated mark_failed() to return bool |
+| `tests/unit/services/test_queue_service.py` | Added 22 comprehensive unit tests covering all queue operations |
+
+### Implementation Details
+
+#### Phase 1: Core Queue Service Enhancements
+
+1. **Added `get_metrics()` method** (lines 223-251)
+   - Aggregates counts by queue_name and status
+   - Supports filtering by specific queue
+   - Returns dict format: `{queue_name: {pending: N, processing: N, failed: N, completed: N}}`
+
+2. **Added `cleanup_completed()` method** (lines 253-290)
+   - Removes completed jobs older than retention period (default 7 days)
+   - Supports both standalone and provided db session
+   - Returns count of deleted jobs
+
+3. **Enhanced `enqueue()` method** (lines 17-70)
+   - Added `max_attempts` parameter (default 3)
+   - Validates negative delay_seconds raises ValueError
+
+4. **Enhanced `dequeue()` method** (lines 72-123)
+   - Added optional `db` parameter for atomic transactions
+   - Uses `SELECT FOR UPDATE SKIP LOCKED` for concurrent worker safety
+   - Orders by priority DESC, created_at ASC
+
+5. **Updated `mark_failed()` method** (lines 141-180)
+   - Now returns `bool`: True if job will be retried, False if max attempts reached
+   - Applies exponential backoff: base_delay × 2^(attempts-1)
+   - Default retry delay: 5 seconds
+
+### Test Coverage
+
+**Total Tests:** 22 (all passing)
+
+| Test Category | Count | Tests |
+|---------------|-------|-------|
+| enqueue | 6 | creates_job, with_priority, with_delay, with_max_attempts, with_db_session, negative_delay_error |
+| dequeue | 4 | returns_job, with_db_session, no_pending_jobs, uses_skip_locked |
+| mark_completed | 2 | basic, with_db_session |
+| mark_failed | 4 | with_retry, max_attempts, exponential_backoff, default_retry_delay |
+| get_metrics | 3 | basic, specific_queue, empty |
+| cleanup_completed | 3 | basic, with_db_session, no_old_jobs |
+
+### Acceptance Criteria Verification
+
+| AC | Description | Status |
+|----|-------------|--------|
+| AC1 | enqueue() creates job with pending status | ✅ `test_enqueue_creates_job` |
+| AC2 | dequeue() returns highest priority job with SKIP LOCKED | ✅ `test_dequeue_returns_job`, `test_dequeue_uses_skip_locked` |
+| AC3 | mark_failed() increments attempts and reschedules | ✅ `test_mark_failed_with_retry`, `test_mark_failed_exponential_backoff` |
+| AC4 | mark_completed() updates status and timestamp | ✅ `test_mark_completed` |
+| AC5 | get_metrics() returns counts per queue | ✅ `test_get_metrics` |
+
+### Technical Decisions
+
+1. **Exponential Backoff Formula:** `base_delay × 2^(attempts-1)`
+   - Attempt 1: 5s × 2^0 = 5s
+   - Attempt 2: 5s × 2^1 = 10s
+   - Attempt 3: 5s × 2^2 = 20s
+
+2. **Database Session Handling:**
+   - All methods support optional `db` parameter for atomic transactions
+   - When `db=None`, creates new session and commits
+   - When `db` provided, only flushes (caller responsible for commit)
+
+3. **Row Locking Strategy:**
+   - Uses `with_for_update(skip_locked=True)` to prevent worker contention
+   - Returns None immediately if no jobs available (no blocking)
+
+### Test Results
+
+```
+tests/unit/services/test_queue_service.py - 22 passed
+tests/unit/services/ (all services) - 52 passed
+```
+
+### Notes
+
+- Implementation follows Story 2.4 specification exactly
+- All methods backward compatible with Story 2.3 usage
+- Ready for Detection Worker (Story 2.5) integration
