@@ -1,7 +1,8 @@
 """Tests for MinIO service."""
 
+import asyncio
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 from minio.error import S3Error
 
 from app.core.exceptions import StorageError, StorageUnavailableError
@@ -90,15 +91,26 @@ class TestMinIOService:
     
     @pytest.mark.asyncio
     async def test_object_exists_false(self, minio_service, reset_and_patch):
-        """Test object exists check - False case."""
+        """Test object exists check - False case (NoSuchKey)."""
         mock_client = reset_and_patch
-        mock_client.stat_object.side_effect = S3Error(
-            "Not found", "NoSuchKey", None, None, None, None
-        )
+        # Simulate NoSuchKey error
+        error = S3Error("Not found", "NoSuchKey", None, None, None, None)
+        mock_client.stat_object.side_effect = error
         
         exists = await minio_service.object_exists("test.mp4")
         
         assert exists is False
+    
+    @pytest.mark.asyncio
+    async def test_object_exists_raises_on_other_errors(self, minio_service, reset_and_patch):
+        """Test object exists raises StorageError for non-NotFound errors."""
+        mock_client = reset_and_patch
+        # Simulate auth error (not NoSuchKey)
+        error = S3Error("Access denied", "AccessDenied", None, None, None, None)
+        mock_client.stat_object.side_effect = error
+        
+        with pytest.raises(StorageError):
+            await minio_service.object_exists("test.mp4")
     
     @pytest.mark.asyncio
     async def test_upload_job_video(self, minio_service, reset_and_patch):
@@ -115,6 +127,37 @@ class TestMinIOService:
         expected_path = f"jobs/{job_id}/original/{filename}"
         assert result == expected_path
         mock_client.put_object.assert_called_once()
+    
+    @pytest.mark.asyncio
+    async def test_upload_job_video_sanitizes_path_traversal(self, minio_service, reset_and_patch):
+        """Test that path traversal attempts are sanitized."""
+        mock_client = reset_and_patch
+        job_id = "550e8400-e29b-41d4-a716-446655440000"
+        file_data = b"video content"
+        # Attempt path traversal
+        malicious_filename = "../../../etc/passwd"
+        
+        result = await minio_service.upload_job_video(
+            job_id, file_data, malicious_filename
+        )
+        
+        # Should only contain the basename, not the path traversal
+        assert "passwd" in result
+        assert "../" not in result
+        assert result == f"jobs/{job_id}/original/passwd"
+    
+    @pytest.mark.asyncio
+    async def test_upload_job_video_invalid_filename(self, minio_service, reset_and_patch):
+        """Test that completely invalid filenames raise ValueError."""
+        job_id = "550e8400-e29b-41d4-a716-446655440000"
+        file_data = b"video content"
+        # Filename with only special characters
+        invalid_filename = "../../../"
+        
+        with pytest.raises(ValueError):
+            await minio_service.upload_job_video(
+                job_id, file_data, invalid_filename
+            )
     
     @pytest.mark.asyncio
     async def test_upload_segment_stage1(self, minio_service, reset_and_patch):
@@ -145,6 +188,8 @@ class TestMinIOService:
         """Test successful file download."""
         mock_client = reset_and_patch
         mock_response = Mock()
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
         mock_response.read.return_value = b"downloaded content"
         mock_client.get_object.return_value = mock_response
         
@@ -246,3 +291,52 @@ class TestMinIOService:
         
         mock_client.bucket_exists.assert_called_once()
         mock_client.make_bucket.assert_not_called()
+    
+    def test_bucket_creation_handles_race_condition(self, reset_and_patch):
+        """Test bucket creation handles TOCTOU race (BucketAlreadyExists)."""
+        mock_client = reset_and_patch
+        mock_client.bucket_exists.return_value = False
+        # Simulate another instance creating the bucket first
+        mock_client.make_bucket.side_effect = S3Error(
+            "Bucket already exists", "BucketAlreadyExists", None, None, None, None
+        )
+        
+        # Reset singleton
+        MinIOService._instance = None
+        MinIOService._client = None
+        MinIOService._initialized = False
+        
+        # Should not raise - handles race gracefully
+        service = MinIOService()
+        
+        mock_client.bucket_exists.assert_called_once()
+        mock_client.make_bucket.assert_called_once()
+    
+    def test_thread_safe_singleton(self, reset_and_patch):
+        """Test singleton initialization is thread-safe."""
+        import threading
+        import time
+        
+        mock_client = reset_and_patch
+        mock_client.bucket_exists.return_value = True
+        
+        # Reset singleton
+        MinIOService._instance = None
+        MinIOService._client = None
+        MinIOService._initialized = False
+        
+        instances = []
+        
+        def create_instance():
+            time.sleep(0.01)  # Small delay to increase race chance
+            instances.append(MinIOService())
+        
+        # Create multiple threads trying to initialize
+        threads = [threading.Thread(target=create_instance) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        
+        # All instances should be the same object
+        assert len(set(id(i) for i in instances)) == 1

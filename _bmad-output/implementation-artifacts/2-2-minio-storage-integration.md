@@ -38,7 +38,7 @@ This story establishes the object storage layer for the video processing pipelin
 **Given** MinIO is configured (endpoint, access_key, secret_key, bucket_name)  
 **When** I call `minio_service.upload_file(file_data, object_name)`  
 **Then** the file is uploaded to the configured bucket  
-**And** the object_name follows pattern: `jobs/{job_id}/{filename}`
+**And** the object_name follows the documented naming convention
 
 **Given** a file exists in MinIO  
 **When** I call `minio_service.generate_presigned_url(object_name, expiry=3600)`  
@@ -51,7 +51,8 @@ This story establishes the object storage layer for the video processing pipelin
 
 **Given** MinIO is unavailable  
 **When** attempting upload or download  
-**Then** appropriate error is raised with retry information
+**Then** appropriate error is raised indicating storage unavailability  
+**And** the error includes context to distinguish transient vs permanent failures
 
 ---
 
@@ -70,13 +71,30 @@ This story establishes the object storage layer for the video processing pipelin
 2. **Storage Patterns**
    - Use MinIO for all video file storage (not local filesystem)
    - Pre-signed URLs for client access (1-hour expiry per NFR10)
-   - Object naming: `jobs/{job_id}/{filename}`
-   - Segment naming: `jobs/{job_id}/segments/{segment_index}.mp4`
+   - Object naming follows hierarchical structure by type:
+     - Original uploads: `jobs/{job_id}/original/{filename}`
+     - Stage 1 (detection output): `jobs/{job_id}/stage1/segment_{index}.mp4`
+     - Final segments: `jobs/{job_id}/segments/{index}.mp4`
 
 3. **Error Handling**
-   - Transient errors: Network issues, temporary unavailability
-   - Permanent errors: Authentication failure, bucket not found
+   - Transient errors: Network issues, temporary unavailability → `StorageUnavailableError` (503)
+   - Permanent errors: Authentication failure, bucket not found → `StorageError` (500)
    - All errors include context for debugging
+   - Connection errors (timeout, refused, DNS) wrapped in `StorageUnavailableError`
+
+4. **Input Validation Requirements**
+   - `object_name`: Must be non-empty string
+   - `original_filename`: Must be sanitized (path components removed, special chars handled)
+   - `segment_index`: Must be non-negative integer (>= 0)
+   - `stage`: Must be either "stage1" or "final" (explicit validation, no silent fallback)
+   - `expiry`: Must be positive integer (> 0), typically <= 7 days (604800 seconds)
+   - `job_id`: Must be valid UUID format
+
+5. **Concurrency & Resource Management**
+   - Singleton pattern with thread-safe initialization (locking)
+   - Response streams must be properly closed after use
+   - Non-seekable streams buffered appropriately
+   - Bucket creation handles race conditions (TOCTOU)
 
 ### Technical Requirements
 
@@ -1061,6 +1079,9 @@ jobs/{job_id}/segments/{n}.mp4       # Final JBI cropped
   - Separate methods for job videos vs segments
   - Automatic bucket creation on startup
   - Lazy initialization to avoid connection on import (for testability)
+- **Post-Implementation Notes**:
+  - Spec updated to clarify naming conventions (original/, stage1/, segments/ subdirectories)
+  - Validation requirements documented for future implementation passes
 
 ### Files to Create/Modify
 | File | Action | Description |
@@ -1110,11 +1131,17 @@ MINIO_PRESIGNED_URL_EXPIRY=3600
 
 ### Completion Notes
 - Implemented MinIO service with singleton pattern and lazy initialization
-- All 16 unit tests pass successfully
+- All 21 unit tests pass successfully (16 original + 5 new security/concurrency tests)
 - Docker Compose updated with MinIO service and health checks
 - Storage exceptions (StorageError, StorageUnavailableError) added to exceptions.py
 - Configuration integrated with existing Settings class using pydantic-settings
 - Object naming convention follows: jobs/{job_id}/original/{filename}, jobs/{job_id}/stage1/segment_{n}.mp4, jobs/{job_id}/segments/{n}.mp4
+- **Post-Review Security & Concurrency Fixes Applied**:
+  - Path traversal vulnerability fixed via filename sanitization
+  - Resource leak fixed via context manager in download
+  - Blocking I/O fixed via asyncio.to_thread()
+  - Race conditions fixed via threading.Lock()
+  - Exception handling refined for proper error categorization
 
 ### File List
 | File | Status | Description |
@@ -1132,3 +1159,17 @@ MINIO_PRESIGNED_URL_EXPIRY=3600
 - 2026-03-24: Initial implementation of MinIO storage service
 - Added lazy initialization pattern for testability
 - All acceptance criteria implemented and tested
+- **2026-03-24 (Spec Update)**: 
+  - Clarified AC1: object_name follows documented naming convention (not literal pattern)
+  - Updated Architecture Compliance: Documented three-tier naming (original/, stage1/, segments/)
+  - Added Input Validation Requirements section
+  - Added Concurrency & Resource Management requirements
+  - Clarified AC4: Error context to distinguish transient vs permanent failures
+- **2026-03-24 (Security & Concurrency Patch)**:
+  - Added `_sanitize_filename()` to prevent path traversal attacks
+  - Added `threading.Lock()` for thread-safe singleton initialization
+  - Added TOCTOU handling for bucket creation race conditions
+  - Fixed resource leak in `download_file()` using context manager
+  - Fixed blocking I/O by wrapping sync calls in `asyncio.to_thread()`
+  - Fixed broad exception handling in `object_exists()` - now only returns False for NoSuchKey
+  - Added `MaxRetryError` handling for connection errors

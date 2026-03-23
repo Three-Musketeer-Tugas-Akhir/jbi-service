@@ -8,11 +8,15 @@ Provides S3-compatible object storage operations with:
 - Error handling and retries
 """
 
+import asyncio
 import io
+import os
+import threading
 from typing import BinaryIO, Union
 
 from minio import Minio
 from minio.error import S3Error
+from urllib3.exceptions import MaxRetryError
 
 from app.core.config import settings
 from app.core.exceptions import StorageError, StorageUnavailableError
@@ -24,6 +28,7 @@ class MinIOService:
     _instance = None
     _client = None
     _initialized = False
+    _lock = threading.Lock()
     
     def __new__(cls):
         """Singleton pattern for MinIO client."""
@@ -33,7 +38,14 @@ class MinIOService:
     
     def __init__(self):
         """Initialize MinIO client if not already initialized."""
-        if not self._initialized:
+        if self._initialized:
+            return
+            
+        with self._lock:
+            # Double-check after acquiring lock
+            if self._initialized:
+                return
+                
             self._client = Minio(
                 settings.minio_endpoint,
                 access_key=settings.minio_access_key,
@@ -49,11 +61,44 @@ class MinIOService:
         """Create bucket if it doesn't exist."""
         try:
             if not self._client.bucket_exists(self._bucket_name):
-                self._client.make_bucket(self._bucket_name)
-        except S3Error as e:
+                try:
+                    self._client.make_bucket(self._bucket_name)
+                except S3Error as e:
+                    # Bucket might have been created by another instance (TOCTOU)
+                    if "BucketAlreadyExists" not in str(e):
+                        raise
+        except (S3Error, MaxRetryError) as e:
             raise StorageUnavailableError(
                 f"Failed to initialize MinIO bucket: {e}"
             )
+    
+    def _upload_file_sync(
+        self,
+        file_data: Union[bytes, BinaryIO],
+        object_name: str,
+        content_type: str,
+        metadata: dict
+    ) -> str:
+        """Synchronous upload implementation."""
+        # Convert bytes to BytesIO if needed
+        if isinstance(file_data, bytes):
+            file_data = io.BytesIO(file_data)
+        
+        # Get file size
+        file_data.seek(0, 2)  # Seek to end
+        file_size = file_data.tell()
+        file_data.seek(0)  # Reset to beginning
+        
+        self._client.put_object(
+            bucket_name=self._bucket_name,
+            object_name=object_name,
+            data=file_data,
+            length=file_size,
+            content_type=content_type,
+            metadata=metadata or {}
+        )
+        
+        return object_name
     
     async def upload_file(
         self,
@@ -79,30 +124,25 @@ class MinIOService:
             StorageUnavailableError: If MinIO is unavailable
         """
         try:
-            # Convert bytes to BytesIO if needed
-            if isinstance(file_data, bytes):
-                file_data = io.BytesIO(file_data)
-            
-            # Get file size
-            file_data.seek(0, 2)  # Seek to end
-            file_size = file_data.tell()
-            file_data.seek(0)  # Reset to beginning
-            
-            self._client.put_object(
-                bucket_name=self._bucket_name,
-                object_name=object_name,
-                data=file_data,
-                length=file_size,
-                content_type=content_type,
-                metadata=metadata or {}
+            return await asyncio.to_thread(
+                self._upload_file_sync,
+                file_data,
+                object_name,
+                content_type,
+                metadata
             )
-            
-            return object_name
-            
-        except S3Error as e:
+        except (S3Error, MaxRetryError) as e:
             raise StorageError(
                 f"Failed to upload file to {object_name}: {e}"
             )
+    
+    def _download_file_sync(self, object_name: str) -> bytes:
+        """Synchronous download implementation with proper resource cleanup."""
+        with self._client.get_object(
+            bucket_name=self._bucket_name,
+            object_name=object_name
+        ) as response:
+            return response.read()
     
     async def download_file(self, object_name: str) -> bytes:
         """
@@ -118,16 +158,26 @@ class MinIOService:
             StorageError: If download fails
         """
         try:
-            response = self._client.get_object(
-                bucket_name=self._bucket_name,
-                object_name=object_name
+            return await asyncio.to_thread(
+                self._download_file_sync,
+                object_name
             )
-            return response.read()
-            
-        except S3Error as e:
+        except (S3Error, MaxRetryError) as e:
             raise StorageError(
                 f"Failed to download file {object_name}: {e}"
             )
+    
+    def _generate_presigned_url_sync(
+        self,
+        object_name: str,
+        expiry: int
+    ) -> str:
+        """Synchronous presigned URL generation."""
+        return self._client.presigned_get_object(
+            bucket_name=self._bucket_name,
+            object_name=object_name,
+            expires=expiry
+        )
     
     async def generate_presigned_url(
         self,
@@ -151,14 +201,12 @@ class MinIOService:
             expiry = settings.minio_presigned_url_expiry
             
         try:
-            url = self._client.presigned_get_object(
-                bucket_name=self._bucket_name,
-                object_name=object_name,
-                expires=expiry
+            return await asyncio.to_thread(
+                self._generate_presigned_url_sync,
+                object_name,
+                expiry
             )
-            return url
-            
-        except S3Error as e:
+        except (S3Error, MaxRetryError) as e:
             raise StorageError(
                 f"Failed to generate presigned URL for {object_name}: {e}"
             )
@@ -189,6 +237,13 @@ class MinIOService:
             
         return await self.generate_presigned_url(object_name, expiry)
     
+    def _delete_object_sync(self, object_name: str) -> None:
+        """Synchronous delete implementation."""
+        self._client.remove_object(
+            bucket_name=self._bucket_name,
+            object_name=object_name
+        )
+    
     async def delete_object(self, object_name: str) -> None:
         """
         Delete object from MinIO.
@@ -200,14 +255,29 @@ class MinIOService:
             StorageError: If deletion fails
         """
         try:
-            self._client.remove_object(
-                bucket_name=self._bucket_name,
-                object_name=object_name
+            await asyncio.to_thread(
+                self._delete_object_sync,
+                object_name
             )
-        except S3Error as e:
+        except (S3Error, MaxRetryError) as e:
             raise StorageError(
                 f"Failed to delete object {object_name}: {e}"
             )
+    
+    def _object_exists_sync(self, object_name: str) -> bool:
+        """Synchronous exists check - only returns False for NoSuchKey."""
+        try:
+            self._client.stat_object(
+                bucket_name=self._bucket_name,
+                object_name=object_name
+            )
+            return True
+        except S3Error as e:
+            # Only return False for actual "not found" errors
+            if "NoSuchKey" in str(e) or "Not found" in str(e):
+                return False
+            # Re-raise other errors (auth, network, etc.)
+            raise
     
     async def object_exists(self, object_name: str) -> bool:
         """
@@ -218,15 +288,32 @@ class MinIOService:
             
         Returns:
             True if object exists, False otherwise
+            
+        Raises:
+            StorageError: For non-NotFound errors (auth, network, etc.)
         """
         try:
-            self._client.stat_object(
-                bucket_name=self._bucket_name,
-                object_name=object_name
+            return await asyncio.to_thread(
+                self._object_exists_sync,
+                object_name
             )
-            return True
-        except S3Error:
-            return False
+        except S3Error as e:
+            # Re-raise as StorageError for non-NotFound errors
+            raise StorageError(
+                f"Failed to check object existence for {object_name}: {e}"
+            )
+        except MaxRetryError as e:
+            raise StorageUnavailableError(
+                f"MinIO unavailable while checking object {object_name}: {e}"
+            )
+    
+    def _get_object_size_sync(self, object_name: str) -> int:
+        """Synchronous size retrieval."""
+        stat = self._client.stat_object(
+            bucket_name=self._bucket_name,
+            object_name=object_name
+        )
+        return stat.size
     
     async def get_object_size(self, object_name: str) -> int:
         """
@@ -242,15 +329,33 @@ class MinIOService:
             StorageError: If stat fails
         """
         try:
-            stat = self._client.stat_object(
-                bucket_name=self._bucket_name,
-                object_name=object_name
+            return await asyncio.to_thread(
+                self._get_object_size_sync,
+                object_name
             )
-            return stat.size
-        except S3Error as e:
+        except (S3Error, MaxRetryError) as e:
             raise StorageError(
                 f"Failed to get object stats for {object_name}: {e}"
             )
+    
+    def _sanitize_filename(self, filename: str) -> str:
+        """
+        Sanitize filename to prevent path traversal attacks.
+        
+        Removes path components and keeps only the basename.
+        """
+        # Get basename (removes any path components)
+        basename = os.path.basename(filename)
+        
+        # Remove any remaining problematic characters
+        # Allow alphanumeric, dots, dashes, underscores
+        sanitized = "".join(c for c in basename if c.isalnum() or c in "._-")
+        
+        # Ensure we have something left
+        if not sanitized:
+            raise ValueError(f"Invalid filename after sanitization: {filename}")
+            
+        return sanitized
     
     async def upload_job_video(
         self,
@@ -265,13 +370,19 @@ class MinIOService:
         Args:
             job_id: UUID of the job
             file_data: Video file content
-            original_filename: Original filename for reference
+            original_filename: Original filename for reference (will be sanitized)
             content_type: MIME type
             
         Returns:
             Object name in MinIO
+            
+        Raises:
+            ValueError: If filename is invalid after sanitization
         """
-        object_name = f"jobs/{job_id}/original/{original_filename}"
+        # Sanitize filename to prevent path traversal
+        safe_filename = self._sanitize_filename(original_filename)
+        
+        object_name = f"jobs/{job_id}/original/{safe_filename}"
         await self.upload_file(
             file_data=file_data,
             object_name=object_name,
