@@ -304,3 +304,9 @@ class AdminDeactivateUserResponse(BaseModel):
     """Response for successful user deactivation."""
     id: str
     message: str
+
+
+class AdminReactivateUserResponse(BaseModel):
+    """Response for successful user reactivation."""
+    id: str
+    message: str

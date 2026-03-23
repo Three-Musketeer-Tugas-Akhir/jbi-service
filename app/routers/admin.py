@@ -12,8 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.db.models.auth import User
-from app.dependencies import require_admin
+from app.dependencies import CurrentUser, require_admin
 from app.models.schemas import (
     AdminUserListResponse,
     AdminUserListItem,
@@ -23,6 +22,7 @@ from app.models.schemas import (
     AdminUpdateUserRequest,
     AdminUpdateUserResponse,
     AdminDeactivateUserResponse,
+    AdminReactivateUserResponse,
     AuthErrorResponse
 )
 from app.services.audit_service import AuditService
@@ -80,7 +80,7 @@ async def list_users(
     role: Optional[str] = Query(None, description="Filter by role"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     search: Optional[str] = Query(None, description="Search in email"),
-    current_user: User = Depends(require_admin),
+    current_user: CurrentUser = Depends(require_admin),
     db_session: AsyncSession = Depends(get_db),
 ):
     """
@@ -131,7 +131,7 @@ async def list_users(
 async def create_user(
     request: Request,
     user_data: AdminCreateUserRequest,
-    current_user: User = Depends(require_admin),
+    current_user: CurrentUser = Depends(require_admin),
     db_session: AsyncSession = Depends(get_db),
 ):
     """
@@ -192,7 +192,7 @@ async def create_user(
 )
 async def get_user(
     user_id: UUID,
-    current_user: User = Depends(require_admin),
+    current_user: CurrentUser = Depends(require_admin),
     db_session: AsyncSession = Depends(get_db),
 ):
     """
@@ -229,7 +229,7 @@ async def update_user(
     request: Request,
     user_id: UUID,
     update_data: AdminUpdateUserRequest,
-    current_user: User = Depends(require_admin),
+    current_user: CurrentUser = Depends(require_admin),
     db_session: AsyncSession = Depends(get_db),
 ):
     """
@@ -336,7 +336,7 @@ async def update_user(
 async def deactivate_user(
     request: Request,
     user_id: UUID,
-    current_user: User = Depends(require_admin),
+    current_user: CurrentUser = Depends(require_admin),
     db_session: AsyncSession = Depends(get_db),
 ):
     """
@@ -390,4 +390,73 @@ async def deactivate_user(
     return AdminDeactivateUserResponse(
         id=str(user_id),
         message="User deactivated successfully."
+    )
+
+
+@router.post(
+    "/users/{user_id}/reactivate",
+    response_model=AdminReactivateUserResponse,
+    responses={
+        400: {"model": AuthErrorResponse, "description": "User already active"},
+        403: {"model": AuthErrorResponse, "description": "Admin access required"},
+        404: {"model": AuthErrorResponse, "description": "User not found"},
+    },
+)
+async def reactivate_user(
+    request: Request,
+    user_id: UUID,
+    current_user: CurrentUser = Depends(require_admin),
+    db_session: AsyncSession = Depends(get_db),
+):
+    """
+    Reactivate a deactivated user.
+    
+    - **user_id**: UUID of the user to reactivate
+    
+    Restores user access by setting is_active to true.
+    Admin access required.
+    """
+    user_service = UserService(db_session)
+    audit_service = AuditService(db_session)
+    
+    # Get user details before reactivation for audit
+    user = await user_service.get_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+    
+    user_email = user.email
+    
+    result = await user_service.reactivate_user(user_id)
+    
+    if not result["success"]:
+        # Determine appropriate status code
+        error_msg = result["message"].lower()
+        
+        if "not found" in error_msg:
+            status_code = status.HTTP_404_NOT_FOUND
+        elif "already active" in error_msg:
+            status_code = status.HTTP_400_BAD_REQUEST
+        else:
+            status_code = status.HTTP_400_BAD_REQUEST
+        
+        raise HTTPException(
+            status_code=status_code,
+            detail=result["message"],
+        )
+    
+    # Log audit event
+    await audit_service.log_user_reactivated(
+        actor_id=current_user.id,
+        target_user_id=user_id,
+        email=user_email,
+        ip_address=_get_client_ip(request)
+    )
+    await db_session.commit()
+    
+    return AdminReactivateUserResponse(
+        id=str(user_id),
+        message="User reactivated successfully."
     )

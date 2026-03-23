@@ -659,3 +659,64 @@ class UserService:
                 "success": False,
                 "message": "An error occurred while deactivating the user."
             }
+    
+    async def reactivate_user(self, user_id: UUID) -> dict:
+        """
+        Reactivate a deactivated user (admin only).
+        
+        Args:
+            user_id: User UUID to reactivate
+            
+        Returns:
+            Dict with success status, user, and message
+        """
+        try:
+            # Get user
+            user = await self.repository.get_by_id(user_id)
+            if user is None:
+                return {
+                    "success": False,
+                    "message": "User not found."
+                }
+            
+            # Check if user is already active
+            if user.is_active:
+                return {
+                    "success": False,
+                    "message": "User is already active."
+                }
+            
+            # Reactivate the user
+            updated = await self.repository.update_user(
+                user_id=user_id,
+                is_active=True
+            )
+            
+            if not updated:
+                return {
+                    "success": False,
+                    "message": "Failed to reactivate user."
+                }
+            
+            await self.session.commit()
+            
+            # Refresh user data
+            await self.session.refresh(user)
+            
+            logger = __import__('logging').getLogger(__name__)
+            logger.info(f"User reactivated by admin: {user.email}")
+            
+            return {
+                "success": True,
+                "user": user,
+                "message": "User reactivated successfully."
+            }
+            
+        except Exception as e:
+            await self.session.rollback()
+            logger = __import__('logging').getLogger(__name__)
+            logger.exception("Error reactivating user")
+            return {
+                "success": False,
+                "message": "An error occurred while reactivating the user."
+            }

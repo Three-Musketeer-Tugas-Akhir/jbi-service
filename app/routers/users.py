@@ -8,8 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_async_session
-from app.db.models.auth import User
-from app.dependencies import get_current_user
+from app.dependencies import CurrentUser, get_current_user
 from app.models.schemas import (
     UserProfileResponse,
     UpdateProfileRequest,
@@ -23,14 +22,14 @@ from app.services.user_service import UserService
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-def _user_to_profile_response(user: User) -> UserProfileResponse:
-    """Convert User model to UserProfileResponse."""
+def _current_user_to_profile_response(user: CurrentUser) -> UserProfileResponse:
+    """Convert CurrentUser DTO to UserProfileResponse."""
     return UserProfileResponse(
         id=str(user.id),
         email=user.email,
         role=user.role,
         is_active=user.is_active,
-        email_verified=user.is_email_verified,
+        email_verified=user.email_verified,
         created_at=user.created_at.isoformat(),
         updated_at=user.updated_at.isoformat()
     )
@@ -44,7 +43,7 @@ def _user_to_profile_response(user: User) -> UserProfileResponse:
     },
 )
 async def get_current_user_profile(
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """
     Get the current authenticated user's profile.
@@ -52,7 +51,7 @@ async def get_current_user_profile(
     Returns user details including id, email, role, and verification status.
     Requires valid JWT access token.
     """
-    return _user_to_profile_response(current_user)
+    return _current_user_to_profile_response(current_user)
 
 
 @router.patch(
@@ -66,7 +65,7 @@ async def get_current_user_profile(
 )
 async def update_current_user_profile(
     update_data: UpdateProfileRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db_session: AsyncSession = Depends(get_async_session),
 ):
     """
@@ -108,7 +107,7 @@ async def update_current_user_profile(
 )
 async def change_current_user_password(
     password_data: ChangePasswordRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: CurrentUser = Depends(get_current_user),
     db_session: AsyncSession = Depends(get_async_session),
 ):
     """
