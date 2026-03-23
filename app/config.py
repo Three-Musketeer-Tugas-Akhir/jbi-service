@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     rate_limit_login_attempts: int = 5  # Max failed attempts
     rate_limit_window_seconds: int = 900  # 15 minutes
 
+    # --- Email Configuration ---
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    from_email: str = "noreply@anotasi.lbi.ac.id"
+
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"

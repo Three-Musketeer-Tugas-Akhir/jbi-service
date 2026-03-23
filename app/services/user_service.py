@@ -14,6 +14,7 @@ from app.config import settings
 from app.db.models.auth import User
 from app.repositories.user_repository import UserRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.services.email_service import email_service
 from app.utils.password import generate_temporary_password, validate_password_strength
 
 
@@ -480,6 +481,14 @@ class UserService:
                 roles=roles,
                 is_active=is_active,
                 email_verified=email_verified
+            )
+            
+            # Send invitation email
+            primary_role = roles[0] if roles else "annotator"
+            await email_service.send_user_invitation(
+                to_email=email,
+                temporary_password=password,
+                role=primary_role
             )
             
             await self.session.commit()
