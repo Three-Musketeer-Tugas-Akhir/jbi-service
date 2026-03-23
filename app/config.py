@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 1440  # 24 hours
     jwt_refresh_token_expire_days: int = 7  # 7 days
 
+    # --- Password Hashing ---
+    bcrypt_rounds: int = 12  # bcrypt salt rounds (12+ recommended)
+
+    # --- Rate Limiting ---
+    rate_limit_login_attempts: int = 5  # Max failed attempts
+    rate_limit_window_seconds: int = 900  # 15 minutes
+
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"

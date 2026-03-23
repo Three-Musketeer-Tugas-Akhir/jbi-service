@@ -5,7 +5,7 @@ This module defines the SQLAlchemy models for user authentication,
 role-based access control, and user-role relationships.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 import uuid as uuid_module
 from uuid import UUID
@@ -78,6 +78,11 @@ class User(Base):
         nullable=False,
         comment="Last update timestamp"
     )
+    email_verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When email was verified (NULL if not verified)"
+    )
     
     # Relationships
     roles: Mapped[List["Role"]] = relationship(
@@ -86,6 +91,33 @@ class User(Base):
         back_populates="users",
         lazy="selectin"
     )
+    refresh_tokens: Mapped[List["RefreshToken"]] = relationship(
+        "RefreshToken",
+        back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    password_reset_tokens: Mapped[List["PasswordResetToken"]] = relationship(
+        "PasswordResetToken",
+        back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    email_verification_tokens: Mapped[List["EmailVerificationToken"]] = relationship(
+        "EmailVerificationToken",
+        back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    
+    @property
+    def is_email_verified(self) -> bool:
+        """Check if email has been verified."""
+        return self.email_verified_at is not None
+    
+    def mark_email_verified(self) -> None:
+        """Mark email as verified."""
+        self.email_verified_at = datetime.now(timezone.utc)
     
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email}, role={self.role})>"
@@ -135,6 +167,230 @@ class Role(Base):
     
     def __repr__(self) -> str:
         return f"<Role(id={self.id}, name={self.name})>"
+
+
+class RefreshToken(Base):
+    """
+    Refresh Token model for token tracking and revocation.
+    
+    Stores refresh token metadata for rotation and revocation support.
+    """
+    
+    __tablename__ = "auth_refresh_tokens"
+    
+    jti: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid_module.uuid4,
+        comment="Token unique identifier (JWT ID)"
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("auth_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Reference to user who owns this token"
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="Token expiration timestamp"
+    )
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="When token was revoked (NULL if active)"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        comment="Token creation timestamp"
+    )
+    rotated_to_jti: Mapped[Optional[UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("auth_refresh_tokens.jti", ondelete="SET NULL"),
+        nullable=True,
+        comment="Reference to token this was rotated to"
+    )
+    
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="refresh_tokens")
+    rotated_to: Mapped[Optional["RefreshToken"]] = relationship(
+        "RefreshToken",
+        remote_side=[jti],
+        back_populates="rotated_from"
+    )
+    rotated_from: Mapped[Optional["RefreshToken"]] = relationship(
+        "RefreshToken",
+        remote_side=[rotated_to_jti],
+        back_populates="rotated_to"
+    )
+    
+    @property
+    def is_revoked(self) -> bool:
+        """Check if token has been revoked."""
+        return self.revoked_at is not None
+    
+    @property
+    def is_expired(self) -> bool:
+        """Check if token has expired."""
+        return datetime.now(timezone.utc) > self.expires_at
+    
+    @property
+    def is_active(self) -> bool:
+        """Check if token is active (not revoked, not expired)."""
+        return not self.is_revoked and not self.is_expired
+    
+    def revoke(self) -> None:
+        """Mark token as revoked."""
+        self.revoked_at = datetime.now(timezone.utc)
+    
+    def __repr__(self) -> str:
+        return f"<RefreshToken(jti={self.jti}, user_id={self.user_id}, active={self.is_active})>"
+
+
+class PasswordResetToken(Base):
+    """
+    Password Reset Token model for secure password reset flow.
+    
+    Stores hashed reset tokens with expiration for password reset functionality.
+    """
+    
+    __tablename__ = "auth_password_reset_tokens"
+    
+    id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid_module.uuid4,
+        comment="Token unique identifier"
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("auth_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Reference to user who requested reset"
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        comment="Bcrypt hash of the reset token"
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="Token expiration timestamp"
+    )
+    used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When token was used (NULL if unused)"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        comment="Token creation timestamp"
+    )
+    
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="password_reset_tokens")
+    
+    @property
+    def is_used(self) -> bool:
+        """Check if token has been used."""
+        return self.used_at is not None
+    
+    @property
+    def is_expired(self) -> bool:
+        """Check if token has expired."""
+        return datetime.now(timezone.utc) > self.expires_at
+    
+    @property
+    def is_valid(self) -> bool:
+        """Check if token is valid (not used, not expired)."""
+        return not self.is_used and not self.is_expired
+    
+    def mark_used(self) -> None:
+        """Mark token as used."""
+        self.used_at = datetime.now(timezone.utc)
+    
+    def __repr__(self) -> str:
+        return f"<PasswordResetToken(id={self.id}, user_id={self.user_id}, valid={self.is_valid})>"
+
+
+class EmailVerificationToken(Base):
+    """
+    Email Verification Token model for email verification flow.
+    
+    Stores hashed verification tokens with expiration for email verification.
+    """
+    
+    __tablename__ = "auth_email_verification_tokens"
+    
+    id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid_module.uuid4,
+        comment="Token unique identifier"
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("auth_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="Reference to user who needs verification"
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        comment="Bcrypt hash of the verification token"
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="Token expiration timestamp"
+    )
+    used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When token was used (NULL if unused)"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        comment="Token creation timestamp"
+    )
+    
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="email_verification_tokens")
+    
+    @property
+    def is_used(self) -> bool:
+        """Check if token has been used."""
+        return self.used_at is not None
+    
+    @property
+    def is_expired(self) -> bool:
+        """Check if token has expired."""
+        return datetime.now(timezone.utc) > self.expires_at
+    
+    @property
+    def is_valid(self) -> bool:
+        """Check if token is valid (not used, not expired)."""
+        return not self.is_used and not self.is_expired
+    
+    def mark_used(self) -> None:
+        """Mark token as used."""
+        self.used_at = datetime.now(timezone.utc)
+    
+    def __repr__(self) -> str:
+        return f"<EmailVerificationToken(id={self.id}, user_id={self.user_id}, valid={self.is_valid})>"
 
 
 # Junction table for many-to-many relationship between users and roles

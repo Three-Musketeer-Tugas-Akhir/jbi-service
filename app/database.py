@@ -23,3 +23,7 @@ async def get_db():
         except Exception:
             await session.rollback()
             raise
+
+
+# Alias for compatibility with newer code patterns
+get_async_session = get_db

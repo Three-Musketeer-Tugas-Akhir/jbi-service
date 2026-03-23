@@ -7,11 +7,12 @@ from starlette.formparsers import MultiPartParser
 from app.config import settings
 from app.database import engine
 from app.models.job_model import Base
-from app.routers import health, jobs
+from app.routers import admin, auth, health, jobs, users
 from app.services.scheduler import start_cleanup_scheduler, stop_cleanup_scheduler
 from app.exception_handlers import register_exception_handlers
 from app.logging_config import setup_logging
 from app.middleware import RequestLoggingMiddleware
+from app.middleware.rate_limiter import LoginRateLimitMiddleware
 
 # Initialize logging before anything else
 setup_logging()
@@ -56,6 +57,8 @@ app = FastAPI(
 
 register_exception_handlers(app)
 
+# Add rate limiting middleware (must be before logging to catch rate limit errors)
+app.add_middleware(LoginRateLimitMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -66,6 +69,9 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix=settings.api_v1_prefix, tags=["health"])
+app.include_router(auth.router, prefix=settings.api_v1_prefix, tags=["authentication"])
+app.include_router(users.router, prefix=settings.api_v1_prefix, tags=["users"])
+app.include_router(admin.router, prefix=settings.api_v1_prefix, tags=["admin"])
 app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
 
 

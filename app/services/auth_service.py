@@ -103,16 +103,16 @@ class JWTAuthService:
         except PyJWTError as e:
             raise InvalidTokenError(f"Failed to encode token: {str(e)}") from e
     
-    def create_refresh_token(self, user_id: UUID, role: str) -> str:
+    def create_refresh_token(self, user_id: UUID, role: str) -> tuple[str, UUID]:
         """
-        Create a new refresh token.
+        Create a new refresh token with jti claim.
         
         Args:
             user_id: UUID of the user
             role: User role
             
         Returns:
-            Encoded JWT token string
+            Tuple of (token_string, jti_uuid)
             
         Raises:
             ValueError: If role is invalid
@@ -123,6 +123,7 @@ class JWTAuthService:
         
         now = datetime.now(timezone.utc)
         expire = now + timedelta(days=self.refresh_token_expire_days)
+        jti = uuid_module.uuid4()
         
         payload = {
             "sub": str(user_id),
@@ -130,15 +131,40 @@ class JWTAuthService:
             "iat": int(now.timestamp()),
             "exp": int(expire.timestamp()),
             "type": "refresh",
+            "jti": str(jti),  # JWT ID for token tracking
             "iss": "anotasi-api",
             "aud": "anotasi-client",
             "nbf": int(now.timestamp()),
         }
         
         try:
-            return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+            token = jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
+            return token, jti
         except PyJWTError as e:
             raise InvalidTokenError(f"Failed to encode token: {str(e)}") from e
+    
+    def decode_token(self, token: str) -> dict:
+        """
+        Decode token without verification (for extracting jti before DB lookup).
+        
+        Args:
+            token: JWT token string
+            
+        Returns:
+            Decoded payload (without verification)
+            
+        Raises:
+            InvalidTokenError: If token cannot be decoded
+        """
+        try:
+            return jwt.decode(
+                token,
+                self.secret_key,
+                algorithms=[self.algorithm],
+                options={"verify_exp": False}  # Don't verify exp here
+            )
+        except PyJWTError as e:
+            raise InvalidTokenError(f"Failed to decode token: {str(e)}") from e
     
     def verify_token(self, token: str, expected_type: Optional[str] = None) -> dict:
         """
@@ -217,6 +243,53 @@ class JWTAuthService:
             raise InvalidTokenError(f"Invalid user ID in token: {str(e)}") from e
         
         return self.create_access_token(user_id, role)
+    
+    def verify_refresh_token_jti(self, refresh_token: str) -> UUID:
+        """
+        Extract and return the JTI from a refresh token for database validation.
+        
+        Args:
+            refresh_token: Valid refresh token
+            
+        Returns:
+            Token JTI as UUID
+            
+        Raises:
+            ExpiredSignatureError: If token has expired
+            InvalidTokenError: If token is invalid or missing JTI
+            ValueError: If provided token is not a refresh token
+        """
+        payload = self.verify_token(refresh_token, expected_type="refresh")
+        
+        jti = payload.get("jti")
+        if not jti:
+            raise InvalidTokenError("Token missing 'jti' claim")
+        
+        try:
+            return UUID(jti)
+        except ValueError as e:
+            raise InvalidTokenError(f"Invalid JTI in token: {str(e)}") from e
+    
+    def invalidate_token(self, token: str, expected_type: str = "access") -> bool:
+        """
+        Mark a token as invalidated (for logout).
+        Note: For JWTs, this is handled by the TokenRefreshService via database revocation.
+        This method verifies the token is valid before it can be marked as revoked.
+        
+        Args:
+            token: Token to invalidate
+            expected_type: Expected token type ("access" or "refresh")
+            
+        Returns:
+            True if token was valid and can be invalidated
+            
+        Raises:
+            ExpiredSignatureError: If token has already expired
+            InvalidTokenError: If token is invalid
+        """
+        # Just verify the token - actual revocation happens in TokenRefreshService
+        self.verify_token(token, expected_type=expected_type)
+        return True
 
 
 # Singleton instance for dependency injection
