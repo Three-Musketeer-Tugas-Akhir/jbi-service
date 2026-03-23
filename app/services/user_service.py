@@ -746,6 +746,7 @@ class UserService:
             if new_role not in allowed_roles:
                 return {
                     "success": False,
+                    "error_code": "INVALID_ROLE",
                     "message": f"Invalid role. Must be one of: {', '.join(sorted(allowed_roles))}"
                 }
             
@@ -754,22 +755,44 @@ class UserService:
             if user is None:
                 return {
                     "success": False,
+                    "error_code": "USER_NOT_FOUND",
                     "message": "User not found."
+                }
+            
+            # Check if user is active
+            if not user.is_active:
+                return {
+                    "success": False,
+                    "error_code": "INACTIVE_USER",
+                    "message": "Cannot modify role of inactive user."
                 }
             
             # Check for self-modification
             if str(admin_id) == str(target_user_id):
                 return {
                     "success": False,
+                    "error_code": "SELF_MODIFICATION",
                     "message": "Cannot modify your own role."
                 }
             
-            # Check if role is actually changing (compare primary role)
+            # Check if role is actually changing
             current_roles = [r.name for r in user.roles] if user.roles else []
             old_role = current_roles[0] if current_roles else None
-            if len(current_roles) == 1 and old_role == new_role:
+            
+            # Data integrity check: log warning if user has multiple roles
+            if len(current_roles) > 1:
+                logger.warning(
+                    f"User {target_user_id} has multiple roles {current_roles}. "
+                    f"Reducing to single role '{new_role}'."
+                )
+            
+            # User has same role if: single role AND it matches new role
+            has_single_role = len(current_roles) == 1
+            has_target_role = new_role in current_roles
+            if has_single_role and has_target_role:
                 return {
                     "success": False,
+                    "error_code": "SAME_ROLE",
                     "message": f"User already has role '{new_role}'."
                 }
             
@@ -785,19 +808,19 @@ class UserService:
                     "message": "Failed to update user role."
                 }
             
-            await self.session.commit()
-            await self.session.refresh(user)
-            
-            # Log audit event
+            # Log audit event before commit (same transaction)
             audit_service = AuditService(self.session)
-            await audit_service.log_user_roles_changed(
+            await audit_service.log_user_role_changed(
                 actor_id=admin_id,
                 target_user_id=target_user_id,
-                old_roles=current_roles,
-                new_roles=[new_role],
+                old_role=old_role or "none",
+                new_role=new_role,
                 ip_address=ip_address
             )
+            
+            # Single commit for both user update and audit log
             await self.session.commit()
+            await self.session.refresh(user)
             
             logger = __import__('logging').getLogger(__name__)
             logger.info(f"User role changed by admin: {user.email} from {old_role} to {new_role}")

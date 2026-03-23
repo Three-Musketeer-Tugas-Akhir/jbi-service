@@ -184,7 +184,7 @@ class TestUpdateUserRoleEndpoint:
         assert "not found" in response.json()["detail"].lower()
     
     def test_update_role_invalid_role(self):
-        """Test 422 when role is invalid."""
+        """Test 400 when role is invalid."""
         token = create_admin_token()
         target_user_id = str(uuid4())
         
@@ -194,7 +194,8 @@ class TestUpdateUserRoleEndpoint:
             json={"role": "superadmin"}
         )
         
-        assert response.status_code == 422
+        assert response.status_code == 400
+        assert "Invalid role specified" in response.json()["detail"]
     
     def test_update_role_self_modification(self):
         """Test 400 when admin tries to modify their own role."""

@@ -9,7 +9,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,14 +25,6 @@ from app.services.user_service import UserService
 class UserRoleUpdateRequest(BaseModel):
     """Request schema for user role update."""
     role: str = Field(..., description="New role for the user (admin, annotator, curator)")
-    
-    @field_validator('role')
-    @classmethod
-    def validate_role(cls, v: str) -> str:
-        allowed_roles = {'admin', 'annotator', 'curator'}
-        if v not in allowed_roles:
-            raise ValueError(f"Role must be one of: {', '.join(sorted(allowed_roles))}")
-        return v
 
 
 class UserRoleUpdateResponse(BaseModel):
@@ -174,6 +166,14 @@ async def update_user_role(
     
     Returns the updated user with their new role and previous role.
     """
+    # Validate role manually to return 400 (not 422) per spec
+    allowed_roles = {'admin', 'annotator', 'curator'}
+    if role_data.role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role specified. Must be one of: {', '.join(sorted(allowed_roles))}"
+        )
+    
     user_service = UserService(db_session)
     
     # Extract IP address for audit logging
@@ -195,39 +195,21 @@ async def update_user_role(
     )
     
     if not result["success"]:
+        error_code = result.get("error_code", "UNKNOWN_ERROR")
         error_msg = result["message"]
         
-        # Check for self-modification (400)
-        if "own role" in error_msg.lower():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
+        # Map error codes to HTTP status codes
+        error_mapping = {
+            "SELF_MODIFICATION": status.HTTP_400_BAD_REQUEST,
+            "SAME_ROLE": status.HTTP_400_BAD_REQUEST,
+            "INVALID_ROLE": status.HTTP_400_BAD_REQUEST,
+            "INACTIVE_USER": status.HTTP_400_BAD_REQUEST,
+            "USER_NOT_FOUND": status.HTTP_404_NOT_FOUND,
+        }
         
-        # Check for same role (400)
-        if "already has role" in error_msg.lower():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        
-        # Check for invalid role (400 - though Pydantic should catch this)
-        if "invalid role" in error_msg.lower():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        
-        # Check for user not found (404)
-        if "not found" in error_msg.lower():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_msg
-            )
-        
-        # Other errors
+        http_status = error_mapping.get(error_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=http_status,
             detail=error_msg
         )
     
