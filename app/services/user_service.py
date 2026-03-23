@@ -16,6 +16,27 @@ from app.repositories.user_repository import UserRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.services.email_service import email_service
 from app.utils.password import generate_temporary_password, validate_password_strength
+from math import ceil
+from typing import List
+
+
+class UserListResult:
+    """Result container for user list operation."""
+    
+    def __init__(
+        self,
+        users: List[User],
+        total: int,
+        page: int,
+        page_size: int
+    ):
+        self.users = users
+        self.total = total
+        self.page = page
+        self.page_size = page_size
+        self.pages = ceil(total / page_size) if page_size > 0 else 0
+        self.has_next = page < self.pages
+        self.has_prev = page > 1
 
 
 class UserService:
@@ -952,3 +973,63 @@ class UserService:
                 "success": False,
                 "message": "An error occurred while reactivating the user."
             }
+    
+    async def list_users(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        role: Optional[str] = None,
+        is_active: Optional[bool] = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc"
+    ) -> UserListResult:
+        """
+        List users with filtering and pagination.
+        
+        Args:
+            page: Page number
+            page_size: Items per page
+            role: Filter by role
+            is_active: Filter by active status
+            sort_by: Sort field
+            sort_order: Sort direction
+            
+        Returns:
+            UserListResult with users and pagination info
+        """
+        # Validate role filter
+        if role and role not in {"admin", "annotator", "curator"}:
+            raise ValueError(f"Invalid role filter: {role}")
+        
+        # Validate sort_by
+        valid_sort_fields = {"created_at", "email", "updated_at"}
+        if sort_by not in valid_sort_fields:
+            sort_by = "created_at"
+        
+        users, total = await self.repository.list_users(
+            page=page,
+            page_size=page_size,
+            role=role,
+            is_active=is_active,
+            sort_by=sort_by,
+            sort_order=sort_order
+        )
+        
+        return UserListResult(
+            users=users,
+            total=total,
+            page=page,
+            page_size=page_size
+        )
+    
+    async def get_user_by_id(self, user_id: UUID) -> Optional[User]:
+        """
+        Get user by ID for detail view.
+        
+        Args:
+            user_id: User UUID
+            
+        Returns:
+            User instance or None
+        """
+        return await self.repository.get_by_id(user_id)

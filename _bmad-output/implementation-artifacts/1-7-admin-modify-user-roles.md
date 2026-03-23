@@ -2,7 +2,7 @@
 story_id: "1.7"
 story_key: "1-7-admin-modify-user-roles"
 epic: 1
-status: review
+status: done
 created: "2026-03-19"
 last_updated: "2026-03-24"
 ---

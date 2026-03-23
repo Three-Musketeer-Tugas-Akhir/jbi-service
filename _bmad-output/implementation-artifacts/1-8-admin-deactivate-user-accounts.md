@@ -2,7 +2,7 @@
 story_id: "1.8"
 story_key: "1-8-admin-deactivate-user-accounts"
 epic: 1
-status: review
+status: done
 created: "2026-03-19"
 last_updated: "2026-03-24"
 ---

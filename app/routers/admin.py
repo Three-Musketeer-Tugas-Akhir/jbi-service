@@ -8,10 +8,11 @@ All endpoints require admin role.
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List
 
 from app.database import get_async_session
 from app.dependencies import require_admin, CurrentUser
@@ -44,6 +45,40 @@ class UserDeactivateResponse(BaseModel):
     deactivated_at: Optional[str] = Field(None, description="Deactivation timestamp")
     message: str = Field(..., description="Status message")
     tokens_revoked: int = Field(0, description="Number of refresh tokens revoked")
+
+
+class UserListItem(BaseModel):
+    """User item for list views."""
+    id: str = Field(..., description="User ID")
+    email: str = Field(..., description="User email")
+    role: str = Field(..., description="User role")
+    is_active: bool = Field(..., description="User active status")
+    created_at: str = Field(..., description="Creation timestamp")
+    
+    model_config = {"from_attributes": True}
+
+
+class UserListResponse(BaseModel):
+    """Response for user list endpoint."""
+    items: List[UserListItem] = Field(..., description="List of users")
+    total: int = Field(..., description="Total number of users")
+    page: int = Field(..., description="Current page number")
+    page_size: int = Field(..., description="Items per page")
+    pages: int = Field(..., description="Total number of pages")
+    has_next: bool = Field(..., description="Whether there is a next page")
+    has_prev: bool = Field(..., description="Whether there is a previous page")
+
+
+class UserDetailResponse(BaseModel):
+    """Detailed user response."""
+    id: str = Field(..., description="User ID")
+    email: str = Field(..., description="User email")
+    role: str = Field(..., description="User role")
+    is_active: bool = Field(..., description="User active status")
+    created_at: str = Field(..., description="Creation timestamp")
+    updated_at: Optional[str] = Field(None, description="Last update timestamp")
+    
+    model_config = {"from_attributes": True}
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -298,4 +333,122 @@ async def deactivate_user(
         deactivated_at=user.updated_at.isoformat() if user.updated_at else None,
         message=result["message"],
         tokens_revoked=result.get("tokens_revoked", 0)
+    )
+
+
+@router.get(
+    "/users",
+    response_model=UserListResponse,
+    responses={
+        403: {"description": "Admin access required"},
+    },
+)
+async def list_users(
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    role: Optional[str] = Query(None, description="Filter by role (admin, annotator, curator)"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    sort_by: str = Query("created_at", description="Sort field (created_at, email)"),
+    sort_order: str = Query("desc", description="Sort direction (asc, desc)"),
+    current_user: CurrentUser = Depends(require_admin),
+    db_session: AsyncSession = Depends(get_async_session),
+):
+    """
+    List all users with filtering and pagination (Admin only).
+    
+    Query Parameters:
+    - **page**: Page number (default: 1)
+    - **page_size**: Items per page (default: 20, max: 100)
+    - **role**: Filter by role (admin, annotator, curator)
+    - **is_active**: Filter by active status (true/false)
+    - **sort_by**: Sort field (created_at, email)
+    - **sort_order**: Sort direction (asc, desc)
+    
+    Returns paginated list of users.
+    """
+    user_service = UserService(db_session)
+    
+    try:
+        result = await user_service.list_users(
+            page=page,
+            page_size=page_size,
+            role=role,
+            is_active=is_active,
+            sort_by=sort_by,
+            sort_order=sort_order
+        )
+        
+        # Convert users to response items
+        items = []
+        for user in result.users:
+            # Get primary role
+            user_roles = [r.name for r in user.roles] if user.roles else []
+            primary_role = user_roles[0] if user_roles else "annotator"
+            
+            items.append(UserListItem(
+                id=str(user.id),
+                email=user.email,
+                role=primary_role,
+                is_active=user.is_active,
+                created_at=user.created_at.isoformat() if user.created_at else ""
+            ))
+        
+        return UserListResponse(
+            items=items,
+            total=result.total,
+            page=result.page,
+            page_size=result.page_size,
+            pages=result.pages,
+            has_next=result.has_next,
+            has_prev=result.has_prev
+        )
+        
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+
+
+@router.get(
+    "/users/{user_id}",
+    response_model=UserDetailResponse,
+    responses={
+        403: {"description": "Admin access required"},
+        404: {"description": "User not found"},
+    },
+)
+async def get_user(
+    user_id: UUID,
+    current_user: CurrentUser = Depends(require_admin),
+    db_session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Get detailed user information (Admin only).
+    
+    - **user_id**: UUID of user to retrieve
+    
+    Returns detailed user information.
+    """
+    user_service = UserService(db_session)
+    
+    user = await user_service.get_user_by_id(user_id)
+    
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Get primary role
+    user_roles = [r.name for r in user.roles] if user.roles else []
+    primary_role = user_roles[0] if user_roles else "annotator"
+    
+    return UserDetailResponse(
+        id=str(user.id),
+        email=user.email,
+        role=primary_role,
+        is_active=user.is_active,
+        created_at=user.created_at.isoformat() if user.created_at else "",
+        updated_at=user.updated_at.isoformat() if user.updated_at else None
     )

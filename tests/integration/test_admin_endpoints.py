@@ -397,3 +397,155 @@ class TestDeactivatedUserLogin:
         # In a real test, we'd create a user, deactivate it, then try to login
         # For now, this documents the expected behavior
         pass
+
+
+
+class TestListUsersEndpoint:
+    """Tests for GET /api/v1/admin/users."""
+    
+    def test_list_users_success(self):
+        """Test successful user list retrieval."""
+        token = create_admin_token()
+        
+        response = client.get(
+            "/api/v1/admin/users",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert "items" in data
+        assert "total" in data
+        assert "page" in data
+        assert "page_size" in data
+        assert "pages" in data
+        assert "has_next" in data
+        assert "has_prev" in data
+    
+    def test_list_users_pagination(self):
+        """Test pagination parameters."""
+        token = create_admin_token()
+        
+        response = client.get(
+            "/api/v1/admin/users?page=1&page_size=10",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["page"] == 1
+        assert data["page_size"] == 10
+    
+    def test_list_users_filter_by_role(self):
+        """Test filtering by role."""
+        token = create_admin_token()
+        
+        response = client.get(
+            "/api/v1/admin/users?role=admin",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        # All returned users should have admin role
+        for user in data["items"]:
+            assert user["role"] == "admin"
+    
+    def test_list_users_filter_by_is_active(self):
+        """Test filtering by active status."""
+        token = create_admin_token()
+        
+        response = client.get(
+            "/api/v1/admin/users?is_active=true",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        # All returned users should be active
+        for user in data["items"]:
+            assert user["is_active"] is True
+    
+    def test_list_users_non_admin_forbidden(self):
+        """Test non-admin cannot list users."""
+        annotator_token = create_annotator_token()
+        
+        response = client.get(
+            "/api/v1/admin/users",
+            headers={"Authorization": f"Bearer {annotator_token}"}
+        )
+        
+        assert response.status_code == 403
+        assert response.json()["error"] == "insufficient_permissions"
+    
+    def test_list_users_invalid_role_filter(self):
+        """Test 400 for invalid role filter."""
+        token = create_admin_token()
+        
+        response = client.get(
+            "/api/v1/admin/users?role=superadmin",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 400
+
+
+class TestGetUserEndpoint:
+    """Tests for GET /api/v1/admin/users/{user_id}."""
+    
+    def test_get_user_success(self):
+        """Test successful user detail retrieval."""
+        token = create_admin_token()
+        
+        # First create a user
+        create_response = client.post(
+            "/api/v1/admin/users",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "email": "detailtest@example.com",
+                "role": "annotator"
+            }
+        )
+        assert create_response.status_code == 201
+        user_id = create_response.json()["id"]
+        
+        # Get user details
+        response = client.get(
+            f"/api/v1/admin/users/{user_id}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == user_id
+        assert data["email"] == "detailtest@example.com"
+        assert data["role"] == "annotator"
+        assert "is_active" in data
+        assert "created_at" in data
+        assert "updated_at" in data
+    
+    def test_get_user_not_found(self):
+        """Test 404 for non-existent user."""
+        token = create_admin_token()
+        non_existent_id = str(uuid4())
+        
+        response = client.get(
+            f"/api/v1/admin/users/{non_existent_id}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+    
+    def test_get_user_non_admin_forbidden(self):
+        """Test non-admin cannot get user details."""
+        annotator_token = create_annotator_token()
+        target_user_id = str(uuid4())
+        
+        response = client.get(
+            f"/api/v1/admin/users/{target_user_id}",
+            headers={"Authorization": f"Bearer {annotator_token}"}
+        )
+        
+        assert response.status_code == 403
+        assert response.json()["error"] == "insufficient_permissions"

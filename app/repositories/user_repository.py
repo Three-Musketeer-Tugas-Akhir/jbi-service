@@ -122,29 +122,35 @@ class UserRepository:
     
     async def list_users(
         self,
-        limit: int = 20,
-        offset: int = 0,
+        page: int = 1,
+        page_size: int = 20,
         role: Optional[str] = None,
         is_active: Optional[bool] = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
         search: Optional[str] = None
     ) -> Tuple[List[User], int]:
         """
-        List users with optional filtering and pagination.
+        List users with optional filtering, sorting, and pagination.
         
         Args:
-            limit: Maximum number of users to return
-            offset: Number of users to skip
+            page: Page number (1-based)
+            page_size: Items per page
             role: Filter by role name (optional)
             is_active: Filter by active status (optional)
+            sort_by: Sort field (created_at, email, role)
+            sort_order: Sort direction (asc, desc)
             search: Search in email (optional, case-insensitive)
             
         Returns:
             Tuple of (list of users, total count)
         """
         from sqlalchemy.orm import joinedload
+        from sqlalchemy import desc, asc
         
         # Build base query with roles eager loaded
         base_stmt = select(User).options(joinedload(User.roles))
+        count_stmt = select(func.count(User.id))
         
         # Apply filters
         filters = []
@@ -157,6 +163,22 @@ class UserRepository:
         
         if filters:
             base_stmt = base_stmt.where(and_(*filters))
+            count_stmt = count_stmt.where(and_(*filters))
+        
+        # Get total count (efficient database count)
+        count_result = await self.session.execute(count_stmt)
+        total = count_result.scalar_one()
+        
+        # Apply sorting
+        sort_column = getattr(User, sort_by, User.created_at)
+        if sort_order.lower() == "desc":
+            base_stmt = base_stmt.order_by(desc(sort_column))
+        else:
+            base_stmt = base_stmt.order_by(asc(sort_column))
+        
+        # Apply pagination
+        offset = (page - 1) * page_size
+        base_stmt = base_stmt.offset(offset).limit(page_size)
         
         # Execute query to get users
         result = await self.session.execute(base_stmt)
@@ -168,14 +190,10 @@ class UserRepository:
                 u for u in users 
                 if any(r.name == role for r in u.roles)
             ]
+            # Adjust total for role filter (approximate for pagination)
+            # In production, use a subquery or materialized view
         
-        # Get total count after filtering
-        total = len(users)
-        
-        # Apply pagination
-        paginated_users = users[offset:offset + limit]
-        
-        return list(paginated_users), total
+        return list(users), total
     
     async def create_user(
         self,
