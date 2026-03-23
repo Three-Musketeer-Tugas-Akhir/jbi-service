@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from app.services.queue_service import QueueService
@@ -72,13 +72,13 @@ class TestQueueService:
             mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
             mock_session.return_value.__aexit__ = AsyncMock(return_value=False)
             
-            before = datetime.utcnow()
+            before = datetime.now(timezone.utc)
             job = await queue_service.enqueue(
                 queue_name="detection",
                 payload={"job_id": "test-123"},
                 delay_seconds=300  # 5 minutes
             )
-            after = datetime.utcnow()
+            after = datetime.now(timezone.utc)
             
             # scheduled_at should be roughly 5 minutes in the future
             assert job.scheduled_at > before + timedelta(seconds=290)
@@ -151,27 +151,20 @@ class TestQueueService:
         mock_job.max_attempts = 3
         mock_job.status = "processing"
         
-        mock_result = Mock()
-        mock_result.scalar_one_or_none.return_value = mock_job
-        
         mock_db = MagicMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.commit = AsyncMock()
+        mock_db.flush = AsyncMock()
         
-        with patch('app.services.queue_service.get_db_session') as mock_session:
-            mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_session.return_value.__aexit__ = AsyncMock(return_value=False)
-            
-            job_id = UUID("550e8400-e29b-41d4-a716-446655440000")
-            await queue_service.mark_failed(
-                job_id,
-                error_message="Test error",
-                retry_delay_seconds=60
-            )
-            
-            assert mock_job.status == "pending"
-            assert mock_job.error_message == "Test error"
-            mock_db.commit.assert_called_once()
+        # Test with provided session (new signature)
+        await queue_service.mark_failed(
+            mock_job,  # Now accepts job object directly
+            error_message="Test error",
+            retry_delay_seconds=60,
+            db=mock_db
+        )
+        
+        assert mock_job.status == "pending"
+        assert mock_job.error_message == "Test error"
+        mock_db.flush.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_mark_failed_max_attempts(self, queue_service):
@@ -181,22 +174,15 @@ class TestQueueService:
         mock_job.max_attempts = 3
         mock_job.status = "processing"
         
-        mock_result = Mock()
-        mock_result.scalar_one_or_none.return_value = mock_job
-        
         mock_db = MagicMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.commit = AsyncMock()
+        mock_db.flush = AsyncMock()
         
-        with patch('app.services.queue_service.get_db_session') as mock_session:
-            mock_session.return_value.__aenter__ = AsyncMock(return_value=mock_db)
-            mock_session.return_value.__aexit__ = AsyncMock(return_value=False)
-            
-            job_id = UUID("550e8400-e29b-41d4-a716-446655440000")
-            await queue_service.mark_failed(
-                job_id,
-                error_message="Test error"
-            )
-            
-            assert mock_job.status == "failed"
-            mock_db.commit.assert_called_once()
+        # Test with provided session (new signature)
+        await queue_service.mark_failed(
+            mock_job,  # Now accepts job object directly
+            error_message="Test error",
+            db=mock_db
+        )
+        
+        assert mock_job.status == "failed"
+        mock_db.flush.assert_called_once()

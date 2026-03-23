@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -506,15 +506,18 @@ async def upload_video_pipeline(
                 details={"content_type": video.content_type}
             )
         
-        # Read file content
-        file_data = await video.read()
-        file_size = len(file_data)
+        # Get file size without loading entire file into memory
+        # FastAPI's UploadFile uses SpooledTemporaryFile
+        video_file = video.file
+        video_file.seek(0, 2)  # Seek to end
+        file_size = video_file.tell()
+        video_file.seek(0)  # Reset to beginning
         
-        # Create job
+        # Create job using streaming upload (pass file object directly)
         job_service = get_job_service(db, job_repo)
         job = await job_service.create_job_from_upload(
             filename=video.filename,
-            file_data=file_data,
+            file_data=video_file,
             file_size=file_size,
             user=current_user
         )
@@ -549,6 +552,9 @@ async def upload_video_pipeline(
                 }
             }
         )
+    finally:
+        # Ensure UploadFile is properly closed to free resources
+        await video.close()
 
 
 @router.post(

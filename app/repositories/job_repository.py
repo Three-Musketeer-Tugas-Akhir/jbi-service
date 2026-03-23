@@ -26,6 +26,7 @@ class JobRepository:
         job = PipelineJob(
             video_path="",  # Will be set to MinIO path after upload
             original_filename=original_filename,
+            file_size=file_size,
             status=status,
             current_stage="upload",
             created_by=created_by
@@ -47,14 +48,43 @@ class JobRepository:
         job_id: UUID,
         status: str,
         error_message: Optional[str] = None
-    ) -> None:
-        """Update job status."""
+    ) -> bool:
+        """
+        Update job status.
+        
+        Returns:
+            True if job was found and updated, False otherwise
+        """
         job = await self.get_by_id(job_id)
         if job:
             job.status = status
             if error_message:
                 job.error_message = error_message
             await self.db.flush()
+            return True
+        return False
+    
+    async def update_video_path(
+        self,
+        job_id: UUID,
+        video_path: str
+    ) -> bool:
+        """
+        Update job video_path after MinIO upload.
+        
+        Args:
+            job_id: Job UUID
+            video_path: Path to video in MinIO
+            
+        Returns:
+            True if job was found and updated, False otherwise
+        """
+        job = await self.get_by_id(job_id)
+        if job:
+            job.video_path = video_path
+            await self.db.flush()
+            return True
+        return False
 
 
 # Dependency function

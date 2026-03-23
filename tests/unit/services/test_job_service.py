@@ -68,6 +68,27 @@ class TestJobService:
         assert exc_info.value.details["file_size"] == file_size
         assert exc_info.value.details["max_size"] == job_service.MAX_FILE_SIZE
     
+    def test_validate_file_empty_filename(self, job_service):
+        """Test validation fails for empty filename."""
+        with pytest.raises(ValidationError) as exc_info:
+            job_service._validate_file("", 1024 * 1024)
+        
+        assert "Filename is required" in str(exc_info.value)
+    
+    def test_validate_file_empty_file(self, job_service):
+        """Test validation fails for empty file (0 bytes)."""
+        with pytest.raises(ValidationError) as exc_info:
+            job_service._validate_file("video.mp4", 0)
+        
+        assert "File is empty" in str(exc_info.value)
+    
+    def test_validate_file_negative_size(self, job_service):
+        """Test validation fails for negative file size."""
+        with pytest.raises(ValidationError) as exc_info:
+            job_service._validate_file("video.mp4", -1)
+        
+        assert "File is empty" in str(exc_info.value)
+    
     @pytest.mark.asyncio
     async def test_create_job_from_upload_success(
         self, job_service, mock_job_repo, mock_user
@@ -76,12 +97,15 @@ class TestJobService:
         # Setup
         mock_job = Mock(spec=PipelineJob)
         mock_job.id = UUID("660e8400-e29b-41d4-a716-446655440001")
-        mock_job.status = "QUEUED"
+        mock_job.status = "UPLOADED"  # Status should remain UPLOADED per spec
         mock_job.original_filename = "test.mp4"
         mock_job.file_size = 1024 * 1024
         mock_job.created_at = Mock()
+        mock_job.video_path = "jobs/test-path/original/test.mp4"
         
         mock_job_repo.create.return_value = mock_job
+        mock_job_repo.update_video_path = AsyncMock()
+        job_service.minio_service.upload_job_video.return_value = "jobs/test-path/original/test.mp4"
         
         with patch('app.services.job_service.queue_service') as mock_queue:
             mock_queue.enqueue = AsyncMock()
@@ -98,16 +122,19 @@ class TestJobService:
             assert job == mock_job
             mock_job_repo.create.assert_called_once()
             job_service.minio_service.upload_job_video.assert_called_once()
+            mock_job_repo.update_video_path.assert_called_once_with(
+                mock_job.id, "jobs/test-path/original/test.mp4"
+            )
             mock_queue.enqueue.assert_called_once_with(
+                db=job_service.db,  # Now passes db session for atomicity
                 queue_name="detection",
                 payload={
                     "job_id": str(mock_job.id),
                     "stage": "detection"
                 }
             )
-            mock_job_repo.update_status.assert_called_once_with(
-                mock_job.id, "QUEUED"
-            )
+            # Status should remain UPLOADED (not QUEUED) per AC1
+            assert job.status == "UPLOADED"
     
     @pytest.mark.asyncio
     async def test_create_job_from_upload_invalid_format(

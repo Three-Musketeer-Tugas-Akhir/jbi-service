@@ -1,5 +1,7 @@
 """Job service for business logic."""
 
+import os
+from pathlib import Path
 from typing import BinaryIO, Union
 from uuid import UUID
 
@@ -25,6 +27,7 @@ class JobService:
     }
     
     MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
+    MIN_FILE_SIZE = 1  # 1 byte (reject empty files)
     
     def __init__(self, db: AsyncSession, job_repo: JobRepository):
         self.db = db
@@ -33,7 +36,21 @@ class JobService:
     
     def _validate_file(self, filename: str, file_size: int) -> None:
         """Validate file format and size."""
-        # Check file size
+        # Check filename is provided
+        if not filename:
+            raise ValidationError(
+                "Filename is required",
+                details={"filename": filename}
+            )
+        
+        # Check file size is positive
+        if file_size < self.MIN_FILE_SIZE:
+            raise ValidationError(
+                "File is empty",
+                details={"file_size": file_size, "min_size": self.MIN_FILE_SIZE}
+            )
+        
+        # Check file size doesn't exceed limit
         if file_size > self.MAX_FILE_SIZE:
             raise ValidationError(
                 f"File too large, maximum size is 10GB",
@@ -44,8 +61,7 @@ class JobService:
             )
         
         # Check file extension
-        ext = filename.lower().split(".")[-1] if "." in filename else ""
-        ext = f".{ext}"
+        ext = Path(filename.lower()).suffix
         
         if ext not in self.SUPPORTED_FORMATS:
             raise ValidationError(
@@ -66,6 +82,14 @@ class JobService:
         """
         Create a new job from uploaded file.
         
+        Flow:
+        1. Validate file
+        2. Create DB record with status UPLOADED
+        3. Upload to MinIO
+        4. Update video_path in DB
+        5. Enqueue for processing (same transaction)
+        6. Commit transaction
+        
         Args:
             filename: Original filename
             file_data: File content
@@ -73,40 +97,56 @@ class JobService:
             user: Uploading user
             
         Returns:
-            Created PipelineJob
+            Created PipelineJob with status UPLOADED
+            
+        Raises:
+            ValidationError: If file validation fails
+            StorageError: If MinIO upload fails
         """
-        # Validate file
+        # Validate file before any DB operations
         self._validate_file(filename, file_size)
         
-        # Create job record
+        # Create job record (status = UPLOADED)
         job = await self.job_repo.create(
             original_filename=filename,
             file_size=file_size,
             created_by=user.id
         )
         
-        # Upload to MinIO
-        await self.minio_service.upload_job_video(
-            job_id=str(job.id),
-            file_data=file_data,
-            original_filename=filename
-        )
-        
-        # Queue for detection
-        await queue_service.enqueue(
-            queue_name="detection",
-            payload={
-                "job_id": str(job.id),
-                "stage": "detection"
-            }
-        )
-        
-        # Update status to QUEUED
-        await self.job_repo.update_status(job.id, "QUEUED")
-        job.status = "QUEUED"
-        
-        await self.db.commit()
-        return job
+        try:
+            # Upload to MinIO
+            video_path = await self.minio_service.upload_job_video(
+                job_id=str(job.id),
+                file_data=file_data,
+                original_filename=filename
+            )
+            
+            # Update video_path in DB
+            await self.job_repo.update_video_path(job.id, video_path)
+            job.video_path = video_path
+            
+            # Enqueue for detection (using same DB session for atomicity)
+            await queue_service.enqueue(
+                db=self.db,
+                queue_name="detection",
+                payload={
+                    "job_id": str(job.id),
+                    "stage": "detection"
+                }
+            )
+            
+            # Commit all changes atomically
+            await self.db.commit()
+            
+            # Refresh to get updated timestamps
+            await self.db.refresh(job)
+            
+            return job
+            
+        except Exception:
+            # Rollback on any error
+            await self.db.rollback()
+            raise
     
     async def create_job_from_url(
         self,
@@ -126,9 +166,11 @@ class JobService:
             Created PipelineJob
             
         Raises:
-            NotImplementedError: URL upload not yet implemented
+            NotImplementedError: URL upload not yet implemented (deferred to Story 2.6)
         """
-        raise NotImplementedError("URL upload not yet implemented")
+        raise NotImplementedError(
+            "URL upload not yet implemented. This feature is planned for Story 2.6."
+        )
 
 
 # Factory function
