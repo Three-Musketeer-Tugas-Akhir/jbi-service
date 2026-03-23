@@ -33,3 +33,15 @@ async def get_db():
 
 # Alias for compatibility with newer code patterns
 get_async_session = get_db
+
+
+# Context manager for use in services
+async def get_db_session():
+    """Context manager for database sessions in services."""
+    async with async_session() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise

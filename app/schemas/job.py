@@ -6,11 +6,47 @@ Pydantic models for job API requests and responses.
 
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+from uuid import UUID
+
+from pydantic import BaseModel, Field, HttpUrl
+
+
+class JobCreate(BaseModel):
+    """Schema for job creation request (URL-based)."""
+    video_url: HttpUrl
 
 
 class JobCreateResponse(BaseModel):
     """Response for POST /api/v1/jobs."""
+    id: UUID
+    status: str
+    original_filename: str
+    file_size: int
+    created_at: datetime
+    message: str
+
+    class Config:
+        from_attributes = True
+
+
+class JobResponse(BaseModel):
+    """Schema for job details response."""
+    id: UUID
+    status: str
+    original_filename: str
+    file_size: int
+    current_stage: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# Legacy schemas (maintaining compatibility)
+class JobCreateResponseLegacy(BaseModel):
+    """Response for POST /api/v1/jobs (legacy format)."""
     job_id: str
     status: str
     video_title: str

@@ -21,8 +21,9 @@ class AppException(Exception):
     status_code: int = 500
     code: str = "INTERNAL_ERROR"
     
-    def __init__(self, message: str = None):
+    def __init__(self, message: str = None, details: dict = None):
         self.message = message or "An internal error occurred"
+        self.details = details or {}
         super().__init__(self.message)
 
 

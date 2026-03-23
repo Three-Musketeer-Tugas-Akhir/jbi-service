@@ -28,7 +28,9 @@ from app.schemas.auth import (
 
 # Job schemas
 from app.schemas.job import (
+    JobCreate,
     JobCreateResponse,
+    JobResponse,
     JobProgressResponse,
     JobStatusResponse,
     JobCancelResponse,
@@ -104,7 +106,9 @@ __all__ = [
     "UserRoleUpdateRequest",
     "UserRoleUpdateResponse",
     # Job
+    "JobCreate",
     "JobCreateResponse",
+    "JobResponse",
     "JobProgressResponse",
     "JobStatusResponse",
     "JobCancelResponse",

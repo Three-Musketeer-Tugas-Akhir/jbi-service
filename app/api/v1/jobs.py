@@ -459,3 +459,204 @@ async def download_segment(job_id: str, index: int, session: AsyncSession = Depe
         media_type="video/mp4",
         filename=cropped_segment.file_name,
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NEW PIPELINE API (Story 2.3+)
+# ═══════════════════════════════════════════════════════════════════════════
+# These endpoints implement the new 4-layer architecture with MinIO storage
+# and PostgreSQL queue. They supersede the legacy endpoints above.
+# ═══════════════════════════════════════════════════════════════════════════
+
+from typing import Annotated
+
+from app.core.exceptions import ValidationError
+from app.db.models.auth import User
+from app.dependencies.auth import get_current_user
+from app.repositories.job_repository import JobRepository, get_job_repository
+from app.schemas.job import JobCreate, JobCreateResponse, JobResponse
+from app.services.job_service import JobService, get_job_service
+
+
+@router.post(
+    "/pipeline/jobs",
+    response_model=JobCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload video file for processing (new pipeline)",
+    tags=["Pipeline Jobs"],
+)
+async def upload_video_pipeline(
+    video: Annotated[UploadFile, File(...)],
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository)
+):
+    """
+    Upload a video file for processing via the new pipeline.
+    
+    - **video**: Video file (MP4, AVI, MKV, MOV)
+    - Max size: 10GB
+    - Returns job ID for tracking
+    """
+    try:
+        # Validate content type if provided
+        if video.content_type and not video.content_type.startswith("video/"):
+            raise ValidationError(
+                "Invalid content type, expected video file",
+                details={"content_type": video.content_type}
+            )
+        
+        # Read file content
+        file_data = await video.read()
+        file_size = len(file_data)
+        
+        # Create job
+        job_service = get_job_service(db, job_repo)
+        job = await job_service.create_job_from_upload(
+            filename=video.filename,
+            file_data=file_data,
+            file_size=file_size,
+            user=current_user
+        )
+        
+        return JobCreateResponse(
+            id=job.id,
+            status=job.status,
+            original_filename=job.original_filename,
+            file_size=job.file_size,
+            created_at=job.created_at,
+            message="Video uploaded successfully, processing will begin shortly"
+        )
+        
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": {
+                    "code": e.code,
+                    "message": e.message,
+                    "details": e.details
+                }
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {
+                    "code": "UPLOAD_FAILED",
+                    "message": f"Failed to upload video: {str(e)}"
+                }
+            }
+        )
+
+
+@router.post(
+    "/pipeline/jobs/from-url",
+    response_model=JobCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create job from video URL (new pipeline)",
+    tags=["Pipeline Jobs"],
+)
+async def create_job_from_url_pipeline(
+    request: JobCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository)
+):
+    """
+    Create a processing job from a video URL via the new pipeline.
+    
+    - **video_url**: Public URL to download video from
+    - System will download and process the video
+    """
+    try:
+        job_service = get_job_service(db, job_repo)
+        job = await job_service.create_job_from_url(
+            video_url=str(request.video_url),
+            user=current_user
+        )
+        
+        return JobCreateResponse(
+            id=job.id,
+            status=job.status,
+            original_filename=job.original_filename,
+            file_size=job.file_size,
+            created_at=job.created_at,
+            message="Video download started, processing will begin shortly"
+        )
+        
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "error": {
+                    "code": "NOT_IMPLEMENTED",
+                    "message": "URL-based upload not yet implemented"
+                }
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {
+                    "code": "UPLOAD_FAILED",
+                    "message": f"Failed to process video URL: {str(e)}"
+                }
+            }
+        )
+
+
+@router.get(
+    "/pipeline/jobs/{job_id}",
+    response_model=JobResponse,
+    summary="Get job status and details (new pipeline)",
+    tags=["Pipeline Jobs"],
+)
+async def get_job_pipeline(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository)
+):
+    """Get job details and current status from the new pipeline."""
+    try:
+        job_uuid = UUID(job_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": {
+                    "code": "INVALID_UUID",
+                    "message": "Invalid job ID format"
+                }
+            }
+        )
+    
+    job = await job_repo.get_by_id(job_uuid)
+    
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": "Job not found"
+                }
+            }
+        )
+    
+    # TODO: Check user has permission to view this job
+    # (own job, admin, or curator)
+    
+    return JobResponse(
+        id=job.id,
+        status=job.status,
+        original_filename=job.original_filename,
+        file_size=job.file_size,
+        current_stage=job.current_stage,
+        error_message=job.error_message,
+        created_at=job.created_at,
+        updated_at=job.updated_at
+    )
