@@ -197,6 +197,13 @@ class EmailVerificationStatusResponse(BaseModel):
     verified_at: Optional[str] = None  # ISO format datetime
 
 
+class CurrentUserResponse(BaseModel):
+    """Response for current user info from token."""
+    id: str
+    email: str
+    role: str
+
+
 # User Profile Schemas
 
 class UserProfileResponse(BaseModel):

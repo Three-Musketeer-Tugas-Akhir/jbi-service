@@ -18,7 +18,17 @@ from app.models.schemas import (
     ResetPasswordRequest, ResetPasswordResponse,
     VerifyEmailRequest, VerifyEmailResponse,
     ResendVerificationRequest, ResendVerificationResponse,
-    EmailVerificationStatusResponse
+    EmailVerificationStatusResponse,
+    CurrentUserResponse,
+)
+from app.dependencies import (
+    get_current_user,
+    require_role,
+    require_admin,
+    require_annotator,
+    require_curator,
+    require_annotator_or_curator,
+    CurrentUser,
 )
 from app.services.auth_service import jwt_auth_service
 from app.services.email_verification_service import EmailVerificationService
@@ -449,3 +459,101 @@ async def resend_verification(
         return ResendVerificationResponse(
             message="If an account exists with this email and is not verified, you will receive verification instructions."
         )
+
+
+# ============================================================================
+# Protected Endpoint Examples (for testing RBAC)
+# ============================================================================
+
+@router.get("/me", response_model=CurrentUserResponse)
+async def get_current_user_info(
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Get current authenticated user information.
+    
+    Requires valid JWT token. Any authenticated user can access.
+    """
+    return CurrentUserResponse(
+        id=str(current_user.id),
+        email=current_user.email,
+        role=current_user.role,
+    )
+
+
+@router.get("/admin-only", response_model=dict)
+async def admin_only_endpoint(
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Admin-only endpoint.
+    
+    Only users with 'admin' role can access.
+    """
+    return {
+        "message": "Admin access granted",
+        "user_id": str(current_user.id),
+    }
+
+
+@router.get("/annotator-only", response_model=dict)
+async def annotator_only_endpoint(
+    current_user: CurrentUser = Depends(require_annotator)
+):
+    """
+    Annotator-only endpoint.
+    
+    Only users with 'annotator' role can access.
+    """
+    return {
+        "message": "Annotator access granted",
+        "user_id": str(current_user.id),
+    }
+
+
+@router.get("/curator-only", response_model=dict)
+async def curator_only_endpoint(
+    current_user: CurrentUser = Depends(require_curator)
+):
+    """
+    Curator-only endpoint.
+    
+    Only users with 'curator' role can access.
+    """
+    return {
+        "message": "Curator access granted",
+        "user_id": str(current_user.id),
+    }
+
+
+@router.get("/annotator-or-curator", response_model=dict)
+async def annotator_or_curator_endpoint(
+    current_user: CurrentUser = Depends(require_annotator_or_curator)
+):
+    """
+    Annotator or Curator endpoint.
+    
+    Users with either 'annotator' or 'curator' role can access.
+    """
+    return {
+        "message": "Annotator or Curator access granted",
+        "user_id": str(current_user.id),
+        "role": current_user.role,
+    }
+
+
+@router.get("/multi-role-demo", response_model=dict)
+async def multi_role_demo_endpoint(
+    current_user: CurrentUser = Depends(require_role("admin", "curator"))
+):
+    """
+    Multi-role endpoint example.
+    
+    Demonstrates require_role with multiple allowed roles.
+    Only 'admin' or 'curator' can access.
+    """
+    return {
+        "message": "Admin or Curator access granted",
+        "user_id": str(current_user.id),
+        "role": current_user.role,
+    }

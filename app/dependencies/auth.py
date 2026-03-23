@@ -1,157 +1,85 @@
 """
-Authentication Dependencies.
+Authentication and Authorization Dependencies.
 
-Provides FastAPI dependencies for extracting and validating
-current user from JWT tokens.
+FastAPI dependencies for JWT validation, user extraction, and role-based access control.
 """
 
-from datetime import datetime
-from typing import List, Optional
+from typing import Optional, List
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
-from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
-from app.database import get_async_session
-from app.db.models.auth import User
-from app.repositories.user_repository import UserRepository
 from app.services.auth_service import jwt_auth_service
+from app.config import settings
 
-# Security scheme for JWT token
-security = HTTPBearer(auto_error=False)
+# Security scheme for OpenAPI documentation
+security_scheme = HTTPBearer(auto_error=False)
 
 
 class CurrentUser(BaseModel):
     """
-    Current authenticated user DTO with RBAC support.
+    Authenticated user model for dependency injection.
     
-    Pydantic model representing the authenticated user
-    for use in FastAPI dependencies and route handlers.
-    Supports multiple roles and permissions from many-to-many RBAC.
+    Extracted from validated JWT token and injected into route handlers.
     """
+    id: UUID
+    email: str
+    role: str
     
-    model_config = {"from_attributes": True}
-    
-    id: UUID = Field(..., description="User unique identifier")
-    email: str = Field(..., description="User email address")
-    roles: List[str] = Field(default_factory=list, description="User roles (admin, annotator, curator)")
-    permissions: List[str] = Field(default_factory=list, description="User permissions from all roles")
-    is_active: bool = Field(..., description="Whether user account is active")
-    email_verified: bool = Field(..., description="Whether email is verified")
-    created_at: datetime = Field(..., description="Account creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
-    
-    @property
-    def primary_role(self) -> Optional[str]:
-        """Get the primary (first) role for backwards compatibility."""
-        return self.roles[0] if self.roles else None
+    model_config = {"frozen": True}  # Immutable
     
     @property
     def is_admin(self) -> bool:
         """Check if user has admin role."""
-        return "admin" in self.roles
+        return self.role == "admin"
     
     @property
     def is_annotator(self) -> bool:
         """Check if user has annotator role."""
-        return "annotator" in self.roles
+        return self.role == "annotator"
     
     @property
     def is_curator(self) -> bool:
         """Check if user has curator role."""
-        return "curator" in self.roles
+        return self.role == "curator"
     
-    def has_role(self, *role_names: str) -> bool:
+    def has_role(self, *roles: str) -> bool:
         """
         Check if user has any of the specified roles.
         
         Args:
-            *role_names: Variable number of role strings to check
+            *roles: Variable number of role strings to check
             
         Returns:
-            True if user has any of the specified roles
+            True if user's role is in the allowed roles
         """
-        return any(role in self.roles for role in role_names)
+        return self.role in roles
     
-    def has_permission(self, permission: str) -> bool:
-        """
-        Check if user has a specific permission.
-        
-        Args:
-            permission: Permission string to check (e.g., "annotation:read:own")
-            
-        Returns:
-            True if user has the permission
-        """
-        # Admin with "*" has all permissions
-        if "*" in self.permissions:
-            return True
-        return permission in self.permissions
-    
-    def has_any_permission(self, *permissions: str) -> bool:
-        """
-        Check if user has any of the specified permissions.
-        
-        Args:
-            *permissions: Variable number of permission strings
-            
-        Returns:
-            True if user has any of the specified permissions
-        """
-        return any(self.has_permission(p) for p in permissions)
+    def __repr__(self) -> str:
+        return f"CurrentUser(id={self.id}, email={self.email}, role={self.role})"
 
 
-def _user_to_current_user(user: User) -> CurrentUser:
+# Allowed roles for validation
+ALLOWED_ROLES = {"admin", "annotator", "curator"}
+
+
+def _extract_token_from_header(
+    credentials: Optional[HTTPAuthorizationCredentials]
+) -> str:
     """
-    Convert SQLAlchemy User model to CurrentUser DTO.
+    Extract JWT token from Authorization header.
     
     Args:
-        user: User database model with loaded roles
+        credentials: HTTP Authorization credentials
         
     Returns:
-        CurrentUser DTO instance with roles and permissions
-    """
-    # Extract role names and permissions from user's roles
-    role_names = [role.name for role in user.roles]
-    
-    # Aggregate all permissions from all roles
-    all_permissions = set()
-    for role in user.roles:
-        all_permissions.update(role.permissions)
-    
-    return CurrentUser(
-        id=user.id,
-        email=user.email,
-        roles=role_names,
-        permissions=list(all_permissions),
-        is_active=user.is_active,
-        email_verified=user.is_email_verified,
-        created_at=user.created_at,
-        updated_at=user.updated_at
-    )
-
-
-async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db_session: AsyncSession = Depends(get_async_session)
-) -> CurrentUser:
-    """
-    Get the current authenticated user from JWT token.
-    
-    Args:
-        credentials: HTTP Authorization credentials containing JWT token
-        db_session: Database session
-        
-    Returns:
-        Authenticated CurrentUser DTO
+        JWT token string
         
     Raises:
-        HTTPException: If token is missing, invalid, or expired
+        HTTPException: 401 if credentials missing or malformed
     """
-    # Check if credentials provided
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -159,18 +87,42 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    token = credentials.credentials
+    scheme = credentials.scheme.lower()
+    if scheme != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication scheme. Use Bearer",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
-    if not token:
+    if not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Verify token
+    return credentials.credentials
+
+
+def _verify_token_and_extract_payload(token: str) -> dict:
+    """
+    Verify JWT token and extract payload.
+    
+    Args:
+        token: JWT token string
+        
+    Returns:
+        Decoded token payload
+        
+    Raises:
+        HTTPException: 401 if token invalid or expired
+    """
+    from jwt.exceptions import ExpiredSignatureError, InvalidTokenError
+    
     try:
         payload = jwt_auth_service.verify_token(token, expected_type="access")
+        return payload
     except ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -183,122 +135,97 @@ async def get_current_user(
             detail=f"Invalid token: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def _payload_to_current_user(payload: dict) -> CurrentUser:
+    """
+    Convert token payload to CurrentUser model.
     
-    # Extract user ID from token
-    user_id_str = payload.get("sub")
-    if not user_id_str:
+    Args:
+        payload: Decoded JWT payload
+        
+    Returns:
+        CurrentUser instance
+        
+    Raises:
+        HTTPException: 401 if payload missing required fields
+    """
+    # Extract required fields
+    sub = payload.get("sub")
+    role = payload.get("role")
+    
+    if not sub:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: missing user identifier",
+            detail="Token missing user identifier",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing role claim",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Validate role
+    if role not in ALLOWED_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid role in token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Parse UUID
     try:
-        user_id = UUID(user_id_str)
+        user_id = UUID(sub)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token: malformed user identifier",
+            detail="Invalid user identifier in token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Get user from database
-    user_repo = UserRepository(db_session)
-    user = await user_repo.get_by_id(user_id)
-    
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User account is deactivated",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    # Convert to DTO and return
-    return _user_to_current_user(user)
+    # Build CurrentUser (email not in token, fetch from DB if needed)
+    # For now, email is optional in token
+    return CurrentUser(
+        id=user_id,
+        email=payload.get("email", ""),  # May not be in token
+        role=role,
+    )
 
 
-async def require_authenticated(
-    current_user: CurrentUser = Depends(get_current_user)
+async def get_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme)
 ) -> CurrentUser:
     """
-    Dependency to ensure user is authenticated.
+    FastAPI dependency to extract and validate current user from JWT.
     
-    This is a wrapper around get_current_user that can be used
-    when you just need to ensure authentication without using
-    the user object directly.
-    
-    Args:
-        current_user: Current authenticated user from get_current_user
-        
-    Returns:
-        Authenticated CurrentUser DTO
-    """
-    return current_user
-
-
-async def get_optional_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    db_session: AsyncSession = Depends(get_async_session)
-) -> Optional[CurrentUser]:
-    """
-    Get the current user if authenticated, or None if not.
-    
-    This is useful for endpoints that work for both authenticated
-    and unauthenticated users.
+    Usage:
+        @router.get("/protected")
+        async def protected_endpoint(current_user: CurrentUser = Depends(get_current_user)):
+            return {"user_id": current_user.id}
     
     Args:
-        credentials: HTTP Authorization credentials containing JWT token
-        db_session: Database session
+        credentials: HTTP Authorization credentials (injected by FastAPI)
         
     Returns:
-        CurrentUser DTO if authenticated, None otherwise
-    """
-    if credentials is None:
-        return None
-    
-    try:
-        return await get_current_user(credentials, db_session)
-    except HTTPException:
-        return None
-
-
-async def require_admin(
-    current_user: CurrentUser = Depends(get_current_user)
-) -> CurrentUser:
-    """
-    Dependency to ensure user has admin role.
-    
-    Must be used after get_current_user to ensure authentication.
-    
-    Args:
-        current_user: Current authenticated user from get_current_user
-        
-    Returns:
-        Authenticated CurrentUser DTO with admin role
+        CurrentUser instance
         
     Raises:
-        HTTPException: If user is not an admin
+        HTTPException: 401 if authentication fails
     """
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
-        )
-    return current_user
+    # Step 1: Extract token from header
+    token = _extract_token_from_header(credentials)
+    
+    # Step 2: Verify token and get payload
+    payload = _verify_token_and_extract_payload(token)
+    
+    # Step 3: Convert to CurrentUser
+    return _payload_to_current_user(payload)
 
 
-# Allowed roles for validation
-ALLOWED_ROLES = {"admin", "annotator", "curator"}
-
-
-def require_role(*allowed_roles: str) -> callable:
+def require_role(*allowed_roles: str):
     """
     FastAPI dependency factory for role-based access control.
     
@@ -326,7 +253,7 @@ def require_role(*allowed_roles: str) -> callable:
     if invalid_roles:
         raise ValueError(f"Invalid roles specified: {invalid_roles}")
     
-    async def _check_role(
+    async def role_checker(
         current_user: CurrentUser = Depends(get_current_user)
     ) -> CurrentUser:
         """Inner dependency that checks user role."""
@@ -337,10 +264,13 @@ def require_role(*allowed_roles: str) -> callable:
             )
         return current_user
     
-    return _check_role
+    return role_checker
 
 
 # Convenience dependencies for common role combinations
+
+require_admin = require_role("admin")
+"""Dependency for admin-only endpoints."""
 
 require_annotator = require_role("annotator")
 """Dependency for annotator-only endpoints."""
@@ -350,58 +280,3 @@ require_curator = require_role("curator")
 
 require_annotator_or_curator = require_role("annotator", "curator")
 """Dependency for annotator or curator endpoints."""
-
-
-# Permission-based dependencies
-
-def require_permission(*required_permissions: str) -> callable:
-    """
-    FastAPI dependency factory for permission-based access control.
-    
-    Usage:
-        @router.get("/annotations")
-        async def list_annotations(
-            current_user: CurrentUser = Depends(require_permission("annotation:read:own"))
-        ):
-            return {"annotations": []}
-        
-        @router.get("/all-annotations")
-        async def list_all_annotations(
-            current_user: CurrentUser = Depends(
-                require_permission("annotation:read:all")
-            )
-        ):
-            return {"annotations": []}
-    
-    Args:
-        *required_permissions: Variable number of required permission strings
-        
-    Returns:
-        Dependency function that validates permission and returns CurrentUser
-    """
-    async def _check_permission(
-        current_user: CurrentUser = Depends(get_current_user)
-    ) -> CurrentUser:
-        """Inner dependency that checks user permission."""
-        if not current_user.has_any_permission(*required_permissions):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Insufficient permissions. Required permissions: {', '.join(required_permissions)}"
-            )
-        return current_user
-    
-    return _check_permission
-
-
-# Common permission combinations
-require_annotation_read_own = require_permission("annotation:read:own")
-"""Dependency for reading own annotations."""
-
-require_annotation_read_all = require_permission("annotation:read:all")
-"""Dependency for reading all annotations."""
-
-require_annotation_write_own = require_permission("annotation:write:own")
-"""Dependency for writing own annotations."""
-
-require_annotation_write_reviews = require_permission("annotation:write:reviews")
-"""Dependency for writing reviews."""

@@ -13,6 +13,8 @@ def register_exception_handlers(app: FastAPI):
     async def http_exception_handler(request: Request, exc: HTTPException):
         error_names = {
             400: "bad_request",
+            401: "authentication_required",
+            403: "insufficient_permissions",
             404: "not_found",
             409: "conflict",
             413: "payload_too_large",
