@@ -67,7 +67,7 @@ async def login(
     try:
         # Authenticate user
         user_service = UserService(db_session)
-        success, user = await user_service.authenticate(
+        success, user, error_msg = await user_service.authenticate(
             login_data.email, 
             login_data.password
         )
@@ -79,6 +79,14 @@ async def login(
             except Exception:
                 # Don't let rate limiting errors mask auth failure
                 pass
+            
+            # Check for specific error message (e.g., deactivated account)
+            if error_msg == "Account is deactivated":
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Account is deactivated",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
             
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

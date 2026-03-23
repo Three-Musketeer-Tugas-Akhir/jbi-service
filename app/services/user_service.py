@@ -30,7 +30,7 @@ class UserService:
         self, 
         email: str, 
         password: str
-    ) -> Tuple[bool, Optional[User]]:
+    ) -> Tuple[bool, Optional[User], Optional[str]]:
         """
         Authenticate user with email and password.
         
@@ -39,19 +39,20 @@ class UserService:
             password: Plain text password
             
         Returns:
-            Tuple of (success: bool, user: User or None)
+            Tuple of (success: bool, user: User or None, error_message: str or None)
             
         Note:
-            Returns (False, None) for both non-existent user and wrong password
+            Returns (False, None, None) for non-existent user or wrong password
             to prevent user enumeration attacks.
+            Returns (False, None, "Account is deactivated") for deactivated users.
         """
         # Validate inputs
         if not email or not password:
-            return False, None
+            return False, None, None
         
         # Enforce max password length to prevent DoS
         if len(password) > 1024:
-            return False, None
+            return False, None, None
         
         # Find user by email
         user = await self.repository.get_by_email(email)
@@ -63,7 +64,7 @@ class UserService:
                 password.encode('utf-8'),
                 b'$2b$12$' + b'0' * 53  # Dummy hash
             )
-            return False, None
+            return False, None, None
         
         # Check if user is active (still do bcrypt check to prevent timing attacks)
         password_bytes = password.encode('utf-8')
@@ -72,17 +73,17 @@ class UserService:
         if not user.is_active:
             # Still perform bcrypt check to prevent timing attacks
             bcrypt.checkpw(password_bytes, stored_hash)
-            return False, None
+            return False, None, "Account is deactivated"
         
         # Verify password
         try:
             if bcrypt.checkpw(password_bytes, stored_hash):
-                return True, user
+                return True, user, None
             
-            return False, None
+            return False, None, None
         except Exception:
             # Handle malformed hashes or other bcrypt errors
-            return False, None
+            return False, None, None
     
     async def get_by_email(self, email: str) -> Optional[User]:
         """
@@ -667,7 +668,12 @@ class UserService:
                 "message": "An error occurred while updating the user."
             }
     
-    async def deactivate_user(self, user_id: UUID) -> dict:
+    async def deactivate_user(
+        self, 
+        admin_id: UUID,
+        target_user_id: UUID,
+        ip_address: Optional[str] = None
+    ) -> dict:
         """
         Deactivate a user (admin only).
         
@@ -675,26 +681,70 @@ class UserService:
         continued access after deactivation.
         
         Args:
-            user_id: User UUID to deactivate
+            admin_id: Admin user ID performing the deactivation
+            target_user_id: User UUID to deactivate
+            ip_address: Request IP address for audit logging
             
         Returns:
             Dict with success status, message, and tokens_revoked count
+            
+        Raises:
+            ValueError: If trying to deactivate own account
         """
+        from app.services.audit_service import AuditService
+        
         try:
-            # First deactivate the user
-            result = await self.admin_update_user(user_id, is_active=False)
+            # Prevent self-deactivation
+            if str(admin_id) == str(target_user_id):
+                return {
+                    "success": False,
+                    "error_code": "SELF_DEACTIVATION",
+                    "message": "Cannot deactivate your own account."
+                }
+            
+            # Get target user
+            user = await self.repository.get_by_id(target_user_id)
+            if user is None:
+                return {
+                    "success": False,
+                    "error_code": "USER_NOT_FOUND",
+                    "message": "User not found."
+                }
+            
+            # Check if already deactivated (idempotent)
+            if not user.is_active:
+                return {
+                    "success": True,
+                    "user": user,
+                    "message": "User is already deactivated.",
+                    "tokens_revoked": 0
+                }
+            
+            # Deactivate the user
+            result = await self.admin_update_user(target_user_id, is_active=False)
             
             if not result["success"]:
                 return result
             
             # Revoke all refresh tokens for the user
             token_repo = RefreshTokenRepository(self.session)
-            tokens_revoked = await token_repo.revoke_all_for_user(user_id)
+            tokens_revoked = await token_repo.revoke_all_for_user(target_user_id)
+            
+            # Log audit event before commit
+            audit_service = AuditService(self.session)
+            await audit_service.log_user_deactivated(
+                actor_id=admin_id,
+                target_user_id=target_user_id,
+                email=user.email,
+                tokens_revoked=tokens_revoked,
+                ip_address=ip_address
+            )
+            
             await self.session.commit()
             
             logger = __import__('logging').getLogger(__name__)
             logger.info(
-                f"User deactivated and {tokens_revoked} tokens revoked: {result['user'].email}"
+                f"User deactivated by admin {admin_id}: {user.email}, {tokens_revoked} tokens revoked"
             )
             
             return {
@@ -710,6 +760,7 @@ class UserService:
             logger.exception("Error deactivating user")
             return {
                 "success": False,
+                "error_code": "INTERNAL_ERROR",
                 "message": "An error occurred while deactivating the user."
             }
     

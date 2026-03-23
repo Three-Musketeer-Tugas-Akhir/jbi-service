@@ -35,6 +35,16 @@ class UserRoleUpdateResponse(BaseModel):
     previous_role: Optional[str] = Field(None, description="Previous role")
     updated_at: Optional[str] = Field(None, description="Update timestamp")
 
+
+class UserDeactivateResponse(BaseModel):
+    """Response schema for user deactivation."""
+    id: str = Field(..., description="User ID")
+    email: str = Field(..., description="User email")
+    is_active: bool = Field(..., description="User active status")
+    deactivated_at: Optional[str] = Field(None, description="Deactivation timestamp")
+    message: str = Field(..., description="Status message")
+    tokens_revoked: int = Field(0, description="Number of refresh tokens revoked")
+
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
@@ -220,4 +230,72 @@ async def update_user_role(
         role=role_data.role,
         previous_role=result.get("previous_role"),
         updated_at=user.updated_at.isoformat() if user.updated_at else None
+    )
+
+
+@router.delete(
+    "/users/{user_id}",
+    response_model=UserDeactivateResponse,
+    responses={
+        400: {"description": "Cannot deactivate own account"},
+        403: {"description": "Admin access required"},
+        404: {"description": "User not found"},
+    },
+)
+async def deactivate_user(
+    user_id: UUID,
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    db_session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Deactivate a user account (Admin only).
+    
+    - **user_id**: UUID of user to deactivate
+    
+    Performs soft delete (sets is_active=false).
+    Preserves all user data and audit history.
+    Revokes all refresh tokens for the user.
+    """
+    user_service = UserService(db_session)
+    
+    # Extract IP address for audit logging
+    x_forwarded_for = request.headers.get("X-Forwarded-For")
+    if x_forwarded_for:
+        ip_address = x_forwarded_for.split(",")[0].strip()
+    elif request.client:
+        ip_address = request.client.host
+    else:
+        ip_address = None
+    
+    result = await user_service.deactivate_user(
+        admin_id=current_user.user_id,
+        target_user_id=user_id,
+        ip_address=ip_address
+    )
+    
+    if not result["success"]:
+        error_code = result.get("error_code", "UNKNOWN_ERROR")
+        error_msg = result["message"]
+        
+        # Map error codes to HTTP status codes
+        error_mapping = {
+            "SELF_DEACTIVATION": status.HTTP_400_BAD_REQUEST,
+            "USER_NOT_FOUND": status.HTTP_404_NOT_FOUND,
+        }
+        
+        http_status = error_mapping.get(error_code, status.HTTP_400_BAD_REQUEST)
+        raise HTTPException(
+            status_code=http_status,
+            detail=error_msg
+        )
+    
+    user = result["user"]
+    return UserDeactivateResponse(
+        id=str(user.id),
+        email=user.email,
+        is_active=user.is_active,
+        deactivated_at=user.updated_at.isoformat() if user.updated_at else None,
+        message=result["message"],
+        tokens_revoked=result.get("tokens_revoked", 0)
     )
