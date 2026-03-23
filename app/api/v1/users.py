@@ -7,9 +7,9 @@ Provides user profile management endpoints for authenticated users.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_async_session
+from app.db.session import get_async_session
 from app.api.deps import CurrentUser, get_current_user
-from app.models.schemas import (
+from app.schemas import (
     UserProfileResponse,
     UpdateProfileRequest,
     UpdateProfileResponse,

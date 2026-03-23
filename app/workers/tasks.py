@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from app.logging_config import job_id_ctx
-from app.database import async_session
+from app.db.session import async_session
 from app.models.job import JobStatus, is_terminal
 from app.models.job_store import job_store
 from app.models.result_serializer import serialize_pipeline_result

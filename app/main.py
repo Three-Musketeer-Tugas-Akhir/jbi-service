@@ -5,8 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.formparsers import MultiPartParser
 
 from app.core.config import settings
-from app.database import engine
-from app.models.job_model import Base
+from app.db.session import engine
+from app.db.base import Base
 from app.api.v1 import admin, auth, health, jobs, users
 from app.services.scheduler import start_cleanup_scheduler, stop_cleanup_scheduler
 from app.core.exceptions import register_exception_handlers

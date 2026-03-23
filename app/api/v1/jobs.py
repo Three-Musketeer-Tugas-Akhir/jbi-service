@@ -8,8 +8,8 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.database import get_db
-from app.models.schemas import (
+from app.db.session import get_db
+from app.schemas import (
     JobCreateResponse,
     JobStatusResponse,
     JobProgressResponse,

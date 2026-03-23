@@ -10,8 +10,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.database import get_async_session
-from app.models.schemas import (
+from app.db.session import get_async_session
+from app.schemas import (
     LoginRequest, LoginResponse, RefreshRequest, RefreshResponse,
     LogoutRequest, LogoutResponse, AuthErrorResponse,
     ForgotPasswordRequest, ForgotPasswordResponse,
