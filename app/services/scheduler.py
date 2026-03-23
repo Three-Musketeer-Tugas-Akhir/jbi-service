@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from app.config import settings
 from app.services.cleanup import cleanup_expired_jobs, cleanup_expired_refresh_tokens
@@ -19,7 +20,7 @@ async def _cleanup_loop():
 
     # Track refresh token cleanup - run daily
     refresh_token_cleanup_interval = 24 * 60 * 60  # 24 hours in seconds
-    last_refresh_cleanup = 0
+    last_refresh_cleanup = time.monotonic()
 
     while True:
         await asyncio.sleep(interval)
@@ -33,13 +34,13 @@ async def _cleanup_loop():
             logger.exception("Job cleanup cycle failed — will retry next interval")
         
         # Cleanup expired refresh tokens (run once per day)
-        current_time = asyncio.get_event_loop().time()
+        current_time = time.monotonic()
         if current_time - last_refresh_cleanup >= refresh_token_cleanup_interval:
             try:
                 tokens_cleaned = await cleanup_expired_refresh_tokens()
                 if tokens_cleaned > 0:
                     logger.info("Scheduled cleanup removed %d expired refresh tokens", tokens_cleaned)
-                last_refresh_cleanup = current_time
+                last_refresh_cleanup = time.monotonic()
             except Exception:
                 logger.exception("Refresh token cleanup cycle failed — will retry next interval")
 

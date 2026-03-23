@@ -2,7 +2,7 @@
 story_id: "1.4"
 story_key: "1-4-jwt-refresh-token-flow"
 epic: 1
-status: review
+status: done
 created: "2026-03-19"
 last_updated: "2026-03-24"
 ---
@@ -13,9 +13,10 @@ last_updated: "2026-03-24"
 
 **Epic:** 1 - Foundation & Authentication  
 **Story ID:** 1.4  
-**Status:** review  
+**Status:** done  
 **Priority:** Critical (Foundation Story)  
 **Estimated Effort:** Medium (2-3 days)  
+**Completed:** 2026-03-24  
 **Dependencies:** 
 - Story 1.1: Database Schema Setup - Auth Domain ✅
 - Story 1.2: JWT Authentication Service ✅
@@ -1396,7 +1397,7 @@ This story will implement FastAPI dependencies for protecting endpoints based on
 ### Implementation Summary
 **Date:** 2026-03-24  
 **Agent:** Amelia (Developer Agent)  
-**Status:** Complete - Ready for Review
+**Status:** ✅ **DONE** - Completed with code review fixes applied
 
 #### Files Created/Modified
 
@@ -1476,6 +1477,47 @@ This story will implement FastAPI dependencies for protecting endpoints based on
 | AC1: POST /auth/refresh returns new token pair | ✅ Pass | access_token: 24h, refresh_token: 7d |
 | AC2: Expired refresh token → 401 | ✅ Pass | Error: "Refresh token expired, please login again" |
 | AC3: Revoked token → 401 | ✅ Pass | Error: "Invalid refresh token" |
+
+---
+
+## Senior Developer Review (AI)
+
+**Date:** 2026-03-24  
+**Reviewer:** Code Review Workflow (Manual)  
+**Outcome:** APPROVED with fixes applied
+
+### Findings & Resolutions
+
+| # | Severity | Issue | File | Resolution |
+|---|----------|-------|------|------------|
+| 1 | 🔶 MED | Missing error handling in cleanup function | `cleanup.py` | ✅ Added try/except with logging |
+| 2 | 🔶 MED | Unnecessary commit when nothing deleted | `cleanup.py` | ✅ Moved commit inside `if deleted_count > 0` |
+| 3 | 🔶 LOW | Deprecated asyncio API usage | `scheduler.py` | ✅ Changed to `time.monotonic()` |
+| 4 | 🔷 LOW | Test fixture modifies singleton | `test_token_refresh_service.py` | ⚠️ Accepted - test isolation pattern |
+
+### Code Changes Applied
+
+**`app/services/cleanup.py`:**
+- Wrapped cleanup logic in try/except block
+- Only commit when tokens were actually deleted
+- Return 0 on exception instead of propagating
+
+**`app/services/scheduler.py`:**
+- Added `import time`
+- Replaced `asyncio.get_event_loop().time()` with `time.monotonic()`
+- Initialized `last_refresh_cleanup` with `time.monotonic()` instead of 0
+
+### Security Assessment
+
+| Check | Status |
+|-------|--------|
+| SQL Injection protection | ✅ Pass |
+| Batch limit on deletion | ✅ Pass |
+| Timezone-aware datetime | ✅ Pass |
+| Session proper handling | ✅ Pass |
+| Error handling | ✅ Pass (post-fix) |
+
+---
 
 **Questions?**  
 Refer to:

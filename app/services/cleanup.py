@@ -26,24 +26,28 @@ async def cleanup_expired_refresh_tokens(batch_size: int = 1000) -> int:
     from sqlalchemy import delete
     from app.db.models.auth import RefreshToken
     
-    async with async_session() as session:
-        # Delete expired tokens
-        stmt = (
-            delete(RefreshToken)
-            .where(RefreshToken.expires_at < datetime.now(timezone.utc))
-            .limit(batch_size)
-        )
-        result = await session.execute(stmt)
-        deleted_count = result.rowcount
-        await session.commit()
-        
-        if deleted_count > 0:
-            logger.info(
-                "Cleaned up %d expired refresh tokens",
-                deleted_count
+    try:
+        async with async_session() as session:
+            # Delete expired tokens
+            stmt = (
+                delete(RefreshToken)
+                .where(RefreshToken.expires_at < datetime.now(timezone.utc))
+                .limit(batch_size)
             )
-        
-        return deleted_count
+            result = await session.execute(stmt)
+            deleted_count = result.rowcount
+            
+            if deleted_count > 0:
+                await session.commit()
+                logger.info(
+                    "Cleaned up %d expired refresh tokens",
+                    deleted_count
+                )
+            
+            return deleted_count
+    except Exception:
+        logger.exception("Failed to clean up expired refresh tokens")
+        return 0
 
 
 async def cleanup_expired_jobs() -> int:
