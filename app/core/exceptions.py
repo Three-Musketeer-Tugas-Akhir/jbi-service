@@ -75,6 +75,12 @@ class StorageUnavailableError(StorageError):
     code = "STORAGE_UNAVAILABLE"
 
 
+class ProcessingError(AppException):
+    """Video/audio processing error."""
+    status_code = 500
+    code = "PROCESSING_ERROR"
+
+
 # =============================================================================
 # Exception Handlers
 # =============================================================================
