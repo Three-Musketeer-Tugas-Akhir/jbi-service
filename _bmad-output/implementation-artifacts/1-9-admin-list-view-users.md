@@ -2,7 +2,7 @@
 story_id: "1.9"
 story_key: "1-9-admin-list-view-users"
 epic: 1
-status: review
+status: done
 created: "2026-03-19"
 last_updated: "2026-03-24"
 ---

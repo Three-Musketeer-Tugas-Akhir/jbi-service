@@ -45,7 +45,7 @@ development_status:
   # =====================
   # EPIC 1: Foundation & Authentication
   # =====================
-  epic-1: review
+  epic-1: done
   1-1-database-schema-setup-auth-domain: done
   1-2-jwt-authentication-service: done
   1-3-user-login-api-endpoint: done
@@ -54,14 +54,14 @@ development_status:
   1-6-admin-create-user-accounts: done
   1-7-admin-modify-user-roles: done
   1-8-admin-deactivate-user-accounts: done
-  1-9-admin-list-and-view-users: review
+  1-9-admin-list-and-view-users: done
   epic-1-retrospective: optional
   
   # =====================
   # EPIC 2: Video Processing Pipeline
   # =====================
-  epic-2: backlog
-  2-1-database-schema-pipeline-domain: backlog
+  epic-2: in-progress
+  2-1-database-schema-pipeline-domain: review
   2-2-minio-storage-integration: backlog
   2-3-video-upload-api: backlog
   2-4-postgresql-queue-implementation: backlog
