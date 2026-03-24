@@ -24,7 +24,7 @@ from app.schemas import (
 )
 from app.db.models.pipeline import JobStatus
 from app.repositories.job_repository import JobRepository
-from app.models.result_serializer import deserialize_pipeline_result
+from app.pipeline.utils.result_serializer import deserialize_pipeline_result
 
 # Terminal states
 TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}

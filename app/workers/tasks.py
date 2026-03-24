@@ -5,7 +5,7 @@ from app.logging_config import job_id_ctx
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus
 from app.repositories.job_repository import JobRepository
-from app.models.result_serializer import serialize_pipeline_result
+from app.pipeline.utils.result_serializer import serialize_pipeline_result
 from app.services.pipeline import run_pipeline, PipelineError
 
 # Terminal states - no further transitions allowed
