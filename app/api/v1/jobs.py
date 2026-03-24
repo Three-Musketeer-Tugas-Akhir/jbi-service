@@ -472,7 +472,7 @@ from typing import Annotated
 
 from app.core.exceptions import ValidationError
 from app.db.models.auth import User
-from app.dependencies.auth import get_current_user
+from app.api.deps import get_current_user
 from app.repositories.job_repository import JobRepository, get_job_repository
 from app.schemas.job import JobCreate, JobCreateResponse, JobResponse
 from app.services.job_service import JobService, get_job_service

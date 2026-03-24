@@ -7,7 +7,7 @@ from uuid import uuid4, UUID
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from app.dependencies.auth import (
+from app.api.deps import (
     get_current_user,
     require_role,
     require_admin,
