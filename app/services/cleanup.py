@@ -5,8 +5,8 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.db.session import async_session
-from app.models.job import JobStatus
-from app.models.job_store import job_store
+from app.db.models.pipeline import JobStatus
+from app.repositories.job_repository import JobRepository
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,8 @@ async def cleanup_expired_jobs() -> int:
     cutoff = now - ttl
 
     async with async_session() as session:
-        all_jobs = await job_store.list_all(session)
+        repo = JobRepository(session)
+        all_jobs = await repo.list_all()
         cleaned = 0
 
         for record in all_jobs:
@@ -79,7 +80,7 @@ async def cleanup_expired_jobs() -> int:
             if record.updated_at < cutoff:
                 try:
                     _delete_job_files(record.id, record.video_path)
-                    await job_store.delete(session, record.id)
+                    await repo.delete(record.id)
                     cleaned += 1
                     logger.info(
                         "Cleaned up expired job %s (status=%s, age=%s)",

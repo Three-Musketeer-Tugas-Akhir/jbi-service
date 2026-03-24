@@ -22,9 +22,15 @@ from app.schemas import (
     BboxResponse,
     ErrorResponse,
 )
-from app.models.job import JobStatus, is_terminal
-from app.models.job_store import job_store
+from app.db.models.pipeline import JobStatus
+from app.repositories.job_repository import JobRepository
 from app.models.result_serializer import deserialize_pipeline_result
+
+# Terminal states
+TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
+
+def is_terminal(status: str) -> bool:
+    return status in TERMINAL_STATES
 from app.services.validator import (
     validate_upload, validate_video_file, VideoValidationError,
 )
@@ -85,7 +91,7 @@ async def list_jobs(
             detail=f"Invalid status '{status}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
         )
 
-    records, total = await job_store.list_filtered(
+    records, total = await JobRepository(session).list_filtered(
         session, status=status, limit=limit, offset=offset,
     )
 
@@ -145,7 +151,7 @@ async def create_job(
 
     # --- Create job record in DB ---
     logger.debug("Creating DB record — job_id=%s, video_title=%s", job_id, video_title)
-    record = await job_store.create(session, job_id, str(file_path), video_title=video_title)
+    record = await JobRepository(session).create( job_id, str(file_path), video_title=video_title)
     logger.debug("DB record created — status=%s, created_at=%s", record.status, record.created_at)
 
     logger.info("Job created: id=%s, source=%s", job_id, "upload" if file else "url")
@@ -253,7 +259,7 @@ async def get_job_status(job_id: str, session: AsyncSession = Depends(get_db)):
     Progress details are available when status is "processing".
     Error details are available when status is "failed".
     """
-    record = await job_store.get(session, job_id)
+    record = await JobRepository(session).get_by_id( job_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
@@ -279,7 +285,7 @@ async def cancel_job(job_id: str, session: AsyncSession = Depends(get_db)):
     - Jobs already in a terminal state (completed, failed, cancelled)
       cannot be cancelled and return 409 Conflict.
     """
-    record = await job_store.get(session, job_id)
+    record = await JobRepository(session).get_by_id( job_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
@@ -289,7 +295,7 @@ async def cancel_job(job_id: str, session: AsyncSession = Depends(get_db)):
             detail=f"Job '{job_id}' is already '{record.status}' and cannot be cancelled",
         )
 
-    success = await job_store.update_status(session, job_id, JobStatus.CANCELLED)
+    success = await JobRepository(session).update_status( job_id, JobStatus.CANCELLED)
     if not success:
         raise HTTPException(
             status_code=409,
@@ -336,7 +342,7 @@ async def get_job_results(job_id: str, session: AsyncSession = Depends(get_db)):
     - failed/cancelled: 409 (no results available)
     - not found: 404
     """
-    record = await job_store.get(session, job_id)
+    record = await JobRepository(session).get_by_id( job_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
@@ -415,7 +421,7 @@ async def download_segment(job_id: str, index: int, session: AsyncSession = Depe
     Only available when job status is "completed".
     """
     # --- Validate job ---
-    record = await job_store.get(session, job_id)
+    record = await JobRepository(session).get_by_id( job_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
