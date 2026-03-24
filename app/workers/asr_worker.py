@@ -11,7 +11,6 @@ from typing import Dict, Any
 from app.workers.base import BaseWorker
 from app.pipeline.stages.stage2_asr import run_asr, ASRSegmentInput
 from app.services.job_service import job_service
-from app.services.queue_service import queue_service
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus
 
@@ -23,7 +22,10 @@ class ASRWorker(BaseWorker):
     Worker that processes ASR jobs from the queue.
     
     Consumes jobs from 'asr' queue, transcribes audio,
-    updates segments, and queues Cropping stage.
+    updates segments, and marks job complete.
+    
+    NOTE: Stage 3 (Cropping) is not yet implemented.
+    When cropping is developed, update _finalize_job to queue cropping stage.
     """
     
     queue_name = "asr"
@@ -83,13 +85,26 @@ class ASRWorker(BaseWorker):
                 )
             await session.commit()
         
-        # Queue next stage
-        await self._queue_next_stage(job_id)
+        # Finalize job (mark complete or queue next stage)
+        await self._finalize_job(job_id)
         
         return {"segments_processed": len(results)}
     
-    async def _queue_next_stage(self, job_id: UUID):
-        """Queue cropping stage after ASR."""
+    async def _finalize_job(self, job_id: UUID):
+        """
+        Finalize job after ASR.
+        
+        Currently marks job as READY_FOR_ANNOTATION since Stage 3 (Cropping)
+        is not yet implemented. When cropping is developed, update this to
+        queue the cropping stage instead.
+        """
+        logger.info(f"ASR complete for job {job_id}. Marking as READY_FOR_ANNOTATION.")
+        logger.info("NOTE: Stage 3 (Cropping) not implemented yet.")
+        
         async with async_session() as session:
-            await queue_service.enqueue(session, "cropping", {"job_id": str(job_id)})
+            await job_service.update_status(
+                session,
+                str(job_id),
+                JobStatus.READY_FOR_ANNOTATION
+            )
             await session.commit()
