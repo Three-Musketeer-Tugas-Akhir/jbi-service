@@ -2,7 +2,7 @@
 story_id: "2.5"
 story_key: "2-5-detection-worker-yolov8-integration"
 epic: 2
-status: review
+status: done
 created: "2026-03-24"
 last_updated: "2026-03-24"
 ---
@@ -13,7 +13,7 @@ last_updated: "2026-03-24"
 
 **Epic:** 2 - Video Processing Pipeline  
 **Story ID:** 2.5  
-**Status:** review  
+**Status:** done  
 **Priority:** Critical (Core ML)  
 **Estimated Effort:** Large (4-5 days)  
 **Dependencies:** 

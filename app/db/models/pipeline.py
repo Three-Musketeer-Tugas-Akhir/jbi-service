@@ -89,6 +89,11 @@ class PipelineSegment(Base):
     asr_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     asr_start: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     asr_end: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    asr_review_flag: Mapped[bool] = mapped_column(
+        default=False,
+        nullable=False,
+        comment="True if segment needs ASR review (low confidence or failed)"
+    )
     jbi_start: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     jbi_end: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

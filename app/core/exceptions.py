@@ -79,6 +79,18 @@ class ProcessingError(AppException):
     """Video/audio processing error."""
     status_code = 500
     code = "PROCESSING_ERROR"
+    
+    def __init__(self, message: str = None, details: dict = None, permanent: bool = False):
+        """
+        Initialize processing error.
+        
+        Args:
+            message: Error message
+            details: Additional error details
+            permanent: If True, error is permanent and should not be retried
+        """
+        super().__init__(message, details)
+        self.permanent = permanent
 
 
 # =============================================================================

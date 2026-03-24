@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     from_email: str = "noreply@anotasi.lbi.ac.id"
 
+    # --- ASR Configuration ---
+    whisper_model_size: str = "base"  # tiny, base, small, medium, large-v3
+    whisper_compute_type: str = "int8"  # int8, float16, int8_float16
+    whisper_beam_size: int = 5
+    whisper_language: str = "id"  # Indonesian
+    model_cache_dir: str = "model_weights"
+    force_cpu: bool = False  # Set True to disable GPU even if available
+
     # --- MinIO / S3 Storage ---
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"

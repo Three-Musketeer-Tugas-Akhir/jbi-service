@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-03-18"
-last_updated: "2026-03-24T04:15:00"
+last_updated: "2026-03-24T07:00:00"
 project: "Unified SIBI Pipeline API"
 project_key: "NOKEY"
 tracking_system: "file-system"
@@ -65,8 +65,8 @@ development_status:
   2-2-minio-storage-integration: done
   2-3-video-upload-api: done
   2-4-postgresql-queue-implementation: done
-  2-5-detection-worker-yolov8-integration: review
-  2-6-asr-worker-faster-whisper-integration: backlog
+  2-5-detection-worker-yolov8-integration: done
+  2-6-asr-worker-faster-whisper-integration: done
   2-7-cropping-worker-jbi-buffer: backlog
   2-8-job-status-api-and-polling: backlog
   2-9-job-cancellation: backlog
