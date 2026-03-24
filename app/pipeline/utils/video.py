@@ -221,3 +221,45 @@ async def get_video_info(video_path: str) -> Dict:
     """Get video metadata."""
     processor = get_video_processor()
     return await processor.get_video_info(video_path)
+
+
+class TranscodeError(Exception):
+    """Raised when video transcoding fails."""
+    pass
+
+
+async def transcode_to_h264(
+    input_path: str,
+    output_path: Optional[str] = None,
+    on_progress=None
+) -> str:
+    """
+    Transcode video to H.264 format.
+    
+    Args:
+        input_path: Input video file
+        output_path: Optional output path
+        on_progress: Optional progress callback(percent)
+        
+    Returns:
+        Path to transcoded video
+    """
+    if output_path is None:
+        output_path = str(Path(input_path).with_suffix('.h264.mp4'))
+    
+    try:
+        result = await transcode_video(
+            input_path=input_path,
+            output_path=output_path,
+            video_codec="libx264",
+            audio_codec="aac",
+            crf=16
+        )
+        
+        if on_progress:
+            on_progress(100)
+        
+        return result
+        
+    except ProcessingError as e:
+        raise TranscodeError(f"Transcoding failed: {e}") from e

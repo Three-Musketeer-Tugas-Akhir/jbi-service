@@ -3,7 +3,7 @@ from datetime import timedelta
 import logging
 
 from app.core.config import settings
-from app.services.detector import DetectionResult
+from app.pipeline.models.detector import DetectionResult
 
 logger = logging.getLogger(__name__)
 
