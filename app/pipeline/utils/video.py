@@ -228,6 +228,104 @@ class TranscodeError(Exception):
     pass
 
 
+async def get_video_duration(video_path: str) -> float:
+    """
+    Get video duration in seconds.
+    
+    Args:
+        video_path: Path to video file
+        
+    Returns:
+        Duration in seconds
+    """
+    info = await get_video_info(video_path)
+    duration = info.get("duration", 0)
+    if duration <= 0:
+        raise ProcessingError(f"Invalid video duration: {duration}")
+    return duration
+
+
+async def run_ffmpeg_crop(
+    input_path: str,
+    output_path: str,
+    start_time: float,
+    end_time: float,
+    use_input_seeking: bool = True
+) -> bool:
+    """
+    Crop video segment using FFmpeg.
+    
+    Uses precise seeking with -ss before -i for input seeking (faster, more accurate).
+    
+    Args:
+        input_path: Source video file
+        output_path: Output cropped video file
+        start_time: Start time in seconds
+        end_time: End time in seconds
+        use_input_seeking: If True, use input seeking (-ss before -i) for speed
+        
+    Returns:
+        True if successful
+    """
+    processor = get_video_processor()
+    duration = end_time - start_time
+    
+    try:
+        if use_input_seeking:
+            # Input seeking: -ss before -i (fast, accurate)
+            # This seeks to keyframe before start_time, then decodes to exact position
+            cmd = [
+                processor._ffmpeg_path,
+                "-y",  # Overwrite output
+                "-ss", str(start_time),  # Seek to start (input seeking)
+                "-i", str(input_path),  # Input file
+                "-t", str(duration),  # Duration to extract
+                "-c:v", "libx264",  # Re-encode video
+                "-crf", "16",  # High quality
+                "-preset", "fast",  # Fast encoding
+                "-c:a", "aac",  # Re-encode audio
+                "-b:a", "128k",  # Audio bitrate
+                "-avoid_negative_ts", "make_zero",  # Clean timestamps
+                str(output_path)
+            ]
+        else:
+            # Output seeking: -ss after -i (slow, frame-accurate but slow)
+            cmd = [
+                processor._ffmpeg_path,
+                "-y",
+                "-i", str(input_path),
+                "-ss", str(start_time),
+                "-t", str(duration),
+                "-c:v", "libx264",
+                "-crf", "16",
+                "-preset", "fast",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                str(output_path)
+            ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            logger.error(f"FFmpeg crop failed: {result.stderr}")
+            return False
+        
+        # Verify output file exists and has size
+        output_file = Path(output_path)
+        if not output_file.exists() or output_file.stat().st_size == 0:
+            logger.error(f"FFmpeg output file is empty or missing: {output_path}")
+            return False
+        
+        logger.info(
+            f"Video cropped: {input_path} [{start_time:.2f} -> {end_time:.2f}] -> {output_path}"
+        )
+        return True
+        
+    except Exception as e:
+        logger.error(f"FFmpeg crop error: {e}")
+        return False
+
+
 async def transcode_to_h264(
     input_path: str,
     output_path: Optional[str] = None,

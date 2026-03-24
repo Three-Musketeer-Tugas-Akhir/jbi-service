@@ -98,6 +98,7 @@ class PipelineSegment(Base):
     jbi_end: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     cropped_video_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    stage2_video_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     
     # Relationships
     job: Mapped["PipelineJob"] = relationship("PipelineJob", back_populates="segments")

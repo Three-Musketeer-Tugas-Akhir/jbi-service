@@ -1,7 +1,8 @@
 """
 ASR Worker - Stage 2 Queue Consumer
 
-Processes ASR jobs from the queue using faster-whisper.
+Processes ASR jobs from the queue using faster-whisper,
+then queues Stage 3 (Cropping) for timestamp-based re-cropping.
 """
 
 import logging
@@ -11,6 +12,7 @@ from typing import Dict, Any
 from app.workers.base import BaseWorker
 from app.pipeline.stages.stage2_asr import run_asr, ASRSegmentInput
 from app.services.job_service import job_service
+from app.services.queue_service import queue_service
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus
 
@@ -22,10 +24,7 @@ class ASRWorker(BaseWorker):
     Worker that processes ASR jobs from the queue.
     
     Consumes jobs from 'asr' queue, transcribes audio,
-    updates segments, and marks job complete.
-    
-    NOTE: Stage 3 (Cropping) is not yet implemented.
-    When cropping is developed, update _finalize_job to queue cropping stage.
+    updates segments, and queues cropping stage.
     """
     
     queue_name = "asr"
@@ -85,26 +84,36 @@ class ASRWorker(BaseWorker):
                 )
             await session.commit()
         
-        # Finalize job (mark complete or queue next stage)
-        await self._finalize_job(job_id)
+        # Finalize job and queue cropping stage
+        await self._finalize_job_and_queue_cropping(job_id)
         
         return {"segments_processed": len(results)}
     
-    async def _finalize_job(self, job_id: UUID):
+    async def _finalize_job_and_queue_cropping(self, job_id: UUID):
         """
-        Finalize job after ASR.
+        Finalize ASR stage and queue cropping stage.
         
-        Currently marks job as READY_FOR_ANNOTATION since Stage 3 (Cropping)
-        is not yet implemented. When cropping is developed, update this to
-        queue the cropping stage instead.
+        Updates job to ASR_COMPLETED and queues cropping job.
         """
-        logger.info(f"ASR complete for job {job_id}. Marking as READY_FOR_ANNOTATION.")
-        logger.info("NOTE: Stage 3 (Cropping) not implemented yet.")
+        logger.info(f"ASR complete for job {job_id}. Queuing cropping stage.")
         
         async with async_session() as session:
+            # Update job status to ASR_COMPLETED
             await job_service.update_status(
                 session,
                 str(job_id),
-                JobStatus.READY_FOR_ANNOTATION
+                JobStatus.ASR_COMPLETED
             )
+            
+            # Queue cropping job
+            await queue_service.enqueue(
+                queue_name="cropping",
+                payload={"job_id": str(job_id)},
+                db=session,
+                priority=0,
+                max_attempts=3
+            )
+            
             await session.commit()
+            
+            logger.info(f"Cropping stage queued for job {job_id}")
