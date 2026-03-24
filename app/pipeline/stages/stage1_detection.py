@@ -1,7 +1,8 @@
-"""JBI (Juru Bahasa Isyarat) detection service wrapper.
+"""
+Stage 1: JBI Detection Pipeline
 
-Wraps the existing DetectorService to provide segment-based detection
-for the pipeline worker.
+Pure ML processing - no database access, no HTTP concerns.
+Runs YOLOv8 detection and merges contiguous segments.
 """
 
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from app.core.exceptions import ProcessingError
-from app.services.detector import get_detector, DetectionResult
+from app.pipeline.models.detector import get_detector, DetectionResult
 
 
 @dataclass
