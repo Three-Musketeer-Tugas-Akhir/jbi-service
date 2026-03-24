@@ -22,6 +22,8 @@ from app.pipeline.stages.stage3_cropping import (
     TimestampBasedCropper,
     CroppingInput,
     CroppingResult,
+    SegmentProgressCallback,
+    BatchProgressCallback,
 )
 
 __all__ = [
@@ -38,4 +40,6 @@ __all__ = [
     "TimestampBasedCropper",
     "CroppingInput",
     "CroppingResult",
+    "SegmentProgressCallback",
+    "BatchProgressCallback",
 ]

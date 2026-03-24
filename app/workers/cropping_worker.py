@@ -7,7 +7,7 @@ JBI Buffer Formula: jbi_start = max(0, asr_start - 2), jbi_end = min(duration, a
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from app.db.models.pipeline import JobStatus, PipelineSegment
@@ -59,7 +59,7 @@ class CroppingWorker(BaseWorker):
         if not job_id:
             raise ValueError("Missing job_id in payload")
         
-        logger.info(f"Starting cropping stage for job {job_id}")
+        logger.info("Starting cropping stage for job %s", job_id)
         
         async with async_session() as session:
             job_repo = JobRepository(session)
@@ -73,7 +73,8 @@ class CroppingWorker(BaseWorker):
             
             if job.status != JobStatus.ASR_COMPLETED:
                 logger.warning(
-                    f"Job {job_id} has status {job.status}, expected ASR_COMPLETED"
+                    "Job %s has status %s, expected ASR_COMPLETED",
+                    job_id, job.status
                 )
             
             # Get all segments with ASR data
@@ -86,11 +87,11 @@ class CroppingWorker(BaseWorker):
             ]
             
             if not segments_to_crop:
-                logger.warning(f"No segments with ASR data found for job {job_id}")
+                logger.warning("No segments with ASR data found for job %s", job_id)
                 return await self._finalize_job_no_segments(session, job_repo, job)
             
             logger.info(
-                f"Processing {len(segments_to_crop)} segments for cropping"
+                "Processing %d segments for cropping", len(segments_to_crop)
             )
             
             # Update job status
@@ -114,7 +115,8 @@ class CroppingWorker(BaseWorker):
             if failure_count == 0:
                 await job_repo.update_status(UUID(job_id), JobStatus.READY_FOR_ANNOTATION)
                 logger.info(
-                    f"Job {job_id} cropping complete: {success_count}/{len(results)} segments"
+                    "Job %s cropping complete: %d/%d segments",
+                    job_id, success_count, len(results)
                 )
             else:
                 await job_repo.update_status(
@@ -123,7 +125,8 @@ class CroppingWorker(BaseWorker):
                     error_message=f"Cropping failed for {failure_count} segments"
                 )
                 logger.error(
-                    f"Job {job_id} cropping failed: {failure_count}/{len(results)} segments failed"
+                    "Job %s cropping failed: %d/%d segments failed",
+                    job_id, failure_count, len(results)
                 )
             
             await session.commit()
@@ -163,21 +166,21 @@ class CroppingWorker(BaseWorker):
             List of CroppingResult
         """
         results: List[CroppingResult] = []
+        segment_updates: List[tuple[UUID, CroppingResult]] = []
         
         # Create output directory for this job
         output_dir = self.storage.get_stage2_output_dir(job_id)
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         
+        # Process all segments first (I/O operations)
         for i, segment in enumerate(segments):
-            logger.debug(
-                f"Processing segment {segment.id} ({i+1}/{len(segments)})"
-            )
+            logger.debug("Processing segment %s (%d/%d)", segment.id, i + 1, len(segments))
             
             # Check if Stage 1 video exists
             stage1_path = segment.cropped_video_path
             if not stage1_path or not Path(stage1_path).exists():
-                logger.error(f"Stage 1 video not found: {stage1_path}")
-                results.append(CroppingResult(
+                logger.error("Stage 1 video not found: %s", stage1_path)
+                result = CroppingResult(
                     segment_id=str(segment.id),
                     success=False,
                     stage2_video_path=None,
@@ -185,7 +188,9 @@ class CroppingWorker(BaseWorker):
                     jbi_end=0.0,
                     transcript=segment.asr_text or "",
                     error=f"Stage 1 video not found: {stage1_path}"
-                ))
+                )
+                results.append(result)
+                segment_updates.append((segment.id, result))
                 continue
             
             # Create cropping input
@@ -204,37 +209,56 @@ class CroppingWorker(BaseWorker):
             )
             
             results.append(result)
-            
-            # Update segment in database
-            async with async_session() as session:
-                segment_repo = SegmentRepository(session)
-                db_segment = await session.get(PipelineSegment, segment.id)
-                
-                if result.success:
-                    db_segment.stage2_video_path = result.stage2_video_path
-                    db_segment.jbi_start = result.jbi_start
-                    db_segment.jbi_end = result.jbi_end
-                    db_segment.status = "cropped"
-                else:
-                    db_segment.status = "cropping_failed"
-                    # Note: error_message field doesn't exist on PipelineSegment
-                    # Storing error in logs instead
-                    logger.error(f"Segment {segment.id} cropping failed: {result.error}")
-                
-                await session.commit()
+            segment_updates.append((segment.id, result))
             
             if result.success:
                 logger.info(
-                    f"Segment {segment.id} cropped: "
-                    f"JBI [{result.jbi_start:.2f} -> {result.jbi_end:.2f}] -> "
-                    f"{result.stage2_video_path}"
+                    "Segment %s cropped: JBI [%.2f -> %.2f] -> %s",
+                    segment.id, result.jbi_start, result.jbi_end, result.stage2_video_path
                 )
             else:
-                logger.error(
-                    f"Segment {segment.id} cropping failed: {result.error}"
-                )
+                logger.error("Segment %s cropping failed: %s", segment.id, result.error)
+        
+        # Batch update all segments in a single database transaction
+        await self._batch_update_segments(segment_updates)
         
         return results
+    
+    async def _batch_update_segments(
+        self,
+        updates: List[tuple[UUID, CroppingResult]]
+    ) -> None:
+        """
+        Batch update segments in a single database transaction.
+        
+        Args:
+            updates: List of (segment_id, result) tuples
+        """
+        if not updates:
+            return
+        
+        async with async_session() as session:
+            try:
+                for segment_id, result in updates:
+                    db_segment = await session.get(PipelineSegment, segment_id)
+                    if db_segment is None:
+                        logger.warning("Segment %s not found for update", segment_id)
+                        continue
+                    
+                    if result.success:
+                        db_segment.stage2_video_path = result.stage2_video_path
+                        db_segment.jbi_start = result.jbi_start
+                        db_segment.jbi_end = result.jbi_end
+                        db_segment.status = "cropped"
+                    else:
+                        db_segment.status = "cropping_failed"
+                
+                await session.commit()
+                logger.debug("Batch updated %d segments", len(updates))
+            except Exception as e:
+                await session.rollback()
+                logger.error("Failed to batch update segments: %s", e)
+                raise
     
     async def _finalize_job_no_segments(
         self,

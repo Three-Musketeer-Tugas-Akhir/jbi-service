@@ -42,7 +42,7 @@ class ASRWorker(BaseWorker):
         """
         job_id = UUID(payload["job_id"])
         
-        logger.info(f"Processing ASR job: {job_id}")
+        logger.info("Processing ASR job: %s", job_id)
         
         # Get job details
         async with async_session() as session:
@@ -66,7 +66,7 @@ class ASRWorker(BaseWorker):
         # Run ASR (pure ML)
         results = await run_asr(
             segments=asr_inputs,
-            progress_callback=lambda c, t: logger.info(f"ASR progress: {c}/{t}")
+            progress_callback=lambda c, t: logger.info("ASR progress: %d/%d", c, t)
         )
         
         # Update segments with ASR data
@@ -94,8 +94,9 @@ class ASRWorker(BaseWorker):
         Finalize ASR stage and queue cropping stage.
         
         Updates job to ASR_COMPLETED and queues cropping job.
+        If queuing fails, job remains in ASR_COMPLETED state with error logged.
         """
-        logger.info(f"ASR complete for job {job_id}. Queuing cropping stage.")
+        logger.info("ASR complete for job %s. Queuing cropping stage.", job_id)
         
         async with async_session() as session:
             # Update job status to ASR_COMPLETED
@@ -104,16 +105,35 @@ class ASRWorker(BaseWorker):
                 str(job_id),
                 JobStatus.ASR_COMPLETED
             )
-            
-            # Queue cropping job
-            await queue_service.enqueue(
-                queue_name="cropping",
-                payload={"job_id": str(job_id)},
-                db=session,
-                priority=0,
-                max_attempts=3
-            )
-            
             await session.commit()
             
-            logger.info(f"Cropping stage queued for job {job_id}")
+            # Queue cropping job (outside transaction to avoid locking issues)
+            try:
+                cropping_job = await queue_service.enqueue(
+                    queue_name="cropping",
+                    payload={"job_id": str(job_id)},
+                    db=None,  # Use new session
+                    priority=0,
+                    max_attempts=3
+                )
+                logger.info(
+                    "Cropping stage queued for job %s (queue_job_id: %s)",
+                    job_id, cropping_job.id
+                )
+            except Exception as e:
+                # Log critical error - job is in ASR_COMPLETED but cropping not queued
+                logger.error(
+                    "CRITICAL: Failed to queue cropping stage for job %s: %s",
+                    job_id, e,
+                    exc_info=True
+                )
+                # Update job with error note
+                await job_service.update_status(
+                    session,
+                    str(job_id),
+                    JobStatus.ASR_COMPLETED,
+                    error_message=f"ASR complete but cropping queue failed: {e}"
+                )
+                await session.commit()
+                # Re-raise to trigger worker retry
+                raise

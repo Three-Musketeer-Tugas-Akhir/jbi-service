@@ -5,36 +5,73 @@ Re-crops Stage 1 videos using ASR timestamps with JBI buffer.
 Formula: jbi_start = max(0, asr_start - 2), jbi_end = min(duration, asr_end + 2)
 """
 
-import asyncio
 import logging
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import List, Optional, Protocol
 
 from app.pipeline.utils.video import get_video_duration, run_ffmpeg_crop
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+# Type aliases for callback functions
+class SegmentProgressCallback(Protocol):
+    """Callback type for segment progress updates.
+    
+    Args:
+        segment_id: Unique segment identifier
+        progress: Progress value from 0.0 to 1.0
+    """
+    def __call__(self, segment_id: str, progress: float) -> None: ...
+
+
+class BatchProgressCallback(Protocol):
+    """Callback type for batch progress updates.
+    
+    Args:
+        completed: Number of completed items
+        total: Total number of items
+    """
+    def __call__(self, completed: int, total: int) -> None: ...
+
+
+@dataclass(frozen=True)
 class CroppingInput:
-    """Input for Stage 2 cropping - combines Stage 1 video with ASR timestamps."""
-    segment_id: str  # Unique segment identifier
-    stage1_video_path: str  # Path to Stage 1 cropped video (bbox-based)
-    asr_start: float  # ASR segment start time (seconds)
-    asr_end: float  # ASR segment end time (seconds)
-    transcript: str  # ASR transcript text
+    """Input for Stage 2 cropping - combines Stage 1 video with ASR timestamps.
+    
+    Attributes:
+        segment_id: Unique segment identifier (UUID as string)
+        stage1_video_path: Path to Stage 1 cropped video (bbox-based)
+        asr_start: ASR segment start time in seconds (relative to Stage 1 video)
+        asr_end: ASR segment end time in seconds (relative to Stage 1 video)
+        transcript: ASR transcript text for this segment
+    """
+    segment_id: str
+    stage1_video_path: str
+    asr_start: float
+    asr_end: float
+    transcript: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class CroppingResult:
-    """Result of Stage 2 cropping."""
+    """Result of Stage 2 cropping operation.
+    
+    Attributes:
+        segment_id: Unique segment identifier
+        success: True if cropping succeeded
+        stage2_video_path: Path to output video (None if failed)
+        jbi_start: Final JBI start time with buffer applied
+        jbi_end: Final JBI end time with buffer applied
+        transcript: Transcript text from input
+        error: Error message if success is False
+    """
     segment_id: str
     success: bool
-    stage2_video_path: Optional[str]  # Path to output video
-    jbi_start: float  # Final JBI start time (with buffer)
-    jbi_end: float  # Final JBI end time (with buffer)
+    stage2_video_path: Optional[str]
+    jbi_start: float
+    jbi_end: float
     transcript: str
     error: Optional[str] = None
 
@@ -46,13 +83,17 @@ class TimestampBasedCropper:
     JBI Buffer Formula (FR6a):
     - jbi_start = max(0, asr_start - 2)
     - jbi_end = min(video_duration, asr_end + 2)
+    
+    Attributes:
+        BUFFER_SECONDS: Seconds to add before/after ASR timestamps (default: 2.0)
+        MIN_CLIP_DURATION: Minimum clip duration in seconds (default: 1.0)
     """
     
-    BUFFER_SECONDS = 2.0
-    MIN_CLIP_DURATION = 1.0  # Minimum 1 second clip
+    #: Seconds of buffer to add before ASR start and after ASR end
+    BUFFER_SECONDS: float = 2.0
     
-    def __init__(self):
-        self._temp_dir: Optional[tempfile.TemporaryDirectory] = None
+    #: Minimum duration for output clips (prevents sub-second clips)
+    MIN_CLIP_DURATION: float = 1.0
     
     def calculate_jbi_timestamps(
         self,
@@ -81,8 +122,8 @@ class TimestampBasedCropper:
         # Ensure minimum duration
         if jbi_end - jbi_start < self.MIN_CLIP_DURATION:
             logger.warning(
-                f"JBI duration {jbi_end - jbi_start:.2f}s is below minimum, "
-                f"clamping to {self.MIN_CLIP_DURATION}s"
+                "JBI duration %.2fs is below minimum, clamping to %.2fs",
+                jbi_end - jbi_start, self.MIN_CLIP_DURATION
             )
             jbi_end = min(video_duration, jbi_start + self.MIN_CLIP_DURATION)
         
@@ -92,7 +133,7 @@ class TimestampBasedCropper:
         self,
         input_data: CroppingInput,
         output_dir: str,
-        progress_callback: Optional[Callable[[str, float], None]] = None
+        progress_callback: Optional[SegmentProgressCallback] = None
     ) -> CroppingResult:
         """
         Crop a single segment using ASR timestamps with JBI buffer.
@@ -111,12 +152,16 @@ class TimestampBasedCropper:
             if progress_callback:
                 progress_callback(segment_id, 0.1)
             
-            # Validate input video exists
+            # Validate input video exists (with race condition handling)
             stage1_path = Path(input_data.stage1_video_path)
             if not stage1_path.exists():
                 raise FileNotFoundError(
                     f"Stage 1 video not found: {input_data.stage1_video_path}"
                 )
+            
+            # Also check readability
+            if not stage1_path.is_file():
+                raise ValueError(f"Path is not a file: {input_data.stage1_video_path}")
             
             # Get video duration
             video_duration = await get_video_duration(str(stage1_path))
@@ -132,8 +177,9 @@ class TimestampBasedCropper:
             )
             
             logger.info(
-                f"Segment {segment_id}: ASR [{input_data.asr_start:.2f} -> "
-                f"{input_data.asr_end:.2f}] -> JBI [{jbi_start:.2f} -> {jbi_end:.2f}]"
+                "Segment %s: ASR [%.2f -> %.2f] -> JBI [%.2f -> %.2f]",
+                segment_id, input_data.asr_start, input_data.asr_end,
+                jbi_start, jbi_end
             )
             
             # Validate timestamps
@@ -180,7 +226,7 @@ class TimestampBasedCropper:
             )
             
         except Exception as e:
-            logger.error(f"Failed to crop segment {segment_id}: {e}")
+            logger.error("Failed to crop segment %s: %s", segment_id, e)
             return CroppingResult(
                 segment_id=segment_id,
                 success=False,
@@ -195,7 +241,7 @@ class TimestampBasedCropper:
 async def run_cropping(
     inputs: List[CroppingInput],
     output_dir: str,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[BatchProgressCallback] = None
 ) -> List[CroppingResult]:
     """
     Run Stage 2 cropping on multiple segments.
@@ -212,7 +258,7 @@ async def run_cropping(
     results: List[CroppingResult] = []
     
     total = len(inputs)
-    logger.info(f"Starting Stage 2 cropping for {total} segments")
+    logger.info("Starting Stage 2 cropping for %d segments", total)
     
     for i, inp in enumerate(inputs):
         result = await cropper.crop_segment(inp, output_dir)
@@ -224,7 +270,7 @@ async def run_cropping(
     # Log summary
     success_count = sum(1 for r in results if r.success)
     logger.info(
-        f"Stage 2 cropping complete: {success_count}/{total} successful"
+        "Stage 2 cropping complete: %d/%d successful", success_count, total
     )
     
     return results
