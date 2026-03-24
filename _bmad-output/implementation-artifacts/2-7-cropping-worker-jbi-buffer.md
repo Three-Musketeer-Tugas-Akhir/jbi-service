@@ -2,6 +2,7 @@
 story_id: "2.7"
 story_key: "2-7-cropping-worker-jbi-buffer"
 epic: 2
+title: "Cropping Worker - JBI Buffer"
 status: ready-for-dev
 created: "2026-03-25"
 last_updated: "2026-03-25"
@@ -29,750 +30,497 @@ last_updated: "2026-03-25"
 
 ### User Story
 
-As a video processing pipeline,  
-I need a cropping worker that takes segments with JBI buffer applied and produces cropped video files,  
-So that annotators can review individual JBI segments with precise timing and bounding box cropping.
+As a system,  
+I want to re-crop segments based on ASR timestamps with JBI buffer,  
+So that final clips include full sign language context.
 
 ### Business Context
 
-This story implements the third and final stage of the video processing pipeline - the Cropping Worker. After the Detection Worker identifies JBI regions and the ASR Worker transcribes audio, the Cropping Worker produces the final cropped video segments that annotators will review.
+This story implements **Stage 2 cropping** - the third and final stage of the video processing pipeline. After the Detection Worker identifies JBI regions (Stage 1 cropping based on bounding boxes) and the ASR Worker transcribes audio with timestamps, the Cropping Worker performs **timestamp-based re-cropping** with a configurable JBI buffer.
 
-The Cropping Worker applies a configurable JBI buffer (default 0.5s before/after) to the ASR timestamps, then crops the video based on the bounding box data from detection. This creates focused, high-quality video clips containing only the JBI (sign language interpreter) with synchronized audio.
+The JBI buffer ensures sign language context is preserved by extending the clip 2 seconds before the ASR start and 2 seconds after the ASR end. This captures the full sign language expression that may extend beyond spoken words.
 
 Key responsibilities:
-- Apply temporal buffer around ASR timestamps for context
-- Apply spatial cropping based on detected bounding boxes
-- Maintain aspect ratio and preserve audio quality
-- Upload final segments to MinIO for annotation access
+- Calculate JBI time range from ASR timestamps with ±2s buffer
+- Re-crop video segments from Stage 1 cropped clips
+- Upload final Stage 2 cropped clips to MinIO
+- Mark job as READY_FOR_ANNOTATION when complete
 
 ### Acceptance Criteria
 
-**Given** a job has completed ASR processing  
+**Given** ASR transcription is complete for all segments  
 **When** the CroppingWorker picks up the job  
-**Then** the worker downloads the original video from MinIO  
-**And** applies JBI buffer (default 0.5s) to ASR start/end times  
-**And** crops video based on bbox_data from detection  
-**And** maintains aspect ratio and preserves audio  
-**And** uploads cropped segments to `jobs/{job_id}/final/segment_{index}.mp4`
+**Then** for each segment, calculate JBI time range:
+  - jbi_start = max(0, asr_start - 2)
+  - jbi_end = min(video_duration, asr_end + 2)
 
-**Given** JBI buffer configuration is specified  
+**Given** JBI time ranges are calculated  
+**When** re-cropping is performed  
+**Then** FFmpeg extracts the exact time range from original cropped clip  
+**And** final cropped clips are uploaded to MinIO  
+**And** jbi_start and jbi_end are saved to pipeline_segments
+
+**Given** all segments are processed  
+**When** cropping is complete  
+**Then** job status is updated to "READY_FOR_ANNOTATION"  
+**And** annotation queue entry is created for annotators
+
+**Given** a segment's calculated duration is < 3 seconds  
 **When** cropping is performed  
-**Then** the configured buffer is applied (buffer_before, buffer_after)  
-**And** buffer values can be different for start and end  
-**And** buffer respects video boundaries (no negative times)
+**Then** adjacent segments may be merged (configurable)  
+**And** warning is logged for very short segments
 
-**Given** cropping completes successfully  
-**When** results are saved  
-**Then** each segment's `cropped_video_path` is updated  
-**And** `jbi_start` and `jbi_end` are set (buffer-adjusted timestamps)  
-**And** job status is updated to "READY_FOR_ANNOTATION"  
-**And** segment status is updated to "CROPPED"
-
-**Given** a segment has no ASR results  
-**When** cropping is attempted  
-**Then** the segment is skipped with a warning  
-**And** processing continues for other segments
-
-**Given** video cropping fails for a segment  
+**Given** FFmpeg fails to crop a segment  
 **When** error occurs  
-**Then** error is logged and segment is marked as failed  
-**And** retry logic attempts reprocessing (max 3 attempts)  
-**And** after max retries, job status is FAILED
-
-**Given** output codec is unsupported  
-**When** encoding fails  
-**Then** error is classified as permanent (no retry)  
-**And** job status is FAILED with "Codec not supported"
+**Then** the specific segment is marked as failed  
+**And** other segments continue processing  
+**And** job partially completes with error details
 
 ---
 
 ## Developer Context
 
-### Architecture Compliance
+### Architecture Alignment
 
-**MUST FOLLOW - Architecture Decisions:**
+This story follows the **4-layer architecture** established in the refactoring:
 
-1. **4-Layer Architecture**
-   - **API Layer**: (Not applicable - background worker)
-   - **Worker Layer**: `app/workers/cropping_worker.py` - Queue consumer extending BaseWorker
-   - **Repository Layer**: `SegmentRepository` (from Story 2.5)
-   - **Pipeline Layer**: `app/pipeline/stages/stage3_cropping.py` - Pure ML/video processing
+```
+app/pipeline/stages/stage2_cropping.py  (Pure ML processing)
+app/workers/cropping_worker.py          (Queue consumer)
+app/services/job_service.py             (Business logic)
+app/api/v1/jobs.py                      (HTTP endpoints)
+```
 
-2. **Worker Pattern**
-   - Extends `BaseWorker` abstract class
-   - Sets `queue_name = "cropping"`
-   - Implements `process()` method
-   - Uses automatic retry logic from BaseWorker
-
-3. **Database Naming**
-   - Table: `pipeline_segments` stores cropped paths
-   - Fields: `cropped_video_path`, `jbi_start`, `jbi_end`, `status`
-   - Status transitions: CROPPING → READY_FOR_ANNOTATION (or FAILED)
-
-4. **State Machine**
-   - Input state: `CROPPING` (set by ASR Worker after update)
-   - Processing state: `CROPPING`
-   - Output states: `READY_FOR_ANNOTATION` (success) or `FAILED` (error)
-
-5. **Storage Patterns**
-   - Downloads from: `jobs/{job_id}/original/{filename}` (MinIO)
-   - Uploads to: `jobs/{job_id}/final/segment_{index}.mp4`
-   - Stage 1 segments remain (for reference)
-
-6. **Queue Integration**
-   - Polls: `cropping` queue
-   - On success: marks queue job completed
-   - On failure: triggers retry via BaseWorker
+**Key Pattern:** The CroppingWorker extends `BaseWorker` and calls `run_stage2_cropping()` from the pipeline layer. This maintains clean separation between ML processing and business orchestration.
 
 ### Technical Requirements
 
-**Cropping Configuration:**
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| buffer_before | 0.5 | Seconds to extend before ASR start time |
-| buffer_after | 0.5 | Seconds to extend after ASR end time |
-| output_codec | "libx264" | Video codec for output |
-| output_format | "mp4" | Output container format |
-| video_quality | "high" | Quality preset (high/medium/low) |
-| maintain_aspect | true | Whether to pad or crop to maintain aspect |
-| audio_codec | "aac" | Audio codec for output |
-| audio_bitrate | "128k" | Audio bitrate |
+1. **JBI Buffer Calculation:**
+   ```python
+   jbi_start = max(0, asr_start - JBI_BUFFER_SECONDS)
+   jbi_end = min(video_duration, asr_end + JBI_BUFFER_SECONDS)
+   ```
+   Default JBI_BUFFER_SECONDS = 2.0 (configurable)
 
-**JBI Buffer Calculation:**
-```python
-# Calculate buffered timestamps
-jbi_start = max(0, asr_start - buffer_before)
-jbi_end = min(video_duration, asr_end + buffer_after)
+2. **Segment Schema:**
+   ```python
+   {
+     "segment_index": int,
+     "asr_start": float,      # From ASR stage
+     "asr_end": float,        # From ASR stage
+     "jbi_start": float,      # Calculated: max(0, asr_start - 2)
+     "jbi_end": float,        # Calculated: min(duration, asr_end + 2)
+     "stage1_video_path": str,  # Source video (bbox cropped)
+     "stage2_video_path": str,  # Output video (timestamp cropped)
+   }
+   ```
 
-# Ensure minimum duration
-if (jbi_end - jbi_start) < 1.0:
-    jbi_end = jbi_start + 1.0  # Minimum 1 second clip
-```
+3. **Worker Loop Pattern:**
+   ```python
+   class CroppingWorker(BaseWorker):
+       queue_name = "cropping"
+       max_retries = 2
+       
+       async def process(self, payload: dict) -> dict:
+           # 1. Get segments with ASR data from DB
+           # 2. For each segment:
+           #    - Calculate JBI time range
+           #    - Re-crop from Stage 1 video using FFmpeg
+           #    - Upload Stage 2 video to MinIO
+           #    - Update segment record with jbi_start, jbi_end, stage2_video_path
+           # 3. Update job status to READY_FOR_ANNOTATION
+   ```
 
-**Segment Schema (Final Output):**
-```python
-{
-    "segment_index": 0,
-    "jbi_start": 12.0,  # Buffered start time (seconds)
-    "jbi_end": 19.3,    # Buffered end time (seconds)
-    "bbox_data": {       # From detection stage
-        "x": 120.5,
-        "y": 80.0,
-        "width": 200.0,
-        "height": 150.0
-    },
-    "cropped_video_path": "jobs/{job_id}/final/segment_0.mp4",
-    "status": "CROPPED"
-}
-```
+4. **Error Handling:**
+   - **Permanent errors:** Invalid video codec, corrupt files (no retry)
+   - **Retryable errors:** GPU OOM, network timeout (max 2 retries)
+   - **Partial failure:** Individual segment failures don't fail entire job
 
-**Worker Loop (BaseWorker Pattern):**
-```python
-class CroppingWorker(BaseWorker):
-    queue_name = "cropping"
-    
-    async def process(self, payload: dict) -> dict:
-        job_id = UUID(payload["job_id"])
-        
-        # 1. Get job and segments from DB
-        segments = await segment_repo.get_by_job_id(job_id)
-        
-        # 2. Download original video
-        video_data = await minio_service.download_file(job.video_path)
-        video_path = save_temp(video_data)
-        
-        # 3. Process each segment
-        for segment in segments:
-            # Apply JBI buffer to timestamps
-            # Crop video using bbox_data
-            # Upload to MinIO
-            # Update segment record
-        
-        # 4. Update job status
-        await job_repo.update_status(job_id, "READY_FOR_ANNOTATION")
-        
-        return {"segments_cropped": len(segments)}
-```
+### Files to Create/Modify
 
-**Error Handling:**
-| Error Type | Action | Retry |
-|------------|--------|-------|
-| Video download fails | Log, mark failed | Yes |
-| Segment has no ASR data | Log warning, skip | No |
-| Video codec error | Log, mark failed | No (permanent) |
-| FFmpeg/MoviePy failure | Log, mark failed | Yes |
-| MinIO upload fails | Log, mark failed | Yes |
-| Disk space error | Log, mark failed | No |
+**NEW Files:**
+- `app/pipeline/stages/stage2_cropping.py` - Stage 2 cropping logic (timestamp-based)
+- `app/workers/cropping_worker.py` - Queue consumer for cropping stage
+
+**MODIFY Files:**
+- `app/workers/asr_worker.py` - Add queueing of cropping stage after ASR
+- `app/services/job_service.py` - Add methods: `get_segments_with_asr()`, `update_segment_cropping()`
+- `app/db/models/pipeline.py` - Ensure PipelineSegment has jbi_start, jbi_end fields
 
 ---
 
 ## Implementation Guide
 
-### Phase 1: Create Cropping Pipeline Stage
+### Phase 1: Create Pipeline Stage (stage2_cropping.py)
 
-#### Step 1.1: Create app/pipeline/stages/stage3_cropping.py
+Create `app/pipeline/stages/stage2_cropping.py`:
 
 ```python
 """
-Stage 3: JBI Video Cropping Pipeline
+Stage 2: Timestamp-based Cropping with JBI Buffer
 
-Applies JBI buffer to ASR timestamps and crops video segments
-based on detected bounding boxes. Pure ML/video processing.
+Re-crops Stage 1 segments based on ASR timestamps with configurable buffer.
+Pure ML processing - no database access, no HTTP concerns.
 """
 
 import logging
-import tempfile
-from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
+from dataclasses import dataclass
 
+from app.core.config import settings
 from app.core.exceptions import ProcessingError
-from app.pipeline.utils.video import crop_video_segment
-from app.pipeline.utils.storage import download_video, upload_video
+from app.pipeline.utils.video import extract_segment
+from app.pipeline.utils.storage import upload_segment
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class CroppingInput:
-    """Input for cropping a single segment."""
-    segment_index: int
-    video_path: str  # Path to original video (local or MinIO)
-    is_local: bool
-    asr_start: float
-    asr_end: float
-    bbox_data: Dict[str, float]  # x, y, width, height
+# Default JBI buffer in seconds (2 seconds before/after ASR timestamps)
+DEFAULT_JBI_BUFFER = 2.0
 
 
 @dataclass
-class CroppingResult:
-    """Result from cropping a single segment."""
+class Stage2Input:
+    """Input for Stage 2 cropping."""
     segment_index: int
+    stage1_video_path: str  # Source: Stage 1 bbox-cropped video
+    asr_start: float        # ASR transcript start time
+    asr_end: float          # ASR transcript end time
+    video_duration: float   # Total video duration for bounds checking
+
+
+@dataclass
+class Stage2Result:
+    """Result from Stage 2 cropping."""
+    segment_index: int
+    jbi_start: float        # Calculated: max(0, asr_start - buffer)
+    jbi_end: float          # Calculated: min(duration, asr_end + buffer)
+    stage2_video_path: str  # Path to re-cropped video
+    duration: float         # Final clip duration
     success: bool
-    jbi_start: float  # Buffered start time
-    jbi_end: float    # Buffered end time
-    output_path: Optional[str]  # MinIO path
     error_message: Optional[str] = None
 
 
-# Default configuration
-DEFAULT_BUFFER_BEFORE = 0.5  # seconds
-DEFAULT_BUFFER_AFTER = 0.5   # seconds
-MIN_SEGMENT_DURATION = 1.0   # seconds
-
-
-async def run_cropping(
-    job_id: str,
-    segments: List[CroppingInput],
-    buffer_before: float = DEFAULT_BUFFER_BEFORE,
-    buffer_after: float = DEFAULT_BUFFER_AFTER,
-    progress_callback=None
-) -> List[CroppingResult]:
+def calculate_jbi_range(
+    asr_start: float,
+    asr_end: float,
+    video_duration: float,
+    buffer_seconds: float = DEFAULT_JBI_BUFFER
+) -> tuple[float, float]:
     """
-    Run cropping stage on all segments.
+    Calculate JBI time range with buffer.
+    
+    Formula per FR6a:
+    - jbi_start = max(0, asr_start - buffer)
+    - jbi_end = min(video_duration, asr_end + buffer)
     
     Args:
-        job_id: The pipeline job ID
-        segments: List of segments to crop
-        buffer_before: Seconds to add before ASR start
-        buffer_after: Seconds to add after ASR end
+        asr_start: ASR transcript start time in seconds
+        asr_end: ASR transcript end time in seconds
+        video_duration: Total video duration in seconds
+        buffer_seconds: JBI buffer before/after (default 2.0s)
+        
+    Returns:
+        Tuple of (jbi_start, jbi_end)
+    """
+    jbi_start = max(0.0, asr_start - buffer_seconds)
+    jbi_end = min(video_duration, asr_end + buffer_seconds)
+    
+    # Ensure minimum duration of 1 second
+    if jbi_end - jbi_start < 1.0:
+        jbi_end = min(video_duration, jbi_start + 1.0)
+    
+    return jbi_start, jbi_end
+
+
+async def run_stage2_cropping(
+    segments: List[Stage2Input],
+    output_prefix: str,
+    buffer_seconds: float = DEFAULT_JBI_BUFFER,
+    progress_callback=None
+) -> List[Stage2Result]:
+    """
+    Run Stage 2 cropping on all segments.
+    
+    Args:
+        segments: List of Stage 2 inputs with ASR timestamps
+        output_prefix: Prefix for output file paths (e.g., "jobs/{job_id}/")
+        buffer_seconds: JBI buffer to apply (default 2.0s)
         progress_callback: Optional callback(current, total)
         
     Returns:
-        List of CroppingResult
+        List of Stage 2 results with jbi_start, jbi_end, and output paths
         
     Raises:
         ProcessingError: If cropping fails critically
     """
     results = []
-    temp_files = []
-    original_video_path = None
     
-    try:
-        # Get first segment's video (all segments from same video)
-        if not segments:
-            return results
-        
-        first_segment = segments[0]
-        
-        # Download original video
-        if first_segment.is_local:
-            original_video_path = Path(first_segment.video_path)
-        else:
-            video_data = await download_video(first_segment.video_path)
-            original_video_path = _save_temp_video(video_data, "original")
-            temp_files.append(original_video_path)
-        
-        # Process each segment
-        for idx, segment_input in enumerate(segments):
-            try:
-                result = await _process_single_segment(
-                    job_id=job_id,
-                    segment_input=segment_input,
-                    original_video_path=original_video_path,
-                    buffer_before=buffer_before,
-                    buffer_after=buffer_after
-                )
-                results.append(result)
+    for idx, segment in enumerate(segments):
+        try:
+            result = await _process_single_segment(
+                segment=segment,
+                output_prefix=output_prefix,
+                buffer_seconds=buffer_seconds
+            )
+            results.append(result)
+            
+            if progress_callback:
+                progress_callback(idx + 1, len(segments))
                 
-                if progress_callback:
-                    progress_callback(idx + 1, len(segments))
-                    
-            except Exception as e:
-                logger.error(f"Failed to crop segment {segment_input.segment_index}: {e}")
-                results.append(CroppingResult(
-                    segment_index=segment_input.segment_index,
-                    success=False,
-                    jbi_start=0.0,
-                    jbi_end=0.0,
-                    output_path=None,
-                    error_message=str(e)
-                ))
-        
-        return results
-        
-    finally:
-        # Cleanup temp files
-        for temp_file in temp_files:
-            if temp_file and temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except OSError as e:
-                    logger.warning(f"Failed to cleanup temp file {temp_file}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to process segment {segment.segment_index}: {e}")
+            results.append(Stage2Result(
+                segment_index=segment.segment_index,
+                jbi_start=0.0,
+                jbi_end=0.0,
+                stage2_video_path="",
+                duration=0.0,
+                success=False,
+                error_message=str(e)
+            ))
+    
+    return results
 
 
 async def _process_single_segment(
-    job_id: str,
-    segment_input: CroppingInput,
-    original_video_path: Path,
-    buffer_before: float,
-    buffer_after: float
-) -> CroppingResult:
+    segment: Stage2Input,
+    output_prefix: str,
+    buffer_seconds: float
+) -> Stage2Result:
     """
-    Process a single segment for cropping.
+    Process a single segment for Stage 2 cropping.
     
     Args:
-        job_id: The pipeline job ID
-        segment_input: Segment input data
-        original_video_path: Path to original video file
-        buffer_before: Buffer before ASR start
-        buffer_after: Buffer after ASR end
+        segment: Stage 2 input with ASR timestamps
+        output_prefix: Output path prefix
+        buffer_seconds: JBI buffer to apply
         
     Returns:
-        CroppingResult
+        Stage 2 result with calculated times and output path
     """
-    segment_index = segment_input.segment_index
-    temp_output_path = None
+    segment_index = segment.segment_index
+    
+    # Calculate JBI time range per FR6a
+    jbi_start, jbi_end = calculate_jbi_range(
+        asr_start=segment.asr_start,
+        asr_end=segment.asr_end,
+        video_duration=segment.video_duration,
+        buffer_seconds=buffer_seconds
+    )
+    
+    duration = jbi_end - jbi_start
+    
+    # Log warning for very short segments (per acceptance criteria)
+    if duration < 3.0:
+        logger.warning(
+            f"Segment {segment_index} has short duration after JBI buffer: "
+            f"{duration:.2f}s (ASR: {segment.asr_start:.2f}-{segment.asr_end:.2f}, "
+            f"JBI: {jbi_start:.2f}-{jbi_end:.2f})"
+        )
     
     try:
-        # Validate ASR data
-        if segment_input.asr_start is None or segment_input.asr_end is None:
-            logger.warning(f"Segment {segment_index} has no ASR data, skipping")
-            return CroppingResult(
-                segment_index=segment_index,
-                success=False,
-                jbi_start=0.0,
-                jbi_end=0.0,
-                output_path=None,
-                error_message="No ASR data available"
-            )
+        # Extract segment using FFmpeg
+        output_filename = f"{output_prefix}/segment_{segment_index:06d}_stage2.mp4"
         
-        # Calculate buffered timestamps
-        jbi_start, jbi_end = _calculate_buffered_times(
-            asr_start=segment_input.asr_start,
-            asr_end=segment_input.asr_end,
-            buffer_before=buffer_before,
-            buffer_after=buffer_after,
-            video_path=original_video_path
-        )
-        
-        logger.info(
-            f"Segment {segment_index}: ASR [{segment_input.asr_start:.2f} - "
-            f"{segment_input.asr_end:.2f}] -> JBI [{jbi_start:.2f} - {jbi_end:.2f}]"
-        )
-        
-        # Create temp output file
-        temp_output_path = Path(tempfile.mktemp(
-            suffix=".mp4",
-            prefix=f"cropped_segment_{segment_index}_"
-        ))
-        
-        # Crop video
-        await crop_video_segment(
-            input_path=original_video_path,
-            output_path=temp_output_path,
+        await extract_segment(
+            input_path=segment.stage1_video_path,
+            output_path=output_filename,
             start_time=jbi_start,
             end_time=jbi_end,
-            bbox=segment_input.bbox_data
+            codec="libx264"
         )
         
         # Upload to MinIO
-        object_name = f"jobs/{job_id}/final/segment_{segment_index}.mp4"
-        await upload_video(temp_output_path, object_name)
+        minio_key = await upload_segment(
+            local_path=output_filename,
+            object_key=f"{output_prefix}/segment_{segment_index:06d}_stage2.mp4"
+        )
         
-        logger.info(f"Segment {segment_index} cropped and uploaded to {object_name}")
+        logger.info(
+            f"Segment {segment_index} Stage 2 cropped: "
+            f"ASR ({segment.asr_start:.2f}-{segment.asr_end:.2f}) → "
+            f"JBI ({jbi_start:.2f}-{jbi_end:.2f}), "
+            f"duration={duration:.2f}s"
+        )
         
-        return CroppingResult(
+        return Stage2Result(
             segment_index=segment_index,
-            success=True,
             jbi_start=jbi_start,
             jbi_end=jbi_end,
-            output_path=object_name
+            stage2_video_path=minio_key,
+            duration=duration,
+            success=True
         )
         
     except Exception as e:
-        logger.error(f"Cropping failed for segment {segment_index}: {e}")
-        raise ProcessingError(f"Cropping failed for segment {segment_index}: {e}")
-        
-    finally:
-        # Cleanup temp output
-        if temp_output_path and temp_output_path.exists():
-            try:
-                temp_output_path.unlink()
-            except OSError:
-                pass
-
-
-def _calculate_buffered_times(
-    asr_start: float,
-    asr_end: float,
-    buffer_before: float,
-    buffer_after: float,
-    video_path: Path
-) -> Tuple[float, float]:
-    """
-    Calculate JBI timestamps with buffer applied.
-    
-    Args:
-        asr_start: ASR start time
-        asr_end: ASR end time
-        buffer_before: Seconds to add before
-        buffer_after: Seconds to add after
-        video_path: Path to video (for duration check)
-        
-    Returns:
-        Tuple of (jbi_start, jbi_end)
-    """
-    import cv2
-    
-    # Get video duration
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise ProcessingError(f"Cannot open video: {video_path}")
-    
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = frame_count / fps if fps > 0 else 0
-    cap.release()
-    
-    # Apply buffer
-    jbi_start = max(0.0, asr_start - buffer_before)
-    jbi_end = min(duration, asr_end + buffer_after)
-    
-    # Ensure minimum duration
-    if (jbi_end - jbi_start) < MIN_SEGMENT_DURATION:
-        jbi_end = jbi_start + MIN_SEGMENT_DURATION
-        if jbi_end > duration:
-            jbi_end = duration
-            jbi_start = max(0.0, jbi_end - MIN_SEGMENT_DURATION)
-    
-    return jbi_start, jbi_end
-
-
-def _save_temp_video(video_data: bytes, prefix: str) -> Path:
-    """Save video data to temporary file."""
-    try:
-        temp_file = tempfile.NamedTemporaryFile(
-            suffix=".mp4",
-            delete=False,
-            prefix=f"{prefix}_"
+        logger.error(f"Stage 2 cropping failed for segment {segment_index}: {e}")
+        return Stage2Result(
+            segment_index=segment_index,
+            jbi_start=jbi_start,
+            jbi_end=jbi_end,
+            stage2_video_path="",
+            duration=0.0,
+            success=False,
+            error_message=str(e)
         )
-        temp_file.write(video_data)
-        temp_file.close()
-        return Path(temp_file.name)
-    except (OSError, IOError) as e:
-        raise ProcessingError(f"Failed to create temp video file: {e}")
-```
-
-#### Step 1.2: Create app/pipeline/utils/video.py (update/add crop_video_segment)
-
-```python
-"""Video processing utilities."""
-
-import logging
-from pathlib import Path
-from typing import Dict, Optional
-
-import ffmpeg
-import moviepy.editor as mp
-
-from app.core.exceptions import ProcessingError
-
-logger = logging.getLogger(__name__)
-
-
-async def crop_video_segment(
-    input_path: Path,
-    output_path: Path,
-    start_time: float,
-    end_time: float,
-    bbox: Optional[Dict[str, float]] = None,
-    output_codec: str = "libx264",
-    audio_codec: str = "aac",
-    video_quality: str = "high"
-) -> Path:
-    """
-    Crop a video segment with optional spatial cropping.
-    
-    Args:
-        input_path: Path to input video
-        output_path: Path for output video
-        start_time: Start time in seconds
-        end_time: End time in seconds
-        bbox: Optional bounding box dict with x, y, width, height
-        output_codec: Video codec (default: libx264)
-        audio_codec: Audio codec (default: aac)
-        video_quality: Quality preset (high/medium/low)
-        
-    Returns:
-        Path to output video
-        
-    Raises:
-        ProcessingError: If cropping fails
-    """
-    duration = end_time - start_time
-    
-    try:
-        if bbox:
-            # Spatial + temporal crop using FFmpeg
-            x, y = int(bbox["x"]), int(bbox["y"])
-            width, height = int(bbox["width"]), int(bbox["height"])
-            
-            # Ensure even dimensions for codec compatibility
-            width = width - (width % 2)
-            height = height - (height % 2)
-            
-            # Build FFmpeg command
-            stream = ffmpeg.input(
-                str(input_path),
-                ss=start_time,
-                t=duration
-            )
-            
-            # Apply crop filter
-            stream = stream.filter("crop", width, height, x, y)
-            
-            # Quality settings
-            crf = {"high": 18, "medium": 23, "low": 28}.get(video_quality, 23)
-            preset = {"high": "slow", "medium": "medium", "low": "fast"}.get(
-                video_quality, "medium"
-            )
-            
-            # Output
-            stream = ffmpeg.output(
-                stream,
-                str(output_path),
-                vcodec=output_codec,
-                acodec=audio_codec,
-                crf=crf,
-                preset=preset,
-                movflags="+faststart",
-                pix_fmt="yuv420p"  # Ensure compatibility
-            )
-            
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
-            
-        else:
-            # Temporal crop only
-            stream = ffmpeg.input(
-                str(input_path),
-                ss=start_time,
-                t=duration
-            )
-            
-            crf = {"high": 18, "medium": 23, "low": 28}.get(video_quality, 23)
-            preset = {"high": "slow", "medium": "medium", "low": "fast"}.get(
-                video_quality, "medium"
-            )
-            
-            stream = ffmpeg.output(
-                stream,
-                str(output_path),
-                vcodec=output_codec,
-                acodec=audio_codec,
-                crf=crf,
-                preset=preset,
-                movflags="+faststart",
-                pix_fmt="yuv420p"
-            )
-            
-            ffmpeg.run(stream, overwrite_output=True, quiet=True)
-        
-        logger.info(f"Video cropped: {input_path} -> {output_path}")
-        return output_path
-        
-    except ffmpeg.Error as e:
-        stderr = e.stderr.decode("utf-8") if e.stderr else str(e)
-        
-        if "codec" in stderr.lower():
-            raise ProcessingError(
-                f"Video codec error: {stderr}",
-                permanent=True
-            )
-        
-        raise ProcessingError(f"Video cropping failed: {stderr}")
-        
-    except Exception as e:
-        raise ProcessingError(f"Video cropping failed: {e}")
-
-
-async def extract_audio(
-    video_path: Path,
-    output_path: Optional[Path] = None
-) -> Path:
-    """Extract audio from video file."""
-    # Existing implementation from stage2_asr
-    pass
 ```
 
 ### Phase 2: Create Cropping Worker
 
-#### Step 2.1: Create app/workers/cropping_worker.py
+Create `app/workers/cropping_worker.py`:
 
 ```python
 """
-Cropping Worker - Stage 3 Queue Consumer
+Cropping Worker - Stage 2 Queue Consumer
 
-Processes cropping jobs from the queue.
-Applies JBI buffer and produces final cropped segments.
+Performs timestamp-based re-cropping with JBI buffer.
 """
 
 import logging
-from typing import Dict, Any
 from uuid import UUID
+from typing import Dict, Any
 
 from app.workers.base import BaseWorker
-from app.pipeline.stages.stage3_cropping import (
-    run_cropping,
-    CroppingInput,
-    CroppingResult
+from app.pipeline.stages.stage2_cropping import (
+    run_stage2_cropping,
+    Stage2Input,
+    calculate_jbi_range,
+    DEFAULT_JBI_BUFFER
 )
 from app.services.job_service import job_service
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class CroppingWorker(BaseWorker):
     """
-    Worker that processes cropping jobs from the queue.
+    Worker that processes Stage 2 cropping jobs from the queue.
     
-    Consumes jobs from 'cropping' queue, applies JBI buffer,
-    crops video segments, uploads to MinIO, and marks job complete.
+    Consumes jobs from 'cropping' queue, calculates JBI time ranges
+    with configurable buffer, re-crops segments from Stage 1 videos,
+    uploads final clips to MinIO, and marks job as READY_FOR_ANNOTATION.
     """
     
     queue_name = "cropping"
-    max_retries = 3
-    
-    # Configuration
-    buffer_before = 0.5  # seconds
-    buffer_after = 0.5   # seconds
+    max_retries = 2  # Lower retries for resource-intensive operations
     
     async def process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Process a cropping job.
+        Process a Stage 2 cropping job.
         
         Args:
             payload: {"job_id": str}
             
         Returns:
-            {"segments_cropped": int, "segments_failed": int}
+            {"segments_processed": int, "segments_failed": int}
         """
         job_id = UUID(payload["job_id"])
         
-        logger.info(f"Processing cropping job: {job_id}")
+        logger.info(f"Processing Stage 2 cropping job: {job_id}")
         
-        # Get job and segments
+        # Get job and segments with ASR data
         async with async_session() as session:
             job = await job_service.get_job(session, str(job_id))
-            segments = await job_service.get_segments(session, str(job_id))
+            segments = await job_service.get_segments_with_asr(session, str(job_id))
             
-            # Update status
+            # Update status to CROPPING
             await job_service.update_status(session, str(job_id), JobStatus.CROPPING)
             await session.commit()
         
-        # Prepare inputs for pipeline stage
-        cropping_inputs = []
+        # Get JBI buffer from config (default 2.0s per FR6a)
+        jbi_buffer = getattr(settings, 'jbi_buffer_seconds', DEFAULT_JBI_BUFFER)
+        
+        # Prepare Stage 2 inputs
+        stage2_inputs = []
         for seg in segments:
-            # Get video path (use original video)
-            video_path = job.video_path
-            is_local = False
+            # Get Stage 1 video path (bbox cropped)
+            stage1_path = seg.get('cropped_video_path') or job.video_path
             
-            cropping_inputs.append(CroppingInput(
-                segment_index=seg.segment_index,
-                video_path=video_path,
-                is_local=is_local,
-                asr_start=seg.asr_start or 0.0,
-                asr_end=seg.asr_end or 0.0,
-                bbox_data=seg.bbox_data or {}
+            # Get video duration for bounds checking
+            video_duration = await self._get_video_duration(stage1_path)
+            
+            stage2_inputs.append(Stage2Input(
+                segment_index=seg['segment_index'],
+                stage1_video_path=stage1_path,
+                asr_start=seg['asr_start'],
+                asr_end=seg['asr_end'],
+                video_duration=video_duration
             ))
         
-        # Run cropping (pure ML/video processing)
-        results = await run_cropping(
-            job_id=str(job_id),
-            segments=cropping_inputs,
-            buffer_before=self.buffer_before,
-            buffer_after=self.buffer_after,
-            progress_callback=lambda c, t: logger.info(f"Cropping progress: {c}/{t}")
+        # Run Stage 2 cropping (pure ML)
+        output_prefix = f"jobs/{job_id}/stage2"
+        results = await run_stage2_cropping(
+            segments=stage2_inputs,
+            output_prefix=output_prefix,
+            buffer_seconds=jbi_buffer,
+            progress_callback=lambda c, t: logger.info(f"Stage 2 progress: {c}/{t}")
         )
         
-        # Update segments with cropping data
+        # Update segments with JBI data and Stage 2 paths
         async with async_session() as session:
-            success_count = 0
-            failed_count = 0
+            successful = 0
+            failed = 0
             
             for result in results:
                 if result.success:
-                    await job_service.update_segment_cropping(
+                    await job_service.update_segment_stage2(
                         session,
-                        segment_index=result.segment_index,
                         job_id=str(job_id),
+                        segment_index=result.segment_index,
                         jbi_start=result.jbi_start,
                         jbi_end=result.jbi_end,
-                        cropped_video_path=result.output_path
+                        stage2_video_path=result.stage2_video_path,
+                        duration=result.duration
                     )
-                    success_count += 1
+                    successful += 1
                 else:
-                    logger.warning(
-                        f"Segment {result.segment_index} failed: {result.error_message}"
+                    await job_service.mark_segment_failed(
+                        session,
+                        job_id=str(job_id),
+                        segment_index=result.segment_index,
+                        error=result.error_message
                     )
-                    failed_count += 1
+                    failed += 1
             
             await session.commit()
         
         # Finalize job
-        await self._finalize_job(job_id, success_count, failed_count)
+        await self._finalize_job(job_id, successful, failed)
         
         return {
-            "segments_cropped": success_count,
-            "segments_failed": failed_count
+            "segments_processed": successful,
+            "segments_failed": failed
         }
     
-    async def _finalize_job(
-        self,
-        job_id: UUID,
-        success_count: int,
-        failed_count: int
-    ):
+    async def _get_video_duration(self, video_path: str) -> float:
+        """Get video duration using ffprobe."""
+        from app.pipeline.utils.video import get_video_info
+        info = await get_video_info(video_path)
+        return info.get('duration', 0.0)
+    
+    async def _finalize_job(self, job_id: UUID, successful: int, failed: int):
         """
-        Finalize job after cropping.
+        Finalize job after Stage 2 cropping.
         
-        Marks job as READY_FOR_ANNOTATION if any segments succeeded.
-        Marks as FAILED if all segments failed.
+        If all segments failed, mark job as FAILED.
+        Otherwise, mark as READY_FOR_ANNOTATION.
         """
         async with async_session() as session:
-            if success_count > 0:
+            if successful == 0 and failed > 0:
+                # All segments failed
+                await job_service.update_status(
+                    session,
+                    str(job_id),
+                    JobStatus.FAILED,
+                    error="All segments failed Stage 2 cropping"
+                )
+                logger.error(f"Job {job_id} failed: all segments failed cropping")
+            else:
+                # At least some segments succeeded
                 await job_service.update_status(
                     session,
                     str(job_id),
@@ -780,168 +528,129 @@ class CroppingWorker(BaseWorker):
                 )
                 logger.info(
                     f"Job {job_id} ready for annotation: "
-                    f"{success_count} segments cropped"
+                    f"{successful} succeeded, {failed} failed"
                 )
-            else:
-                await job_service.update_status(
-                    session,
-                    str(job_id),
-                    JobStatus.FAILED,
-                    error_message="All segments failed to crop"
-                )
-                logger.error(f"Job {job_id} failed: all segments failed to crop")
             
             await session.commit()
 ```
 
-### Phase 3: Update ASR Worker to Queue Cropping Stage
+### Phase 3: Update ASR Worker to Queue Cropping
 
-#### Step 3.1: Update app/workers/asr_worker.py
-
-Replace the `_finalize_job` method to queue the cropping stage:
+Modify `app/workers/asr_worker.py`:
 
 ```python
-async def _finalize_job(self, job_id: UUID):
-    """
-    Finalize job after ASR.
-    
-    Queues the cropping stage for further processing.
-    """
+# In ASRWorker.process(), after updating segments with ASR data:
+
+# Update segments with ASR data
+async with async_session() as session:
+    for result in results:
+        await job_service.update_segment_asr(
+            session,
+            segment_index=result.segment_index,
+            job_id=str(job_id),
+            asr_text=result.text,
+            asr_confidence=result.confidence,
+            asr_start=result.start,
+            asr_end=result.end,
+            asr_review_flag=result.review_flag
+        )
+    await session.commit()
+
+# Queue Stage 2 (timestamp-based cropping) - ADD THIS
+await self._queue_cropping_stage(job_id)
+
+return {"segments_processed": len(results)}
+
+# ADD THIS METHOD:
+async def _queue_cropping_stage(self, job_id: UUID):
+    """Queue Stage 2 cropping after ASR."""
     from app.services.queue_service import queue_service
     
-    logger.info(f"ASR complete for job {job_id}. Queueing cropping stage.")
+    logger.info(f"Queueing Stage 2 cropping for job {job_id}")
     
     async with async_session() as session:
-        # Update job status to CROPPING
-        await job_service.update_status(
-            session,
-            str(job_id),
-            JobStatus.CROPPING
-        )
-        
-        # Queue cropping stage
-        await queue_service.enqueue(
-            session,
-            queue_name="cropping",
-            payload={"job_id": str(job_id)}
-        )
-        
+        await queue_service.enqueue(session, "cropping", {
+            "job_id": str(job_id),
+            "stage": "stage2"
+        })
         await session.commit()
 ```
 
-### Phase 4: Update Job Service for Segment Updates
+### Phase 4: Add Job Service Methods
 
-#### Step 4.1: Update app/services/job_service.py
-
-Add method for updating segment cropping data:
+Add to `app/services/job_service.py`:
 
 ```python
-async def update_segment_cropping(
+async def get_segments_with_asr(self, session, job_id: str) -> List[Dict]:
+    """Get segments that have completed ASR processing."""
+    from app.repositories.segment_repository import SegmentRepository
+    
+    repo = SegmentRepository(session)
+    segments = await repo.get_by_job_id(job_id)
+    
+    # Filter to only segments with ASR data
+    return [
+        {
+            "segment_index": seg.segment_index,
+            "asr_start": seg.asr_start,
+            "asr_end": seg.asr_end,
+            "cropped_video_path": seg.cropped_video_path,  # Stage 1 path
+        }
+        for seg in segments
+        if seg.asr_start is not None and seg.asr_end is not None
+    ]
+
+async def update_segment_stage2(
     self,
-    session: AsyncSession,
-    segment_index: int,
+    session,
     job_id: str,
+    segment_index: int,
     jbi_start: float,
     jbi_end: float,
-    cropped_video_path: str
-) -> None:
-    """
-    Update segment with cropping results.
+    stage2_video_path: str,
+    duration: float
+):
+    """Update segment with Stage 2 cropping results."""
+    from app.repositories.segment_repository import SegmentRepository
     
-    Args:
-        session: Database session
-        segment_index: Index of the segment
-        job_id: UUID of the job
-        jbi_start: Buffered start time
-        jbi_end: Buffered end time
-        cropped_video_path: Path to cropped video in MinIO
-    """
-    from app.db.models.pipeline import PipelineSegment
-    
-    result = await session.execute(
-        select(PipelineSegment).where(
-            PipelineSegment.job_id == job_id,
-            PipelineSegment.segment_index == segment_index
-        )
+    repo = SegmentRepository(session)
+    await repo.update_stage2_results(
+        job_id=job_id,
+        segment_index=segment_index,
+        jbi_start=jbi_start,
+        jbi_end=jbi_end,
+        stage2_video_path=stage2_video_path,
+        duration=duration
     )
-    segment = result.scalar_one_or_none()
-    
-    if segment:
-        segment.jbi_start = jbi_start
-        segment.jbi_end = jbi_end
-        segment.cropped_video_path = cropped_video_path
-        segment.status = "CROPPED"
 ```
 
-### Phase 5: Configuration Updates
+### Phase 5: Configuration
 
-#### Step 5.1: Update app/core/config.py
-
-Add cropping-specific settings:
+Add to `app/core/config.py`:
 
 ```python
-# Cropping Configuration
-JBI_BUFFER_BEFORE: float = 0.5  # Seconds before ASR start
-JBI_BUFFER_AFTER: float = 0.5   # Seconds after ASR end
-CROPPING_VIDEO_QUALITY: str = "high"  # high/medium/low
-CROPPING_OUTPUT_CODEC: str = "libx264"
-CROPPING_AUDIO_CODEC: str = "aac"
+# JBI Buffer Configuration
+jbi_buffer_seconds: float = 2.0  # Per FR6a: ±2 seconds buffer
 ```
 
 ---
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create Pipeline Stage (stage3_cropping.py) (AC: Cropping Stage)
-  - [ ] Create CroppingInput and CroppingResult dataclasses
-  - [ ] Implement run_cropping() function
-  - [ ] Implement _calculate_buffered_times() with boundary checks
-  - [ ] Implement _process_single_segment() with video cropping
-  - [ ] Add proper error handling and temp file cleanup
-  
-- [ ] Task 2: Create Video Cropping Utility (AC: Cropping Stage)
-  - [ ] Implement crop_video_segment() using FFmpeg
-  - [ ] Support temporal cropping (start/end times)
-  - [ ] Support spatial cropping (bbox coordinates)
-  - [ ] Ensure H.264 codec and MP4 output
-  - [ ] Preserve audio during cropping
-  
-- [ ] Task 3: Create CroppingWorker (AC: Cropping Worker)
-  - [ ] Extend BaseWorker with queue_name = "cropping"
-  - [ ] Implement process() method
-  - [ ] Load segments and prepare CroppingInput
-  - [ ] Call run_cropping() and handle results
-  - [ ] Update segment records in database
-  
-- [ ] Task 4: Update ASR Worker (AC: Queue Integration)
-  - [ ] Update _finalize_job() to queue cropping stage
-  - [ ] Change status to CROPPING instead of READY_FOR_ANNOTATION
-  - [ ] Import and use queue_service
-  
-- [ ] Task 5: Update Job Service (AC: Database Updates)
-  - [ ] Add update_segment_cropping() method
-  - [ ] Handle segment status updates
-  
-- [ ] Task 6: Add Configuration Settings (AC: Configuration)
-  - [ ] Add JBI buffer settings to config.py
-  - [ ] Add video quality and codec settings
-  
-- [ ] Task 7: Create Worker Entry Point (AC: Cropping Worker)
-  - [ ] Create run_croppingWorker.py script
-  
-- [ ] Task 8: Create Unit Tests (AC: All)
-  - [ ] Test run_cropping() function
-  - [ ] Test buffer calculation
-  - [ ] Test video cropping utility
-  - [ ] Test CroppingWorker
-  
-- [ ] Task 9: Create Integration Tests (AC: All)
-  - [ ] Test end-to-end cropping flow
-  - [ ] Test error handling and retries
-  
-- [ ] Task 10: Run Validations
-- [ ] Task 11: Code Review
-- [ ] Task 12: Mark Story as DONE
+### Backend Tasks
+
+- [ ] **2.7.1:** Create `app/pipeline/stages/stage2_cropping.py` with JBI buffer calculation
+- [ ] **2.7.2:** Implement `calculate_jbi_range()` function per FR6a formula
+- [ ] **2.7.3:** Create FFmpeg segment extraction with precise seeking (-ss before -i)
+- [ ] **2.7.4:** Create `app/workers/cropping_worker.py` extending `BaseWorker`
+- [ ] **2.7.5:** Implement worker `process()` method with Stage 2 orchestration
+- [ ] **2.7.6:** Update `app/workers/asr_worker.py` to queue "cropping" stage after ASR
+- [ ] **2.7.7:** Add `get_segments_with_asr()` to job service
+- [ ] **2.7.8:** Add `update_segment_stage2()` to job service
+- [ ] **2.7.9:** Add `jbi_buffer_seconds` configuration to settings
+- [ ] **2.7.10:** Add warning logging for segments < 3 seconds duration
+- [ ] **2.7.11:** Implement partial failure handling (continue on segment error)
+- [ ] **2.7.12:** Test JBI buffer calculation: `max(0, asr_start - 2)`, `min(duration, asr_end + 2)`
 
 ---
 
@@ -950,215 +659,155 @@ CROPPING_AUDIO_CODEC: str = "aac"
 ### Unit Tests
 
 ```python
-# tests/unit/pipeline/stages/test_stage3_cropping.py
+# test_stage2_cropping.py
 
-class TestRunCropping:
-    """Test suite for cropping pipeline stage."""
+class TestCalculateJBIRange:
+    def test_normal_case(self):
+        """JBI range calculated correctly with buffer."""
+        start, end = calculate_jbi_range(
+            asr_start=10.0,
+            asr_end=20.0,
+            video_duration=100.0,
+            buffer_seconds=2.0
+        )
+        assert start == 8.0  # 10 - 2
+        assert end == 22.0   # 20 + 2
     
-    async def test_run_cropping_success(self):
-        """Test successful cropping of segments."""
-        
-    async def test_run_cropping_no_segments(self):
-        """Test handling of empty segment list."""
-        
-    async def test_run_cropping_partial_failure(self):
-        """Test handling when some segments fail."""
-
-
-class TestCalculateBufferedTimes:
-    """Test suite for buffer calculation."""
+    def test_start_at_zero(self):
+        """JBI start clamped to 0 if ASR start < buffer."""
+        start, end = calculate_jbi_range(
+            asr_start=1.0,
+            asr_end=10.0,
+            video_duration=100.0,
+            buffer_seconds=2.0
+        )
+        assert start == 0.0  # max(0, 1 - 2)
+        assert end == 12.0   # 10 + 2
     
-    def test_buffer_applied_correctly(self):
-        """Test buffer is added to ASR times."""
-        
-    def test_buffer_respects_video_start(self):
-        """Test buffer doesn't go below 0."""
-        
-    def test_buffer_respects_video_end(self):
-        """Test buffer doesn't exceed video duration."""
-        
-    def test_minimum_duration_enforced(self):
-        """Test minimum segment duration is enforced."""
-
-
-# tests/unit/pipeline/utils/test_video.py
-
-class TestCropVideoSegment:
-    """Test suite for video cropping utility."""
-    
-    async def test_temporal_crop_only(self):
-        """Test cropping by time only (no bbox)."""
-        
-    async def test_spatial_and_temporal_crop(self):
-        """Test cropping with bbox and time."""
-        
-    async def test_preserves_audio(self):
-        """Test audio is preserved in output."""
-        
-    async def test_output_codec_h264(self):
-        """Test output uses H.264 codec."""
-
-
-# tests/unit/workers/test_cropping_worker.py
-
-class TestCroppingWorker:
-    """Test suite for CroppingWorker."""
-    
-    async def test_process_success(self):
-        """Test successful job processing."""
-        
-    async def test_process_with_failures(self):
-        """Test job with some failed segments."""
-        
-    async def test_process_all_failures(self):
-        """Test job where all segments fail."""
-        
-    async def test_finalize_job_success(self):
-        """Test job finalization on success."""
-        
-    async def test_finalize_job_all_failed(self):
-        """Test job finalization when all failed."""
+    def test_end_at_duration(self):
+        """JBI end clamped to video duration."""
+        start, end = calculate_jbi_range(
+            asr_start=90.0,
+            asr_end=95.0,
+            video_duration=100.0,
+            buffer_seconds=2.0
+        )
+        assert start == 88.0  # 90 - 2
+        assert end == 100.0   # min(100, 95 + 2)
 ```
 
-### Integration Tests
+### Integration Test
 
 ```python
-# tests/integration/test_cropping_pipeline.py
-
-async def test_end_to_end_cropping():
-    """
-    Test full flow:
-    1. Create job with ASR-completed segments
-    2. Queue cropping job
-    3. Worker processes
-    4. Segments updated with JBI timestamps and paths
-    5. Job status is READY_FOR_ANNOTATION
-    """
-
-async def test_cropping_with_buffer():
-    """
-    Test JBI buffer application:
-    1. Create segment with ASR times
-    2. Run cropping with buffer
-    3. Verify JBI times include buffer
-    """
-
-async def test_cropping_retry():
-    """
-    Test retry logic:
-    1. Create job that fails once then succeeds
-    2. Verify retry occurs
-    3. Verify final success
-    """
+# Test full Stage 2 flow
+async def test_stage2_cropping_flow():
+    # Create job with Stage 1 complete
+    job_id = create_test_job()
+    
+    # Add segment with ASR data
+    segment = add_segment_with_asr(
+        job_id=job_id,
+        asr_start=10.0,
+        asr_end=20.0,
+        stage1_path="test_stage1.mp4"
+    )
+    
+    # Run Stage 2 cropping
+    worker = CroppingWorker()
+    result = await worker.process({"job_id": job_id})
+    
+    # Verify JBI times
+    assert segment.jbi_start == 8.0  # 10 - 2
+    assert segment.jbi_end == 22.0   # 20 + 2
+    
+    # Verify Stage 2 video exists
+    assert segment.stage2_video_path is not None
+    
+    # Verify job status
+    assert job.status == JobStatus.READY_FOR_ANNOTATION
 ```
 
 ---
 
 ## Error Handling
 
-### Permanent Errors (No Retry)
-
-| Error | Cause | Action |
-|-------|-------|--------|
-| Unsupported codec | Video format incompatible | Mark FAILED, log error |
-| Invalid bbox data | Detection bbox missing/invalid | Skip segment, continue |
-| No ASR data | ASR stage didn't complete | Skip segment, continue |
-| Disk space full | Insufficient temp space | Mark FAILED, alert admin |
-
-### Retryable Errors (Max 3 Attempts)
-
-| Error | Cause | Action |
-|-------|-------|--------|
-| MinIO download failure | Network/storage issue | Retry with backoff |
-| MinIO upload failure | Network/storage issue | Retry with backoff |
-| FFmpeg error | Transient processing issue | Retry |
-| Database connection | DB temporarily unavailable | Retry |
-
-### Error Logging
-
-All errors are logged with:
-- Job ID
-- Segment index (if applicable)
-- Error type and message
-- Stack trace (for unexpected errors)
-- Retry count
+| Error Type | Example | Action |
+|------------|---------|--------|
+| **Permanent** | Invalid video codec, corrupt file | Mark segment failed, continue others |
+| **Retryable** | GPU OOM, network timeout | Retry with exponential backoff (max 2) |
+| **Partial** | One segment fails | Continue processing other segments |
+| **Total** | All segments fail | Mark job FAILED |
 
 ---
 
 ## File Changes
 
-### New Files
-
-| File | Purpose |
-|------|---------|
-| `app/pipeline/stages/stage3_cropping.py` | Stage 3 cropping logic |
-| `app/workers/cropping_worker.py` | Cropping queue consumer |
-| `run_cropping_worker.py` | Worker entry point script |
-
-### Modified Files
-
-| File | Changes |
-|------|---------|
-| `app/workers/asr_worker.py` | Update _finalize_job() to queue cropping |
-| `app/services/job_service.py` | Add update_segment_cropping() method |
-| `app/core/config.py` | Add cropping configuration |
-| `app/pipeline/stages/__init__.py` | Export stage3 functions |
+| File | Action | Description |
+|------|--------|-------------|
+| `app/pipeline/stages/stage2_cropping.py` | CREATE | Stage 2 timestamp-based cropping with JBI buffer |
+| `app/workers/cropping_worker.py` | CREATE | Queue consumer for cropping stage |
+| `app/workers/asr_worker.py` | MODIFY | Add queueing of cropping stage after ASR |
+| `app/services/job_service.py` | MODIFY | Add get_segments_with_asr(), update_segment_stage2() |
+| `app/core/config.py` | MODIFY | Add jbi_buffer_seconds configuration |
 
 ---
 
 ## Dependencies
 
-**Python Packages:**
-- `ffmpeg-python>=0.2.0` - Video processing wrapper
-- `moviepy>=1.0.3` - Alternative video processing (optional)
+### Python Packages
+- `ffmpeg-python` - FFmpeg Python bindings
 
-**System Packages:**
-- `ffmpeg` - Video encoding/decoding
-
-**Existing Dependencies (from Stories 2.1-2.6):**
-- MinIO service (for storage)
-- Queue service (for job queue)
-- Job service (for database updates)
-- Segment repository (from Story 2.5)
+### System Dependencies
+- `ffmpeg` with libx264 codec support
+- `ffprobe` for video metadata
 
 ---
 
 ## Open Questions
 
-1. **Buffer Configuration**: Should buffer values be configurable per-job or system-wide?
-2. **Output Quality**: Should quality settings be configurable per-job?
-3. **Failed Segments**: Should partial failures (some segments succeed) still mark job as READY_FOR_ANNOTATION?
-4. **Stage 1 Cleanup**: Should we delete Stage 1 cropped videos after final cropping?
-5. **Aspect Ratio**: Should we pad videos to maintain a specific aspect ratio or just crop?
+1. **Q:** Should we merge adjacent segments if they're both < 3 seconds after JBI buffer?  
+   **A:** Per acceptance criteria: "adjacent segments may be merged (configurable)" - implement if time permits, log warning for MVP.
+
+2. **Q:** Should Stage 2 videos replace Stage 1 videos in MinIO or be stored separately?  
+   **A:** Store separately with `_stage2` suffix - Stage 1 may be needed for debugging.
+
+3. **Q:** What if ASR timestamps extend beyond Stage 1 cropped video duration?  
+   **A:** Clamp to video bounds: `min(video_duration, asr_end + buffer)`.
 
 ---
 
 ## References
 
-- Architecture: `docs/architecture.md` - Pipeline State Machine
-- BaseWorker: `app/workers/base.py` - Worker abstract class
-- Story 2.5: Detection Worker pattern
-- Story 2.6: ASR Worker pattern (similar structure)
-- Database Schema: `app/db/models/pipeline.py` - PipelineSegment model
-- FFmpeg Documentation: https://ffmpeg.org/documentation.html
+- **FR6, FR6a, FR6b:** Stage 2 cropping requirements with JBI buffer
+- **cv_asr_annotation.ipynb:** Reference implementation for Stage 2 cropping
+- **Architecture.md:** 4-layer architecture pattern (API → Service → Worker → Pipeline)
+- **Story 2.6:** ASR Worker - provides ASR timestamps as input to this stage
 
 ---
 
-## Appendix: State Machine Flow
+## Appendix
+
+### State Machine Flow
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   UPLOADED  │────▶│   QUEUED    │────▶│  DETECTING  │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                                │
-                                                ▼
-┌─────────────────────┐   ┌─────────────┐   ┌─────────────┐
-│ READY_FOR_ANNOTATION│◄──│  CROPPING   │◄──│ TRANSCRIBING│
-└─────────────────────┘   └──────┬──────┘   └─────────────┘
-                                 │
-                         ┌───────┴───────┐
-                         │   FAILED      │
-                         └───────────────┘
+DETECTING (Story 2.5)
+    ↓ Queue "asr"
+TRANSCRIBING (Story 2.6)
+    ↓ Queue "cropping"
+CROPPING (This Story 2.7)
+    ↓ Complete
+READY_FOR_ANNOTATION
 ```
 
-**Story 2.7 implements:** TRANSCRIBING → CROPPING → READY_FOR_ANNOTATION
+### JBI Buffer Calculation Examples
+
+| ASR Start | ASR End | Video Duration | JBI Start | JBI End | Duration |
+|-----------|---------|----------------|-----------|---------|----------|
+| 10.0s | 20.0s | 100.0s | 8.0s | 22.0s | 14.0s |
+| 1.0s | 10.0s | 100.0s | 0.0s | 12.0s | 12.0s |
+| 90.0s | 95.0s | 100.0s | 88.0s | 100.0s | 12.0s |
+| 0.5s | 2.0s | 100.0s | 0.0s | 4.0s | 4.0s |
+
+---
+
+*Generated following epics.md specification*
