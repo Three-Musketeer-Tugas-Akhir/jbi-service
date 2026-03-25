@@ -15,7 +15,12 @@ from app.schemas.annotation import (
     QueueFilterParams,
     AnnotationEditCreate,
     AnnotationEditResponse,
-    AnnotationEditListResponse
+    AnnotationEditListResponse,
+    AnnotationPreviewRequest,
+    AnnotationPreviewResponse,
+    SaveDraftRequest,
+    SaveDraftResponse,
+    ResetResponse
 )
 
 
@@ -146,3 +151,126 @@ async def get_annotation_edits(
         "edits": edits,
         "total": len(edits)
     }
+
+
+@router.post(
+    "/{segment_id}/preview",
+    response_model=AnnotationPreviewResponse,
+    summary="Preview annotation",
+    description="Get video preview with specified timestamps for verification."
+)
+async def preview_annotation(
+    segment_id: UUID,
+    preview_data: AnnotationPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Get a preview of the annotation with specified timestamps.
+    
+    Returns a pre-signed video URL that can be used to verify
+    synchronization before saving or submitting.
+    """
+    service = AnnotationEditService(db)
+    preview = await service.get_preview(
+        segment_id=segment_id,
+        user_id=current_user.id,
+        start_time=preview_data.start_time,
+        end_time=preview_data.end_time
+    )
+    
+    # Add transcript (always include, may be None)
+    preview["transcript_text"] = preview_data.transcript_text
+    
+    return preview
+
+
+@router.post(
+    "/{segment_id}/draft",
+    response_model=SaveDraftResponse,
+    summary="Save annotation draft",
+    description="Save annotation edits as draft without submitting for review."
+)
+async def save_annotation_draft(
+    segment_id: UUID,
+    draft_data: SaveDraftRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Save annotation edits as a draft.
+    
+    Draft edits:
+    - Are not visible to curators
+    - Can be overwritten by subsequent drafts
+    - Allow saving work-in-progress
+    """
+    service = AnnotationEditService(db)
+    draft = await service.create_draft(
+        segment_id=segment_id,
+        editor_id=current_user.id,
+        new_text=draft_data.new_text,
+        new_start=draft_data.new_start,
+        new_end=draft_data.new_end
+    )
+    
+    return {
+        "edit_id": draft.id,
+        "segment_id": segment_id,
+        "status": draft.status,
+        "saved_at": draft.edited_at,
+        "message": "Draft saved successfully"
+    }
+
+
+@router.post(
+    "/{segment_id}/reset",
+    response_model=ResetResponse,
+    summary="Reset to original",
+    description="Reset all edits and revert to ASR-original values."
+)
+async def reset_annotation(
+    segment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Reset all edits for a segment back to ASR-original state.
+    
+    This operation:
+    - Soft-deletes all your edits for this segment
+    - Creates a reset record for audit trail
+    - Reverts values to the original ASR output
+    """
+    service = AnnotationEditService(db)
+    result = await service.reset_to_original(
+        segment_id=segment_id,
+        editor_id=current_user.id
+    )
+    return result
+
+
+@router.get(
+    "/{segment_id}/current",
+    response_model=dict,
+    summary="Get current values",
+    description="Get current annotation values including any draft edits."
+)
+async def get_current_annotation_values(
+    segment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Get the current annotation values for a segment.
+    
+    Returns the most recent values from either:
+    - Latest edit (draft, pending, or submitted)
+    - ASR original (if no edits)
+    """
+    service = AnnotationEditService(db)
+    values = await service.get_current_values_with_draft(
+        segment_id=segment_id,
+        user_id=current_user.id
+    )
+    return values

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-03-18"
-last_updated: "2026-03-24T07:00:00"
+last_updated: "2026-03-25T20:55:00"
 project: "Unified SIBI Pipeline API"
 project_key: "NOKEY"
 tracking_system: "file-system"
@@ -60,7 +60,7 @@ development_status:
   # =====================
   # EPIC 2: Video Processing Pipeline
   # =====================
-  epic-2: in-progress
+  epic-2: done
   2-1-database-schema-pipeline-domain: done
   2-2-minio-storage-integration: done
   2-3-video-upload-api: done
@@ -76,12 +76,12 @@ development_status:
   # =====================
   # EPIC 3: Annotation Workflow
   # =====================
-  epic-3: backlog
+  epic-3: in-progress
   3-1-database-schema-annotation-domain: done
   3-2-annotation-queue-api: done
-  3-3-submit-annotation-edit: backlog
-  3-4-preview-and-save-annotations: backlog
-  3-5-submit-for-review: backlog
+  3-3-submit-annotation-edit: done
+  3-4-preview-and-save-annotations: done
+  3-5-submit-for-review: ready-for-dev
   3-6-asr-review-queue-optional: backlog
   3-7-asr-approval-and-flagging: backlog
   3-8-asr-confidence-scores: backlog

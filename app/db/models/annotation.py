@@ -10,7 +10,7 @@ from uuid import UUID
 from sqlalchemy import ForeignKey, String, Float, Text, Boolean, DateTime, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.models.base import Base
+from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.db.models.pipeline import PipelineSegment
@@ -55,6 +55,7 @@ class AnnotationEdit(Base):
     comments: Mapped[List["AnnotationComment"]] = relationship("AnnotationComment", back_populates="edit", cascade="all, delete-orphan")
     
     # Status constants
+    STATUS_DRAFT = "DRAFT"
     STATUS_PENDING = "PENDING"
     STATUS_SUBMITTED = "SUBMITTED"
     STATUS_APPROVED = "APPROVED"

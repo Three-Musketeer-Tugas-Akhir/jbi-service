@@ -70,3 +70,43 @@ class AnnotationEditRepository:
         edit.is_deleted = True
         await self.db.flush()
         return True
+    
+    async def get_latest_non_draft(
+        self,
+        segment_id: UUID,
+        editor_id: UUID,
+        include_deleted: bool = False
+    ) -> Optional[AnnotationEdit]:
+        """Get latest non-draft edit for a segment by a specific editor."""
+        query = select(AnnotationEdit).where(
+            AnnotationEdit.segment_id == segment_id,
+            AnnotationEdit.editor_id == editor_id,
+            AnnotationEdit.status != AnnotationEdit.STATUS_DRAFT
+        )
+        
+        if not include_deleted:
+            query = query.where(AnnotationEdit.is_deleted == False)
+        
+        query = query.order_by(desc(AnnotationEdit.edited_at)).limit(1)
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+    
+    async def soft_delete_all_for_segment(
+        self,
+        segment_id: UUID,
+        editor_id: UUID
+    ) -> int:
+        """Soft delete all edits by an editor for a segment. Returns count deleted."""
+        from sqlalchemy import update
+        
+        result = await self.db.execute(
+            update(AnnotationEdit)
+            .where(
+                AnnotationEdit.segment_id == segment_id,
+                AnnotationEdit.editor_id == editor_id,
+                AnnotationEdit.is_deleted == False
+            )
+            .values(is_deleted=True)
+        )
+        await self.db.flush()
+        return result.rowcount

@@ -154,3 +154,66 @@ class AnnotationEditListResponse(BaseModel):
     segment_id: UUID
     edits: List[AnnotationEditResponse]
     total: int
+
+
+# ============================================================================
+# Preview and Draft Schemas
+# ============================================================================
+
+class AnnotationPreviewRequest(BaseModel):
+    """Request to preview annotation with specific timestamps."""
+    start_time: float = Field(..., ge=0, description="Start time in seconds")
+    end_time: float = Field(..., gt=0, description="End time in seconds")
+    transcript_text: Optional[str] = Field(None, description="Transcript to preview")
+    
+    @model_validator(mode='after')
+    def validate_timestamps(self):
+        """Validate that start < end."""
+        if self.start_time >= self.end_time:
+            raise ValueError("Start time must be less than end time")
+        return self
+
+
+class AnnotationPreviewResponse(BaseModel):
+    """Preview response with video URL and metadata."""
+    segment_id: UUID
+    video_url: str
+    start_time: float
+    end_time: float
+    transcript_text: Optional[str]
+    duration: float
+    
+    class Config:
+        from_attributes = True
+
+
+class SaveDraftRequest(BaseModel):
+    """Request to save annotation as draft."""
+    new_text: str = Field(..., min_length=1, description="Corrected transcript text")
+    new_start: float = Field(..., ge=0, description="New start time in seconds")
+    new_end: float = Field(..., gt=0, description="New end time in seconds")
+    
+    @model_validator(mode='after')
+    def validate_timestamps(self):
+        """Validate that start < end."""
+        if self.new_start >= self.new_end:
+            raise ValueError("Start time must be less than end time")
+        return self
+
+
+class SaveDraftResponse(BaseModel):
+    """Response after saving draft."""
+    edit_id: UUID
+    segment_id: UUID
+    status: str
+    saved_at: datetime
+    message: str = "Draft saved successfully"
+
+
+class ResetResponse(BaseModel):
+    """Response after resetting annotations."""
+    segment_id: UUID
+    reset_edit_id: UUID
+    edits_removed: int
+    message: str
+    reverted_to: dict  # ASR original values
