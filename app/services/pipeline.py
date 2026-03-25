@@ -4,15 +4,15 @@ from typing import Callable, Optional
 from enum import Enum
 import logging
 
-from app.config import settings
-from app.services.detector import DetectionResult, get_detector
-from app.services.segmenter import (
+from app.core.config import settings
+from app.pipeline.models.detector import DetectionResult, get_detector
+from app.pipeline.utils.segmenter import (
     SegmentationResult,
     identify_segments,
     format_detection_times,
 )
-from app.services.cropper import CropResult, crop_segments
-from app.services.transcoder import transcode_to_h264, TranscodeError
+from app.pipeline.models.cropper import CropResult, crop_segments
+from app.pipeline.utils.video import transcode_to_h264, TranscodeError
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import cv2
 
-from app.config import settings
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 

@@ -2,11 +2,18 @@ import asyncio
 import logging
 
 from app.logging_config import job_id_ctx
-from app.database import async_session
-from app.models.job import JobStatus, is_terminal
-from app.models.job_store import job_store
-from app.models.result_serializer import serialize_pipeline_result
+from app.db.session import async_session
+from app.db.models.pipeline import JobStatus
+from app.repositories.job_repository import JobRepository
+from app.pipeline.utils.result_serializer import serialize_pipeline_result
 from app.services.pipeline import run_pipeline, PipelineError
+
+# Terminal states - no further transitions allowed
+TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
+
+def is_terminal(status: str) -> bool:
+    """Check if a status is a terminal state."""
+    return status in TERMINAL_STATES
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +29,17 @@ class CancelledException(Exception):
 async def _update_progress(job_id: str, phase: str, current: int, total: int):
     """Open a fresh session to persist progress update."""
     async with async_session() as session:
-        await job_store.update_progress(session, job_id, phase, current, total)
+        repo = JobRepository(session)
+        await repo.update_progress(job_id, phase, current, total)
         await session.commit()
 
 
 async def _check_cancelled(job_id: str) -> bool:
     """Open a fresh session to check if the job was cancelled."""
     async with async_session() as session:
-        record = await job_store.get(session, job_id)
-        return record is not None and record.status == JobStatus.CANCELLED.value
+        repo = JobRepository(session)
+        record = await repo.get_by_id(job_id)
+        return record is not None and record.status == JobStatus.CANCELLED
 
 
 async def _process_job_async(job_id: str, video_path: str) -> None:
@@ -39,12 +48,13 @@ async def _process_job_async(job_id: str, video_path: str) -> None:
 
     # Check if already cancelled before starting
     async with async_session() as session:
-        record = await job_store.get(session, job_id)
-        if not record or is_terminal(JobStatus(record.status)):
+        repo = JobRepository(session)
+        record = await repo.get_by_id(job_id)
+        if not record or is_terminal(record.status):
             logger.info("Job %s already in terminal state — skipping", job_id)
             return
 
-        await job_store.update_status(session, job_id, JobStatus.PROCESSING)
+        await repo.update_status(job_id, JobStatus.DETECTING)
         await session.commit()
 
     logger.info("Starting job %s", job_id)
@@ -74,8 +84,9 @@ async def _process_job_async(job_id: str, video_path: str) -> None:
         result_data = serialize_pipeline_result(result)
 
         async with async_session() as session:
-            await job_store.set_result(session, job_id, result_data)
-            await job_store.update_status(session, job_id, JobStatus.COMPLETED)
+            repo = JobRepository(session)
+            await repo.set_result(job_id, result_data)
+            await repo.update_status(job_id, JobStatus.READY_FOR_ANNOTATION)
             await session.commit()
 
         logger.info(
@@ -90,17 +101,15 @@ async def _process_job_async(job_id: str, video_path: str) -> None:
     except PipelineError as exc:
         logger.exception("Job %s failed at phase %s", job_id, exc.phase)
         async with async_session() as session:
-            await job_store.update_status(
-                session, job_id, JobStatus.FAILED, error=str(exc),
-            )
+            repo = JobRepository(session)
+            await repo.update_status(job_id, JobStatus.FAILED, error=str(exc))
             await session.commit()
 
     except Exception as exc:
         logger.exception("Job %s failed with unexpected error", job_id)
         async with async_session() as session:
-            await job_store.update_status(
-                session, job_id, JobStatus.FAILED, error=str(exc),
-            )
+            repo = JobRepository(session)
+            await repo.update_status(job_id, JobStatus.FAILED, error=str(exc))
             await session.commit()
 
 

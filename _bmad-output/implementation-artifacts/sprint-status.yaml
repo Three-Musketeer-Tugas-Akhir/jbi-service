@@ -1,5 +1,5 @@
 # generated: 2026-03-18
-# last_updated: 2026-03-18
+# last_updated: 2026-03-19
 # project: Unified SIBI Pipeline API
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-03-18"
-last_updated: "2026-03-19"
+last_updated: "2026-03-25T21:20:00"
 project: "Unified SIBI Pipeline API"
 project_key: "NOKEY"
 tracking_system: "file-system"
@@ -45,46 +45,46 @@ development_status:
   # =====================
   # EPIC 1: Foundation & Authentication
   # =====================
-  epic-1: in-progress
+  epic-1: done
   1-1-database-schema-setup-auth-domain: done
-  1-2-jwt-authentication-service: backlog
-  1-3-user-login-api-endpoint: backlog
-  1-4-jwt-refresh-token-flow: backlog
-  1-5-role-based-access-control-middleware: backlog
-  1-6-admin-create-user-accounts: backlog
-  1-7-admin-modify-user-roles: backlog
-  1-8-admin-deactivate-user-accounts: backlog
-  1-9-admin-list-and-view-users: backlog
+  1-2-jwt-authentication-service: done
+  1-3-user-login-api-endpoint: done
+  1-4-jwt-refresh-token-flow: done
+  1-5-role-based-access-control-middleware: done
+  1-6-admin-create-user-accounts: done
+  1-7-admin-modify-user-roles: done
+  1-8-admin-deactivate-user-accounts: done
+  1-9-admin-list-and-view-users: done
   epic-1-retrospective: optional
   
   # =====================
   # EPIC 2: Video Processing Pipeline
   # =====================
-  epic-2: backlog
-  2-1-database-schema-pipeline-domain: backlog
-  2-2-minio-storage-integration: backlog
-  2-3-video-upload-api: backlog
-  2-4-postgresql-queue-implementation: backlog
-  2-5-detection-worker-yolov8-integration: backlog
-  2-6-asr-worker-faster-whisper-integration: backlog
-  2-7-cropping-worker-jbi-buffer: backlog
-  2-8-job-status-api-and-polling: backlog
-  2-9-job-cancellation: backlog
-  2-10-health-check-and-system-monitoring: backlog
+  epic-2: done
+  2-1-database-schema-pipeline-domain: done
+  2-2-minio-storage-integration: done
+  2-3-video-upload-api: done
+  2-4-postgresql-queue-implementation: done
+  2-5-detection-worker-yolov8-integration: done
+  2-6-asr-worker-faster-whisper-integration: done
+  2-7-cropping-worker-jbi-buffer: done
+  2-8-job-status-api-and-polling: done
+  2-9-job-cancellation: done
+  2-10-health-check-and-system-monitoring: done
   epic-2-retrospective: optional
   
   # =====================
   # EPIC 3: Annotation Workflow
   # =====================
-  epic-3: backlog
-  3-1-database-schema-annotation-domain: backlog
-  3-2-annotation-queue-api: backlog
-  3-3-submit-annotation-edit: backlog
-  3-4-preview-and-save-annotations: backlog
-  3-5-submit-for-review: backlog
-  3-6-asr-review-queue-optional: backlog
-  3-7-asr-approval-and-flagging: backlog
-  3-8-asr-confidence-scores: backlog
+  epic-3: done
+  3-1-database-schema-annotation-domain: done
+  3-2-annotation-queue-api: done
+  3-3-submit-annotation-edit: done
+  3-4-preview-and-save-annotations: done
+  3-5-submit-for-review: done
+  3-6-asr-review-queue-optional: done
+  3-7-asr-approval-and-flagging: done
+  3-8-asr-confidence-scores: done
   epic-3-retrospective: optional
   
   # =====================
@@ -102,6 +102,11 @@ development_status:
   # =====================
   # EPIC 5: Audit & Compliance
   # =====================
+  # SECURITY HARDENING (from Story 1.7 code review):
+  # - See docs/security-hardening.md for D1-D3 deferred items:
+  #   D1: IP spoofing protection via trusted proxy configuration
+  #   D2: Optimistic locking for concurrent role changes
+  #   D3: X-Forwarded-For IP selection improvement
   epic-5: backlog
   5-1-database-schema-audit-domain: backlog
   5-2-audit-logging-middleware: backlog

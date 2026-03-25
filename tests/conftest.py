@@ -1,5 +1,15 @@
 """Pytest configuration and fixtures."""
 
+import os
+
+# Set required environment variables BEFORE importing app modules
+os.environ["JWT_SECRET_KEY"] = "test-secret-key-that-is-at-least-32-characters-long-for-security"
+os.environ["DATABASE_URL"] = "postgresql+asyncpg://test:test@localhost:5432/test_db"
+os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"] = "15"
+os.environ["REFRESH_TOKEN_EXPIRE_DAYS"] = "7"
+os.environ["RESET_TOKEN_EXPIRE_HOURS"] = "24"
+os.environ["VERIFICATION_TOKEN_EXPIRE_HOURS"] = "24"
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
