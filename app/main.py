@@ -1,10 +1,19 @@
+"""
+JBI Detection & Segmentation API
+
+This is the main FastAPI application with comprehensive Swagger/OpenAPI documentation.
+"""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
+from fastapi.openapi.utils import get_openapi
 from starlette.formparsers import MultiPartParser
 
 from app.core.config import settings
+from app.core.swagger_config import TAGS_METADATA, SECURITY_SCHEMES, SWAGGER_UI_CONFIG, REDOC_CONFIG
 from app.db.session import engine
 from app.db.base import Base
 from app.api.v1 import admin, annotations, asr_review, auth, health, jobs, users
@@ -48,11 +57,52 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down")
 
 
+# ============================================================================
+# FastAPI Application
+# ============================================================================
+
 app = FastAPI(
     title="JBI Detection & Segmentation API",
     version="1.0.0",
-    description="API for detecting and segmenting JBI overlays in news broadcast videos.",
+    description="""
+    **JBI Detection & Segmentation API** provides comprehensive video processing capabilities
+    for detecting and segmenting news broadcast overlays.
+    
+    ## Key Features
+    
+    - **Video Processing**: Upload and process news broadcast videos with YOLO-based JBI detection
+    - **ASR Pipeline**: Automatic speech recognition with confidence scoring
+    - **Annotation Workflow**: Collaborative annotation system with draft, review, and approval stages
+    - **User Management**: Role-based access control (RBAC) with admin, annotator, and curator roles
+    - **System Monitoring**: Health checks, metrics, and administrative endpoints
+    
+    ## Authentication
+    
+    All protected endpoints require a Bearer token. Obtain a token via `/api/v1/auth/login`.
+    
+    ## Roles
+    
+    - **admin**: Full system access including user management and configuration
+    - **annotator**: Can process ASR reviews and create annotations
+    - **curator**: Reviews and approves annotation submissions
+    
+    ## Rate Limiting
+    
+    Authentication endpoints have rate limiting (5 attempts per 15 minutes).
+    """,
     lifespan=lifespan,
+    openapi_tags=TAGS_METADATA,
+    docs_url=None,  # Disable default docs URL - we'll create custom ones
+    redoc_url=None,  # Disable default redoc URL - we'll create custom ones
+    openapi_url="/openapi.json",
+    contact={
+        "name": "JBI API Support",
+        "email": "support@jbi-api.local",
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://opensource.org/licenses/MIT",
+    },
 )
 
 register_exception_handlers(app)
@@ -67,6 +117,73 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ============================================================================
+# Custom Swagger UI & ReDoc Endpoints
+# ============================================================================
+
+@app.get("/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    """Custom Swagger UI with enhanced configuration."""
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title=f"{app.title} - Swagger UI",
+        swagger_js_url=SWAGGER_UI_CONFIG["swagger_js_url"],
+        swagger_css_url=SWAGGER_UI_CONFIG["swagger_css_url"],
+        swagger_favicon_url=SWAGGER_UI_CONFIG["swagger_favicon_url"],
+        init_oauth=SWAGGER_UI_CONFIG["init_oauth"],
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_html():
+    """ReDoc documentation endpoint."""
+    return get_redoc_html(
+        openapi_url="/openapi.json",
+        title=f"{app.title} - ReDoc",
+        redoc_js_url=REDOC_CONFIG["redoc_js_url"],
+        redoc_favicon_url=REDOC_CONFIG["redoc_favicon_url"],
+    )
+
+
+# ============================================================================
+# Custom OpenAPI Schema with Security Schemes
+# ============================================================================
+
+def custom_openapi():
+    """Generate custom OpenAPI schema with security schemes."""
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        tags=TAGS_METADATA,
+    )
+    
+    # Add security schemes
+    openapi_schema["components"]["securitySchemes"] = SECURITY_SCHEMES
+    
+    # Add servers configuration
+    openapi_schema["servers"] = [
+        {
+            "url": "/",
+            "description": "Current server",
+        },
+        {
+            "url": "http://localhost:8000",
+            "description": "Local development server",
+        },
+    ]
+    
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 app.include_router(health.router, prefix=settings.api_v1_prefix, tags=["health"])
 app.include_router(auth.router, prefix=settings.api_v1_prefix, tags=["authentication"])
