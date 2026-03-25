@@ -1,7 +1,7 @@
 import uuid
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Annotated
 
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends, status
 from fastapi.responses import FileResponse
@@ -23,13 +23,24 @@ from app.schemas import (
     ErrorResponse,
 )
 from app.db.models.pipeline import JobStatus
-from app.repositories.job_repository import JobRepository
+from app.repositories.job_repository import JobRepository, get_job_repository
 from app.pipeline.utils.result_serializer import deserialize_pipeline_result
 from app.services.validator import (
     validate_upload, validate_video_file, VideoValidationError,
 )
 from app.services.downloader import download_video, infer_extension, DownloadError
+from app.services.job_service import JobService, get_job_service
 from app.workers.tasks import process_job
+from app.core.exceptions import ValidationError, NotFoundError, PermissionError, ConflictError
+from app.db.models.auth import User
+from app.api.deps import get_current_user
+from app.schemas.job import (
+    JobCreate, 
+    JobResponse,
+    JobStatusDetailResponse,
+    JobListItemResponse,
+    JobListDetailedResponse,
+)
 
 # Terminal states
 TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
@@ -473,24 +484,6 @@ async def download_segment(job_id: str, index: int, session: AsyncSession = Depe
 # These endpoints implement the new 4-layer architecture with MinIO storage
 # and PostgreSQL queue. They supersede the legacy endpoints above.
 # ═══════════════════════════════════════════════════════════════════════════
-
-from typing import Annotated
-
-from app.core.exceptions import ValidationError, NotFoundError, PermissionError, ConflictError
-from app.db.models.auth import User
-from app.api.deps import get_current_user
-from app.repositories.job_repository import JobRepository, get_job_repository
-from app.schemas.job import (
-    JobCreate, 
-    JobCreateResponse, 
-    JobResponse,
-    JobStatusDetailResponse,
-    JobListItemResponse,
-    JobListDetailedResponse,
-    JobCancelResponse
-)
-from app.services.job_service import JobService, get_job_service
-
 
 @router.post(
     "/pipeline/jobs",
