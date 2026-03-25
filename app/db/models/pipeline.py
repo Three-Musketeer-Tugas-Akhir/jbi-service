@@ -51,6 +51,26 @@ class PipelineJob(Base):
         nullable=True
     )
     
+    # Cancellation fields (Story 2.9)
+    is_cancelled: Mapped[bool] = mapped_column(
+        default=False,
+        nullable=False,
+        comment="True if job was cancelled by user"
+    )
+    
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When job was cancelled"
+    )
+    
+    cancelled_by: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("auth_users.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="User who cancelled the job"
+    )
+    
     # Relationships
     segments: Mapped[List["PipelineSegment"]] = relationship(
         "PipelineSegment",

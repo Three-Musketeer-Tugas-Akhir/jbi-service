@@ -361,6 +361,74 @@ class JobService:
             "total_pages": total_pages
         }
     
+    async def cancel_job(
+        self,
+        job_id: str,
+        current_user_id: str,
+        is_admin: bool = False
+    ) -> dict:
+        """
+        Cancel a video processing job.
+        
+        Args:
+            job_id: Job UUID string
+            current_user_id: Requesting user's ID
+            is_admin: Whether user has admin role
+            
+        Returns:
+            Cancellation result dict
+            
+        Raises:
+            NotFoundError: Job not found
+            PermissionError: User not authorized to cancel this job
+            ConflictError: Job already in terminal state
+        """
+        from app.core.exceptions import ConflictError
+        from app.services.queue_service import queue_service
+        
+        # Parse UUID
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Get job
+        job = await self.job_repo.get_by_id(job_uuid)
+        if not job:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Authorization check
+        if not is_admin and str(job.created_by) != current_user_id:
+            raise PermissionError("Not authorized to cancel this job")
+        
+        # Check if already terminal
+        terminal_states = {"READY_FOR_ANNOTATION", "FAILED", "CANCELLED"}
+        if job.status in terminal_states:
+            raise ConflictError(f"Cannot cancel job in '{job.status}' status")
+        
+        # Cancel queue jobs first
+        queue_cancelled = await queue_service.cancel_job_queues(
+            job_id,
+            self.db
+        )
+        
+        # Cancel the job
+        cancelled_by = UUID(current_user_id) if current_user_id else None
+        success = await self.job_repo.cancel_job(job_uuid, cancelled_by=cancelled_by)
+        
+        if not success:
+            raise ConflictError(f"Cannot cancel job in '{job.status}' status")
+        
+        # Invalidate cache
+        self.invalidate_job_cache(job_id, current_user_id)
+        
+        return {
+            "id": job_id,
+            "status": "CANCELLED",
+            "queue_jobs_cancelled": queue_cancelled,
+            "message": "Job cancelled successfully"
+        }
+    
     def invalidate_job_cache(self, job_id: str, user_id: str) -> None:
         """
         Invalidate cache for a job.

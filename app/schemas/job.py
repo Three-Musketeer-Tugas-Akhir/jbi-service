@@ -169,6 +169,16 @@ class JobListDetailedResponse(BaseModel):
     total_pages: int = Field(..., description="Total pages available")
 
 
+# Story 2.9: Job Cancellation Response
+
+class JobCancelResponse(BaseModel):
+    """Response for job cancellation (Story 2.9)."""
+    id: str = Field(..., description="Job UUID")
+    status: str = Field(..., description="New status (CANCELLED)")
+    queue_jobs_cancelled: int = Field(..., description="Number of queue jobs cancelled")
+    message: str = Field(..., description="Success message")
+
+
 class HealthResponse(BaseModel):
     """Response for GET /api/v1/health."""
     status: str  # "healthy", "degraded", "unhealthy"

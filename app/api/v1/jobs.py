@@ -476,7 +476,7 @@ async def download_segment(job_id: str, index: int, session: AsyncSession = Depe
 
 from typing import Annotated, Optional
 
-from app.core.exceptions import ValidationError, NotFoundError, PermissionError
+from app.core.exceptions import ValidationError, NotFoundError, PermissionError, ConflictError
 from app.db.models.auth import User
 from app.api.deps import get_current_user
 from app.repositories.job_repository import JobRepository, get_job_repository
@@ -486,7 +486,8 @@ from app.schemas.job import (
     JobResponse,
     JobStatusDetailResponse,
     JobListItemResponse,
-    JobListDetailedResponse
+    JobListDetailedResponse,
+    JobCancelResponse
 )
 from app.services.job_service import JobService, get_job_service
 
@@ -740,6 +741,75 @@ async def list_jobs_pipeline(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": f"Failed to list jobs: {str(e)}"
+                }
+            }
+        )
+
+
+@router.delete(
+    "/pipeline/jobs/{job_id}",
+    response_model=JobCancelResponse,
+    summary="Cancel a processing job (Story 2.9)",
+    tags=["Pipeline Jobs"],
+    responses={
+        404: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+    }
+)
+async def cancel_job_pipeline(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository)
+):
+    """
+    Cancel a video processing job.
+    
+    - Queued jobs are cancelled immediately
+    - Processing jobs are signaled to stop at next checkpoint
+    - Cannot cancel completed or failed jobs
+    - Users can only cancel their own jobs
+    - Admins can cancel any job
+    """
+    try:
+        job_service = get_job_service(db, job_repo)
+        
+        result = await job_service.cancel_job(
+            job_id=job_id,
+            current_user_id=str(current_user.id),
+            is_admin=current_user.is_admin
+        )
+        
+        return JobCancelResponse(**result)
+        
+    except NotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": str(e)
+                }
+            }
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": str(e)
+                }
+            }
+        )
+    except ConflictError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": {
+                    "code": "CONFLICT",
+                    "message": str(e)
                 }
             }
         )

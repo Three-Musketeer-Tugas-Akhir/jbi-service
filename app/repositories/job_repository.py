@@ -85,6 +85,55 @@ class JobRepository:
             await self.db.flush()
             return True
         return False
+    
+    async def cancel_job(
+        self,
+        job_id: UUID,
+        cancelled_by: Optional[UUID] = None
+    ) -> bool:
+        """
+        Cancel a job and mark it as cancelled.
+        
+        Args:
+            job_id: Job UUID
+            cancelled_by: User who cancelled (for audit)
+            
+        Returns:
+            True if job was found and cancelled, False otherwise
+        """
+        from datetime import datetime
+        
+        job = await self.get_by_id(job_id)
+        if not job:
+            return False
+        
+        # Don't allow cancelling already terminal jobs
+        terminal_states = {"READY_FOR_ANNOTATION", "FAILED", "CANCELLED"}
+        if job.status in terminal_states:
+            return False
+        
+        job.is_cancelled = True
+        job.status = "CANCELLED"
+        job.cancelled_at = datetime.utcnow()
+        job.cancelled_by = cancelled_by
+        
+        await self.db.flush()
+        return True
+    
+    async def is_job_cancelled(self, job_id: UUID) -> bool:
+        """
+        Check if a job has been cancelled.
+        
+        Args:
+            job_id: Job UUID
+            
+        Returns:
+            True if job is cancelled, False otherwise
+        """
+        job = await self.get_by_id(job_id)
+        if not job:
+            return False
+        return job.is_cancelled
 
 
 # Dependency function

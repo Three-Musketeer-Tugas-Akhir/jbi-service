@@ -287,6 +287,41 @@ class QueueService:
                 count = await _cleanup(db)
                 await db.commit()
                 return count
+    
+    async def cancel_job_queues(
+        self,
+        job_id: str,
+        db: AsyncSession = None
+    ) -> int:
+        """
+        Cancel all pending queue jobs for a pipeline job.
+        
+        Args:
+            job_id: Pipeline job ID
+            db: Database session (if None, creates new session)
+            
+        Returns:
+            Number of queue jobs cancelled
+        """
+        async def _cancel(session: AsyncSession) -> int:
+            result = await session.execute(
+                update(QueueJob)
+                .where(
+                    QueueJob.payload["job_id"].astext == job_id,
+                    QueueJob.status == "pending"
+                )
+                .values(status="cancelled")
+            )
+            await session.flush()
+            return result.rowcount
+        
+        if db is not None:
+            return await _cancel(db)
+        else:
+            async with get_db_session() as db:
+                count = await _cancel(db)
+                await db.commit()
+                return count
 
 
 # Global instance

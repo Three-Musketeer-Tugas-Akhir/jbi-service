@@ -85,11 +85,43 @@ Successfully implemented Story 2.8 (Job Status API & Polling) with all acceptanc
 4. **Error Handling:** Uses custom exceptions (`NotFoundError`, `PermissionError`)
 5. **CUDA Issue:** Environment has CUDA version mismatch, but code compiles and imports work
 
+### Code Review Findings
+
+**Blind Hunter Review:**
+- High: Memory leak risk - unbounded cache growth
+- Med: Race condition potential in cache get()
+- Med: Cache key doesn't account for role changes
+- Med: No cache invalidation on permission errors
+- Low: TTL=0 treated as falsy
+
+**Acceptance Auditor Review:**
+- ✅ 11/13 ACs satisfied
+- ⚠️ AC1 (200ms): Not verified - needs performance tests
+- ⚠️ Pagination edge case: total_pages=1 when total=0
+
+**Edge Case Hunter Review:**
+- High: page=0 causes negative SQL offset
+- High: No cache size limits (memory leak)
+- Med: Progress can exceed 100%
+- Med: No date validation (invalid formats crash)
+- Med: Race conditions on permission changes
+
+### Issues to Fix
+
+| Priority | Issue | File | Fix |
+|----------|-------|------|-----|
+| High | Add cache size limit | cache.py | Add max_size with LRU eviction |
+| High | Validate page parameter | job_service.py | Assert page >= 1 |
+| Med | Cap progress at 100% | job_service.py | `min(progress, 100)` |
+| Med | Add date validation | job_service.py | Parse and validate ISO dates |
+| Low | Fix TTL=0 handling | cache.py | Use `ttl is None` check |
+
 ### Next Steps
 
-- Run full integration test suite when database is available
-- Performance test with k6 to verify <200ms response time (NFR2)
-- Integrate cache invalidation calls in workers (Story 2.5, 2.6, 2.7)
+1. **Fix High Priority Issues** (before merge)
+2. Run full integration test suite when database is available
+3. Performance test with k6 to verify <200ms response time (NFR2)
+4. Integrate cache invalidation calls in workers (Story 2.5, 2.6, 2.7)
 
 ---
 

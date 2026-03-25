@@ -143,3 +143,45 @@ class BaseWorker(ABC):
                 error_message=error
             )
             await session.commit()
+    
+    async def is_job_cancelled(self, job_id: str) -> bool:
+        """
+        Check if a job has been cancelled.
+        
+        Args:
+            job_id: Pipeline job ID
+            
+        Returns:
+            True if job is cancelled, False otherwise
+        """
+        from uuid import UUID
+        from app.repositories.job_repository import JobRepository
+        
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            return False
+        
+        async with async_session() as session:
+            job_repo = JobRepository(session)
+            return await job_repo.is_job_cancelled(job_uuid)
+    
+    async def check_cancellation(self, job_id: str, checkpoint: str = "") -> None:
+        """
+        Check for job cancellation and raise if cancelled.
+        
+        Call this at strategic checkpoints during long-running processing.
+        
+        Args:
+            job_id: Pipeline job ID
+            checkpoint: Name of the checkpoint (for logging)
+            
+        Raises:
+            ProcessingError: If job was cancelled (permanent, won't retry)
+        """
+        if await self.is_job_cancelled(job_id):
+            from app.core.exceptions import ProcessingError
+            msg = f"Job {job_id} was cancelled"
+            if checkpoint:
+                msg += f" at checkpoint: {checkpoint}"
+            raise ProcessingError(msg, permanent=True)
