@@ -3,7 +3,7 @@ story_id: "3.2"
 story_key: "3-2-annotation-queue-api"
 epic: 3
 title: "Annotation Queue API"
-status: ready-for-dev
+status: done
 created: "2026-03-25"
 last_updated: "2026-03-25"
 ---
@@ -14,7 +14,7 @@ last_updated: "2026-03-25"
 
 **Epic:** 3 - Annotation Workflow  
 **Story ID:** 3.2  
-**Status:** ready-for-dev  
+**Status:** done  
 **Priority:** High  
 **Estimated Effort:** Medium (1-2 days)  
 **Dependencies:** 

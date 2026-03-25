@@ -1,5 +1,5 @@
 """Annotation API endpoints."""
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
@@ -8,7 +8,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db, get_current_user, require_role
 from app.db.models.auth import User
 from app.services.annotation_queue_service import AnnotationQueueService
-from app.schemas.annotation import QueueListResponse, SegmentDetailResponse, QueueFilterParams
+from app.services.annotation_edit_service import AnnotationEditService
+from app.schemas.annotation import (
+    QueueListResponse, 
+    SegmentDetailResponse, 
+    QueueFilterParams,
+    AnnotationEditCreate,
+    AnnotationEditResponse,
+    AnnotationEditListResponse
+)
 
 
 router = APIRouter()
@@ -72,3 +80,69 @@ async def get_segment_for_annotation(
         annotator_id=current_user.id
     )
     return result
+
+
+@router.post(
+    "/{segment_id}/edits",
+    response_model=AnnotationEditResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create annotation edit",
+    description="Create a new edit for a segment with transcript and timestamp corrections."
+)
+async def create_annotation_edit(
+    segment_id: UUID,
+    edit_data: AnnotationEditCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Create a new annotation edit for a segment.
+    
+    The edit records:
+    - Old values (from ASR or previous edit)
+    - New values (annotator corrections)
+    - Editor and timestamp
+    
+    Validation:
+    - Start must be < end
+    - Both must be within video bounds
+    """
+    service = AnnotationEditService(db)
+    edit = await service.create_edit(
+        segment_id=segment_id,
+        editor_id=current_user.id,
+        new_text=edit_data.new_text,
+        new_start=edit_data.new_start,
+        new_end=edit_data.new_end
+    )
+    return edit
+
+
+@router.get(
+    "/{segment_id}/edits",
+    response_model=AnnotationEditListResponse,
+    summary="Get edit history",
+    description="Get the edit history for a segment."
+)
+async def get_annotation_edits(
+    segment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Get the edit history for a segment.
+    
+    Returns all edits ordered by most recent first.
+    Only accessible to the assigned annotator.
+    """
+    service = AnnotationEditService(db)
+    edits = await service.get_edit_history(
+        segment_id=segment_id,
+        user_id=current_user.id
+    )
+    
+    return {
+        "segment_id": segment_id,
+        "edits": edits,
+        "total": len(edits)
+    }

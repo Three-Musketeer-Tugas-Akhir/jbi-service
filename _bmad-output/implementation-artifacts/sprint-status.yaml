@@ -78,7 +78,7 @@ development_status:
   # =====================
   epic-3: backlog
   3-1-database-schema-annotation-domain: done
-  3-2-annotation-queue-api: backlog
+  3-2-annotation-queue-api: done
   3-3-submit-annotation-edit: backlog
   3-4-preview-and-save-annotations: backlog
   3-5-submit-for-review: backlog

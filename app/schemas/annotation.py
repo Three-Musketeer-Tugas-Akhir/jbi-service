@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ============================================================================
@@ -103,3 +103,54 @@ class QueueFilterParams(BaseModel):
     status: Optional[str] = Field(None, pattern="^(ASSIGNED|IN_PROGRESS|COMPLETED)$")
     page: int = Field(1, ge=1)
     page_size: int = Field(20, ge=1, le=100)
+
+
+# ============================================================================
+# Annotation Edit Schemas
+# ============================================================================
+
+class AnnotationEditCreate(BaseModel):
+    """Schema for creating a new annotation edit."""
+    new_text: str = Field(..., min_length=1, description="Corrected transcript text")
+    new_start: float = Field(..., ge=0, description="New start time in seconds")
+    new_end: float = Field(..., gt=0, description="New end time in seconds")
+    
+    @model_validator(mode='after')
+    def validate_timestamps(self):
+        """Validate that start < end."""
+        if self.new_start >= self.new_end:
+            raise ValueError("Start time must be less than end time")
+        return self
+
+
+class AnnotationEditResponse(BaseModel):
+    """Response schema for annotation edit."""
+    id: UUID
+    segment_id: UUID
+    editor_id: Optional[UUID]
+    
+    # Old values
+    old_text: Optional[str]
+    old_start: Optional[float]
+    old_end: Optional[float]
+    
+    # New values
+    new_text: str
+    new_start: float
+    new_end: float
+    
+    # Metadata
+    status: str
+    is_deleted: bool
+    edited_at: datetime
+    submitted_at: Optional[datetime]
+    
+    class Config:
+        from_attributes = True
+
+
+class AnnotationEditListResponse(BaseModel):
+    """Response schema for list of edits."""
+    segment_id: UUID
+    edits: List[AnnotationEditResponse]
+    total: int

@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.annotation_queue_repository import AnnotationQueueRepository
+from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.repositories.segment_repository import SegmentRepository
 from app.repositories.job_repository import JobRepository
 from app.services.minio_service import get_minio_service
@@ -18,6 +19,7 @@ class AnnotationQueueService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.queue_repo = AnnotationQueueRepository(db)
+        self.edit_repo = AnnotationEditRepository(db)
         self.segment_repo = SegmentRepository(db)
         self.job_repo = JobRepository(db)
         self.minio_service = get_minio_service()
@@ -160,9 +162,21 @@ class AnnotationQueueService:
     
     async def _get_edit_history(self, segment_id: UUID) -> List[dict]:
         """Get edit history for a segment."""
-        # TODO: Implement when annotation_edit repository is available
-        # For now, return empty list
-        return []
+        edits = await self.edit_repo.get_by_segment(segment_id)
+        return [
+            {
+                "edit_id": edit.id,
+                "old_text": edit.old_text,
+                "new_text": edit.new_text,
+                "old_start": edit.old_start,
+                "new_start": edit.new_start,
+                "old_end": edit.old_end,
+                "new_end": edit.new_end,
+                "edited_at": edit.edited_at,
+                "status": edit.status
+            }
+            for edit in edits
+        ]
     
     async def _get_current_values(
         self,
@@ -170,18 +184,14 @@ class AnnotationQueueService:
         edit_history: List[dict]
     ) -> Tuple[str, float, float]:
         """Determine current transcript values from edits or ASR."""
-        # If there are approved edits, use the latest
-        approved_edits = [
-            e for e in edit_history
-            if e.get("status") == "APPROVED"
-        ]
+        # Get the latest non-deleted edit for this segment
+        latest_edit = await self.edit_repo.get_latest_by_segment(segment.id)
         
-        if approved_edits:
-            latest = max(approved_edits, key=lambda e: e["edited_at"])
+        if latest_edit:
             return (
-                latest["new_text"],
-                latest["new_start"],
-                latest["new_end"]
+                latest_edit.new_text,
+                latest_edit.new_start,
+                latest_edit.new_end
             )
         
         # Otherwise use ASR values
