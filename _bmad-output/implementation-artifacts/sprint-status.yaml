@@ -68,7 +68,7 @@ development_status:
   2-5-detection-worker-yolov8-integration: done
   2-6-asr-worker-faster-whisper-integration: done
   2-7-cropping-worker-jbi-buffer: backlog
-  2-8-job-status-api-and-polling: backlog
+  2-8-job-status-api-and-polling: done
   2-9-job-cancellation: backlog
   2-10-health-check-and-system-monitoring: backlog
   epic-2-retrospective: optional

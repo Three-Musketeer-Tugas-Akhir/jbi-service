@@ -5,7 +5,7 @@ Pydantic models for job API requests and responses.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -126,6 +126,47 @@ class JobListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# Story 2.8: New schemas for enhanced job status API
+
+class JobStatusDetailResponse(BaseModel):
+    """Detailed job status response for Story 2.8.
+    
+    Includes progress calculation from segment completion.
+    """
+    id: str = Field(..., description="Job UUID")
+    status: str = Field(..., description="Current job status")
+    current_stage: Optional[str] = Field(None, description="Current processing stage")
+    progress: int = Field(..., ge=0, le=100, description="Completion percentage (0-100)")
+    created_at: Optional[datetime] = Field(None, description="Creation timestamp")
+    updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
+    error_message: Optional[str] = Field(None, description="Error details if failed")
+    total_segments: int = Field(..., description="Total video segments")
+    completed_segments: int = Field(..., description="Processed segments")
+    created_by: Optional[str] = Field(None, description="Uploader user ID")
+
+
+class JobListItemResponse(BaseModel):
+    """Job item in paginated list response."""
+    id: str = Field(..., description="Job UUID")
+    status: str = Field(..., description="Current job status")
+    current_stage: Optional[str] = Field(None, description="Current processing stage")
+    progress: int = Field(..., ge=0, le=100, description="Completion percentage (0-100)")
+    created_at: Optional[datetime] = Field(None, description="Creation timestamp")
+    updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
+    error_message: Optional[str] = Field(None, description="Error details if failed")
+    total_segments: int = Field(..., description="Total video segments")
+    completed_segments: int = Field(..., description="Processed segments")
+
+
+class JobListDetailedResponse(BaseModel):
+    """Paginated job list response for Story 2.8."""
+    items: List[JobListItemResponse] = Field(..., description="Job items")
+    total: int = Field(..., description="Total matching jobs")
+    page: int = Field(..., description="Current page number")
+    page_size: int = Field(..., description="Items per page")
+    total_pages: int = Field(..., description="Total pages available")
 
 
 class HealthResponse(BaseModel):

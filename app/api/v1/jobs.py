@@ -474,13 +474,20 @@ async def download_segment(job_id: str, index: int, session: AsyncSession = Depe
 # and PostgreSQL queue. They supersede the legacy endpoints above.
 # ═══════════════════════════════════════════════════════════════════════════
 
-from typing import Annotated
+from typing import Annotated, Optional
 
-from app.core.exceptions import ValidationError
+from app.core.exceptions import ValidationError, NotFoundError, PermissionError
 from app.db.models.auth import User
 from app.api.deps import get_current_user
 from app.repositories.job_repository import JobRepository, get_job_repository
-from app.schemas.job import JobCreate, JobCreateResponse, JobResponse
+from app.schemas.job import (
+    JobCreate, 
+    JobCreateResponse, 
+    JobResponse,
+    JobStatusDetailResponse,
+    JobListItemResponse,
+    JobListDetailedResponse
+)
 from app.services.job_service import JobService, get_job_service
 
 
@@ -622,53 +629,117 @@ async def create_job_from_url_pipeline(
 
 @router.get(
     "/pipeline/jobs/{job_id}",
-    response_model=JobResponse,
+    response_model=JobStatusDetailResponse,
     summary="Get job status and details (new pipeline)",
     tags=["Pipeline Jobs"],
+    responses={
+        404: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+    }
 )
 async def get_job_pipeline(
     job_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user = Depends(get_current_user),
     job_repo: JobRepository = Depends(get_job_repository)
 ):
-    """Get job details and current status from the new pipeline."""
+    """
+    Get job details and current status from the new pipeline.
+    
+    - Returns job details with progress percentage
+    - Response cached for 2 seconds (NFR3)
+    - 200ms response time target (NFR2)
+    - Users can only view their own jobs
+    - Admins can view all jobs
+    """
     try:
-        job_uuid = UUID(job_id)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": {
-                    "code": "INVALID_UUID",
-                    "message": "Invalid job ID format"
-                }
-            }
+        job_service = get_job_service(db, job_repo)
+        
+        job_data = await job_service.get_job(
+            job_id=job_id,
+            current_user_id=str(current_user.id),
+            is_admin=current_user.is_admin
         )
-    
-    job = await job_repo.get_by_id(job_uuid)
-    
-    if not job:
+        
+        return JobStatusDetailResponse(**job_data)
+        
+    except NotFoundError as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "error": {
                     "code": "NOT_FOUND",
-                    "message": "Job not found"
+                    "message": str(e)
                 }
             }
         )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": str(e)
+                }
+            }
+        )
+
+
+@router.get(
+    "/pipeline/jobs",
+    response_model=JobListDetailedResponse,
+    summary="List jobs with pagination (new pipeline)",
+    tags=["Pipeline Jobs"],
+)
+async def list_jobs_pipeline(
+    status: Optional[str] = Query(None, description="Filter by job status"),
+    from_date: Optional[str] = Query(None, description="Start date (ISO 8601)"),
+    to_date: Optional[str] = Query(None, description="End date (ISO 8601)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository)
+):
+    """
+    List jobs with pagination and filtering.
     
-    # TODO: Check user has permission to view this job
-    # (own job, admin, or curator)
-    
-    return JobResponse(
-        id=job.id,
-        status=job.status,
-        original_filename=job.original_filename,
-        file_size=job.file_size,
-        current_stage=job.current_stage,
-        error_message=job.error_message,
-        created_at=job.created_at,
-        updated_at=job.updated_at
-    )
+    - Regular users see only their own jobs
+    - Admins see all jobs
+    - Supports filtering by status and date range
+    - Default page size: 20, max: 100
+    """
+    try:
+        job_service = get_job_service(db, job_repo)
+        
+        result = await job_service.list_jobs(
+            current_user_id=str(current_user.id),
+            is_admin=current_user.is_admin,
+            status=status,
+            from_date=from_date,
+            to_date=to_date,
+            page=page,
+            page_size=page_size
+        )
+        
+        # Convert items to Pydantic models
+        items = [JobListItemResponse(**item) for item in result["items"]]
+        
+        return JobListDetailedResponse(
+            items=items,
+            total=result["total"],
+            page=result["page"],
+            page_size=result["page_size"],
+            total_pages=result["total_pages"]
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to list jobs: {str(e)}"
+                }
+            }
+        )

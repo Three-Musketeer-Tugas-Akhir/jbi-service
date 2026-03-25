@@ -2,14 +2,16 @@
 
 import os
 from pathlib import Path
-from typing import BinaryIO, Union
+from typing import BinaryIO, Union, Optional, List
 from uuid import UUID
 
+from sqlalchemy import select, func, and_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ValidationError
+from app.core.exceptions import ValidationError, NotFoundError, PermissionError
+from app.core.cache import job_status_cache
 from app.db.models.auth import User
-from app.db.models.pipeline import PipelineJob
+from app.db.models.pipeline import PipelineJob, PipelineSegment
 from app.repositories.job_repository import JobRepository
 from app.services.minio_service import get_minio_service
 from app.services.queue_service import queue_service
@@ -171,6 +173,206 @@ class JobService:
         raise NotImplementedError(
             "URL upload not yet implemented. This feature is planned for Story 2.6."
         )
+    
+    async def get_job(
+        self,
+        job_id: str,
+        current_user_id: str,
+        is_admin: bool = False
+    ) -> dict:
+        """
+        Get single job with progress calculation.
+        
+        Checks cache first, then queries database with segment counts.
+        Results are cached for 2 seconds per NFR3.
+        
+        Args:
+            job_id: Job UUID string
+            current_user_id: Requesting user's ID
+            is_admin: Whether user has admin role
+            
+        Returns:
+            Job details dict with progress percentage
+            
+        Raises:
+            NotFoundError: Job not found
+            PermissionError: User not authorized to view this job
+        """
+        # Check cache first
+        cache_key = f"job:{job_id}:user:{current_user_id}"
+        cached = job_status_cache.get(cache_key)
+        if cached:
+            return cached
+        
+        # Parse UUID
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Build query with segment counts
+        query = (
+            select(
+                PipelineJob,
+                func.count(PipelineSegment.id).label('total_segments'),
+                func.sum(
+                    case((PipelineSegment.status == 'PROCESSED', 1), else_=0)
+                ).label('completed_segments')
+            )
+            .outerjoin(PipelineSegment, PipelineJob.id == PipelineSegment.job_id)
+            .where(PipelineJob.id == job_uuid)
+            .group_by(PipelineJob.id)
+        )
+        
+        result = await self.db.execute(query)
+        row = result.first()
+        
+        if not row:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        job, total_segments, completed_segments = row
+        
+        # Authorization check
+        if not is_admin and str(job.created_by) != current_user_id:
+            raise PermissionError("Not authorized to view this job")
+        
+        # Calculate progress
+        progress = 0
+        if total_segments and total_segments > 0:
+            progress = int((completed_segments or 0) / total_segments * 100)
+        
+        response = {
+            "id": str(job.id),
+            "status": job.status,
+            "current_stage": job.current_stage,
+            "progress": progress,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            "error_message": job.error_message,
+            "total_segments": total_segments or 0,
+            "completed_segments": completed_segments or 0,
+            "created_by": str(job.created_by) if job.created_by else None
+        }
+        
+        # Cache response for 2 seconds (NFR3)
+        job_status_cache.set(cache_key, response, ttl=2.0)
+        
+        return response
+    
+    async def list_jobs(
+        self,
+        current_user_id: str,
+        is_admin: bool = False,
+        status: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20
+    ) -> dict:
+        """
+        List jobs with pagination and filtering.
+        
+        Regular users see only their own jobs. Admins see all jobs.
+        
+        Args:
+            current_user_id: Requesting user's ID
+            is_admin: Whether user has admin role
+            status: Optional status filter
+            from_date: Optional start date (ISO 8601)
+            to_date: Optional end date (ISO 8601)
+            page: Page number (1-indexed)
+            page_size: Items per page (max 100)
+            
+        Returns:
+            Paginated response dict with items and metadata
+        """
+        # Build conditions
+        conditions = []
+        if not is_admin:
+            conditions.append(PipelineJob.created_by == UUID(current_user_id))
+        if status:
+            conditions.append(PipelineJob.status == status)
+        if from_date:
+            conditions.append(PipelineJob.created_at >= from_date)
+        if to_date:
+            conditions.append(PipelineJob.created_at <= to_date)
+        
+        # Count total
+        count_query = select(func.count(PipelineJob.id))
+        if conditions:
+            count_query = count_query.where(and_(*conditions))
+        
+        total_result = await self.db.execute(count_query)
+        total = total_result.scalar() or 0
+        
+        # Fetch paginated results
+        offset = (page - 1) * page_size
+        
+        query = (
+            select(
+                PipelineJob,
+                func.count(PipelineSegment.id).label('total_segments'),
+                func.sum(
+                    case((PipelineSegment.status == 'PROCESSED', 1), else_=0)
+                ).label('completed_segments')
+            )
+            .outerjoin(PipelineSegment, PipelineJob.id == PipelineSegment.job_id)
+        )
+        
+        if conditions:
+            query = query.where(and_(*conditions))
+        
+        query = (
+            query
+            .group_by(PipelineJob.id)
+            .order_by(PipelineJob.created_at.desc())
+            .limit(page_size)
+            .offset(offset)
+        )
+        
+        result = await self.db.execute(query)
+        rows = result.all()
+        
+        items = []
+        for job, total_segments, completed_segments in rows:
+            progress = 0
+            if total_segments and total_segments > 0:
+                progress = int((completed_segments or 0) / total_segments * 100)
+            
+            items.append({
+                "id": str(job.id),
+                "status": job.status,
+                "current_stage": job.current_stage,
+                "progress": progress,
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+                "error_message": job.error_message,
+                "total_segments": total_segments or 0,
+                "completed_segments": completed_segments or 0
+            })
+        
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+        
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages
+        }
+    
+    def invalidate_job_cache(self, job_id: str, user_id: str) -> None:
+        """
+        Invalidate cache for a job.
+        
+        Called by workers when job status changes.
+        
+        Args:
+            job_id: Job UUID string
+            user_id: User ID who cached the job
+        """
+        cache_key = f"job:{job_id}:user:{user_id}"
+        job_status_cache.delete(cache_key)
 
 
 # Factory function
