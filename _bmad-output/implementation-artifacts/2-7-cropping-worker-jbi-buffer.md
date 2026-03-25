@@ -3,7 +3,7 @@ story_id: "2.7"
 story_key: "2-7-cropping-worker-jbi-buffer"
 epic: 2
 title: "Cropping Worker - JBI Buffer"
-status: ready-for-dev
+status: done
 created: "2026-03-25"
 last_updated: "2026-03-25"
 ---
@@ -14,7 +14,7 @@ last_updated: "2026-03-25"
 
 **Epic:** 2 - Video Processing Pipeline  
 **Story ID:** 2.7  
-**Status:** ready-for-dev  
+**Status:** done  
 **Priority:** Critical (Core ML)  
 **Estimated Effort:** Large (3-4 days)  
 **Dependencies:** 

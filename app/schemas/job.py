@@ -181,11 +181,12 @@ class JobCancelResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Response for GET /api/v1/health."""
-    status: str  # "healthy", "degraded", "unhealthy"
-    model_loaded: bool
-    gpu_available: bool
-    gpu_name: str | None = None
-    disk_free_gb: float
+    status: str = Field(..., description="Overall health status (healthy/degraded)")
+    database: str = Field(..., description="Database connectivity (connected/disconnected)")
+    minio: str = Field(..., description="MinIO connectivity (connected/disconnected)")
+    yolo_model: str = Field(..., description="YOLO model status (loaded/not_loaded)")
+    gpu_available: bool = Field(..., description="GPU availability")
+    disk_space: str = Field(..., description="Disk space status (OK/low/critical)")
 
 
 class ErrorResponse(BaseModel):

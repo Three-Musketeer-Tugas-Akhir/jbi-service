@@ -452,3 +452,117 @@ async def get_user(
         created_at=user.created_at.isoformat() if user.created_at else "",
         updated_at=user.updated_at.isoformat() if user.updated_at else None
     )
+
+
+# ============================================================================
+# System Monitoring Endpoints (Story 2.10)
+# ============================================================================
+
+from app.services.metrics_service import get_metrics_service, MetricsService
+from app.services.config_service import get_config_service, ConfigService
+from app.schemas.admin import (
+    SystemConfigResponse,
+    SystemConfigUpdateRequest,
+    SystemMetricsResponse,
+    FailedJobsResponse
+)
+
+
+@router.get(
+    "/system/config",
+    response_model=SystemConfigResponse,
+    summary="Get pipeline configuration",
+    tags=["Admin - System"],
+)
+async def get_system_config(
+    db_session: AsyncSession = Depends(get_async_session),
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Get current pipeline configuration parameters."""
+    config_service = get_config_service(db_session)
+    config = await config_service.get_config()
+    
+    return SystemConfigResponse(
+        min_segment_duration=int(config["min_segment_duration"]),
+        max_concurrent_jobs=int(config["max_concurrent_jobs"]),
+        queue_max_depth=int(config["queue_max_depth"]),
+        asr_model_default=config["asr_model_default"],
+        asr_compute_type=config.get("asr_compute_type", "int8"),
+        jbi_buffer_seconds=int(config.get("jbi_buffer_seconds", "2"))
+    )
+
+
+@router.put(
+    "/system/config",
+    response_model=SystemConfigResponse,
+    summary="Update pipeline configuration",
+    tags=["Admin - System"],
+)
+async def update_system_config(
+    updates: SystemConfigUpdateRequest,
+    db_session: AsyncSession = Depends(get_async_session),
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Update pipeline configuration parameters.
+    
+    Changes take effect for new jobs only.
+    Current jobs continue with previous values.
+    """
+    config_service = get_config_service(db_session)
+    
+    # Convert request to dict of strings, excluding unset fields
+    update_dict = updates.model_dump(exclude_unset=True)
+    update_dict = {k: str(v) for k, v in update_dict.items()}
+    
+    await config_service.update_config(
+        update_dict,
+        updated_by=str(current_user.user_id)
+    )
+    
+    # Return updated config
+    config = await config_service.get_config()
+    return SystemConfigResponse(
+        min_segment_duration=int(config["min_segment_duration"]),
+        max_concurrent_jobs=int(config["max_concurrent_jobs"]),
+        queue_max_depth=int(config["queue_max_depth"]),
+        asr_model_default=config["asr_model_default"],
+        asr_compute_type=config.get("asr_compute_type", "int8"),
+        jbi_buffer_seconds=int(config.get("jbi_buffer_seconds", "2"))
+    )
+
+
+@router.get(
+    "/system/metrics",
+    response_model=SystemMetricsResponse,
+    summary="Get system metrics",
+    tags=["Admin - System"],
+)
+async def get_system_metrics(
+    db_session: AsyncSession = Depends(get_async_session),
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Get aggregated system metrics."""
+    metrics_service = get_metrics_service(db_session)
+    metrics = await metrics_service.get_system_metrics()
+    
+    return SystemMetricsResponse(**metrics)
+
+
+@router.get(
+    "/jobs/failed",
+    response_model=FailedJobsResponse,
+    summary="Get failed jobs list",
+    tags=["Admin - Jobs"],
+)
+async def get_failed_jobs(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db_session: AsyncSession = Depends(get_async_session),
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """Get list of failed jobs with retry information."""
+    metrics_service = get_metrics_service(db_session)
+    result = await metrics_service.get_failed_jobs(limit=limit, offset=offset)
+    
+    return FailedJobsResponse(**result)

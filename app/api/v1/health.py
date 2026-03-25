@@ -1,68 +1,110 @@
-import shutil
-import logging
+"""Health check endpoints."""
 
-import torch
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, status
+from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
-from app.schemas import HealthResponse
-
-logger = logging.getLogger(__name__)
+from app.db.session import get_db
+from app.services.health_service import get_health_service, HealthService
+from app.schemas.job import HealthResponse, ErrorResponse
 
 router = APIRouter()
 
-# Minimum free disk space before reporting unhealthy (1 GB)
-MIN_DISK_FREE_GB = 1.0
 
-
-@router.get("/health", response_model=HealthResponse)
-async def health_check():
-    """Check service health: model, GPU, and disk status."""
-    model_loaded = _check_model_loaded()
-    gpu_available = torch.cuda.is_available()
-    gpu_name = torch.cuda.get_device_name(0) if gpu_available else None
-    disk_free_gb = _check_disk_free()
-
-    status = _determine_status(model_loaded, gpu_available, disk_free_gb)
-
-    return HealthResponse(
-        status=status,
-        model_loaded=model_loaded,
-        gpu_available=gpu_available,
-        gpu_name=gpu_name,
-        disk_free_gb=disk_free_gb,
+@router.get(
+    "/health",
+    response_model=HealthResponse,
+    summary="System health check",
+    tags=["Health"],
+    responses={
+        200: {"model": HealthResponse},
+        503: {"model": ErrorResponse, "description": "Service unhealthy"}
+    }
+)
+async def health_check(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get system health status.
+    
+    Returns health of all system components:
+    - api: API server status
+    - database: Database connectivity
+    - minio: Object storage connectivity
+    - yolo_model: ML model loaded status
+    - gpu_available: GPU availability
+    - disk_space: Disk space status
+    
+    Results are cached for 30 seconds.
+    """
+    health_service = get_health_service(db)
+    health = await health_service.get_system_health()
+    
+    # Determine overall status
+    is_healthy = (
+        health["database"] == "connected" and
+        health["minio"] == "connected"
     )
+    
+    response_data = {
+        "status": "healthy" if is_healthy else "degraded",
+        "database": health["database"],
+        "minio": health["minio"],
+        "yolo_model": health["yolo_model"],
+        "gpu_available": health["gpu_available"],
+        "disk_space": health["disk_space"]
+    }
+    
+    # Return 503 if critical services are down
+    if not is_healthy:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=response_data
+        )
+    
+    return response_data
 
 
-def _check_model_loaded() -> bool:
-    """Check if the detector service has been initialized with a model."""
+@router.get(
+    "/health/ready",
+    summary="Readiness probe",
+    tags=["Health"],
+)
+async def readiness_probe(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Kubernetes-style readiness probe.
+    
+    Returns 200 when the service is ready to accept traffic.
+    """
     try:
-        from app.services.detector import _detector
-        return _detector is not None
+        health_service = get_health_service(db)
+        health = await health_service.get_system_health()
+        
+        if health["database"] == "connected":
+            return {"status": "ready"}
+        else:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"status": "not_ready", "reason": "database_unavailable"}
+            )
     except Exception:
-        return False
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "not_ready", "reason": "error"}
+        )
 
 
-def _check_disk_free() -> float:
-    """Get free disk space in GB on the storage partition."""
-    try:
-        usage = shutil.disk_usage(settings.output_dir)
-        return round(usage.free / (1024 ** 3), 1)
-    except Exception:
-        logger.warning("Could not read disk usage for %s", settings.output_dir)
-        return 0.0
-
-
-def _determine_status(
-    model_loaded: bool,
-    gpu_available: bool,
-    disk_free_gb: float,
-) -> str:
-    """Determine overall health status."""
-    if not model_loaded:
-        return "unhealthy"
-    if disk_free_gb < MIN_DISK_FREE_GB:
-        return "unhealthy"
-    if settings.processing_mode.lower() == "gpu" and not gpu_available:
-        return "degraded"
-    return "healthy"
+@router.get(
+    "/health/live",
+    summary="Liveness probe",
+    tags=["Health"],
+)
+async def liveness_probe():
+    """
+    Kubernetes-style liveness probe.
+    
+    Returns 200 if the service is running (even if degraded).
+    """
+    return {"status": "alive"}
