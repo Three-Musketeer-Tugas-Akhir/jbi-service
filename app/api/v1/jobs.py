@@ -25,17 +25,17 @@ from app.schemas import (
 from app.db.models.pipeline import JobStatus
 from app.repositories.job_repository import JobRepository
 from app.pipeline.utils.result_serializer import deserialize_pipeline_result
+from app.services.validator import (
+    validate_upload, validate_video_file, VideoValidationError,
+)
+from app.services.downloader import download_video, infer_extension, DownloadError
+from app.workers.tasks import process_job
 
 # Terminal states
 TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
 
 def is_terminal(status: str) -> bool:
     return status in TERMINAL_STATES
-from app.services.validator import (
-    validate_upload, validate_video_file, VideoValidationError,
-)
-from app.services.downloader import download_video, infer_extension, DownloadError
-from app.workers.tasks import process_job
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +474,7 @@ async def download_segment(job_id: str, index: int, session: AsyncSession = Depe
 # and PostgreSQL queue. They supersede the legacy endpoints above.
 # ═══════════════════════════════════════════════════════════════════════════
 
-from typing import Annotated, Optional
+from typing import Annotated
 
 from app.core.exceptions import ValidationError, NotFoundError, PermissionError, ConflictError
 from app.db.models.auth import User
