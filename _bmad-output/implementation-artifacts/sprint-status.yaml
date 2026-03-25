@@ -76,15 +76,15 @@ development_status:
   # =====================
   # EPIC 3: Annotation Workflow
   # =====================
-  epic-3: in-progress
+  epic-3: done
   3-1-database-schema-annotation-domain: done
   3-2-annotation-queue-api: done
   3-3-submit-annotation-edit: done
   3-4-preview-and-save-annotations: done
   3-5-submit-for-review: done
   3-6-asr-review-queue-optional: done
-  3-7-asr-approval-and-flagging: review
-  3-8-asr-confidence-scores: backlog
+  3-7-asr-approval-and-flagging: done
+  3-8-asr-confidence-scores: done
   epic-3-retrospective: optional
   
   # =====================

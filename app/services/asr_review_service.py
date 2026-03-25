@@ -436,3 +436,56 @@ class ASRReviewService:
         await self.db.refresh(queue_entry)
         
         return queue_entry
+
+    
+    async def get_confidence_stats(self) -> dict:
+        """
+        Get ASR confidence statistics for admin dashboard.
+        
+        Returns average, min, max confidence across all segments.
+        """
+        from sqlalchemy import func
+        from app.db.models.pipeline import PipelineSegment
+        
+        result = await self.db.execute(
+            select(
+                func.avg(PipelineSegment.asr_confidence).label("avg"),
+                func.min(PipelineSegment.asr_confidence).label("min"),
+                func.max(PipelineSegment.asr_confidence).label("max"),
+                func.count(PipelineSegment.id).label("count")
+            ).where(
+                PipelineSegment.asr_confidence.isnot(None)
+            )
+        )
+        
+        row = result.one()
+        
+        return {
+            "average_confidence": round(row.avg, 4) if row.avg else None,
+            "min_confidence": round(row.min, 4) if row.min else None,
+            "max_confidence": round(row.max, 4) if row.max else None,
+            "total_segments": row.count,
+            "confidence_distribution": await self._get_confidence_distribution()
+        }
+    
+    async def _get_confidence_distribution(self) -> dict:
+        """Get distribution of confidence scores."""
+        from sqlalchemy import func, case
+        from app.db.models.pipeline import PipelineSegment
+        
+        result = await self.db.execute(
+            select(
+                func.sum(case((PipelineSegment.asr_confidence < 0.5, 1), else_=0)).label("low"),
+                func.sum(case((PipelineSegment.asr_confidence.between(0.5, 0.8), 1), else_=0)).label("medium"),
+                func.sum(case((PipelineSegment.asr_confidence > 0.8, 1), else_=0)).label("high")
+            ).where(
+                PipelineSegment.asr_confidence.isnot(None)
+            )
+        )
+        
+        row = result.one()
+        return {
+            "low": row.low or 0,
+            "medium": row.medium or 0,
+            "high": row.high or 0
+        }

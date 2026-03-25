@@ -566,3 +566,38 @@ async def get_failed_jobs(
     result = await metrics_service.get_failed_jobs(limit=limit, offset=offset)
     
     return FailedJobsResponse(**result)
+
+
+# ============================================================================
+# ASR Confidence Metrics Endpoint (Story 3.8)
+# ============================================================================
+
+from app.schemas.asr_review import ASRConfidenceStatsResponse
+from app.services.asr_review_service import ASRReviewService
+
+
+@router.get(
+    "/asr/confidence-stats",
+    response_model=ASRConfidenceStatsResponse,
+    summary="Get ASR confidence statistics",
+    tags=["Admin - ASR"],
+)
+async def get_asr_confidence_stats(
+    db_session: AsyncSession = Depends(get_async_session),
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Get ASR confidence score statistics for all segments.
+    
+    Returns aggregate statistics including:
+    - Average confidence score
+    - Minimum and maximum confidence scores
+    - Distribution across confidence levels
+      - low: < 0.5
+      - medium: 0.5 - 0.9
+      - high: >= 0.9
+    """
+    asr_service = ASRReviewService(db_session)
+    stats = await asr_service.get_confidence_stats()
+    
+    return ASRConfidenceStatsResponse(**stats)

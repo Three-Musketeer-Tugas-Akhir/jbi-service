@@ -3,7 +3,7 @@ story_id: "3.7"
 story_key: "3-7-asr-approval-and-flagging"
 epic: 3
 title: "ASR Approval and Flagging"
-status: review
+status: done
 created: "2026-03-25"
 last_updated: "2026-03-25"
 ---
@@ -14,7 +14,7 @@ last_updated: "2026-03-25"
 
 **Epic:** 3 - Annotation Workflow  
 **Story ID:** 3.7  
-**Status:** ready-for-dev  
+**Status:** done  
 **Priority:** Medium  
 **Estimated Effort:** Medium (1-2 days)  
 **Dependencies:** 
