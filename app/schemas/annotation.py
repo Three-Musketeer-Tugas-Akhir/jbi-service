@@ -217,3 +217,59 @@ class ResetResponse(BaseModel):
     edits_removed: int
     message: str
     reverted_to: dict  # ASR original values
+
+
+# ============================================================================
+# Submission Schemas
+# ============================================================================
+
+class SubmitForReviewRequest(BaseModel):
+    """Request to submit annotation for curator review."""
+    confirm_no_changes: bool = Field(
+        False,
+        description="Confirm submission even if no edits were made"
+    )
+
+
+class SubmitForReviewResponse(BaseModel):
+    """Response after submitting for review."""
+    segment_id: UUID
+    edit_id: UUID
+    review_id: UUID
+    status: str
+    message: str
+    submitted_at: datetime
+
+
+class SubmissionStatusResponse(BaseModel):
+    """Status of a segment's submission."""
+    segment_id: UUID
+    has_edits: bool
+    edit_count: int
+    last_edit_status: Optional[str]
+    can_submit: bool
+    warning: Optional[str] = None
+
+
+# ============================================================================
+# Review Status Schemas (for annotator to track their submissions)
+# ============================================================================
+
+class ReviewStatusResponse(BaseModel):
+    """Review status for an annotator's submission."""
+    segment_id: UUID
+    review_id: UUID
+    status: str  # PENDING, APPROVED, REJECTED
+    submitted_at: datetime
+    reviewed_at: Optional[datetime]
+    curator_id: Optional[UUID]
+    feedback: Optional[str]
+    
+    class Config:
+        from_attributes = True
+
+
+class ReviewStatusListResponse(BaseModel):
+    """List of review statuses for annotator's submissions."""
+    items: List[ReviewStatusResponse]
+    total: int

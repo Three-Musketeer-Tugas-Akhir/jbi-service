@@ -86,6 +86,7 @@ class AnnotationReview(Base):
     curator: Mapped[Optional["User"]] = relationship("User", back_populates="annotation_reviews")
     
     # Status constants
+    STATUS_PENDING = "PENDING"
     STATUS_APPROVED = "APPROVED"
     STATUS_REJECTED = "REJECTED"
 

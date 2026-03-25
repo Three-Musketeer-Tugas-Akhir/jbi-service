@@ -84,10 +84,67 @@ class ASRWorker(BaseWorker):
                 )
             await session.commit()
         
+        # Populate ASR Review queue if enabled
+        await self._populate_asr_review_queue(job_id, results)
+        
         # Finalize job and queue cropping stage
         await self._finalize_job_and_queue_cropping(job_id)
         
         return {"segments_processed": len(results)}
+    
+    async def _populate_asr_review_queue(
+        self,
+        job_id: UUID,
+        segments: list
+    ) -> None:
+        """
+        Populate ASR Review queue if enabled for this job.
+        
+        Creates asr_reviews records for each segment, allowing
+        ASR reviewers to validate transcripts before annotation.
+        """
+        from app.db.models.pipeline import PipelineSegment
+        from app.db.models.annotation import ASRReview
+        from sqlalchemy import select
+        
+        async with async_session() as session:
+            # Check if ASR Review is enabled via config
+            # For now, check job metadata or use default False
+            # Future: Implement ConfigService for per-job configuration
+            asr_review_enabled = False  # Default disabled until configured
+            
+            # TODO: Check job config for asr_review_enabled flag
+            # This will be implemented when per-job configuration is available
+            
+            if not asr_review_enabled:
+                logger.info(f"ASR Review disabled for job {job_id}")
+                return
+            
+            # Get segments for this job
+            segment_query = select(PipelineSegment).where(
+                PipelineSegment.job_id == job_id
+            )
+            result = await session.execute(segment_query)
+            db_segments = result.scalars().all()
+            
+            # Create ASR review records for each segment
+            for segment in db_segments:
+                review_record = ASRReview(
+                    segment_id=segment.id,
+                    reviewer_id=None,  # Unassigned
+                    original_text=segment.asr_text or "",
+                    corrected_text=None,
+                    confidence_score=segment.asr_confidence,
+                    status=ASRReview.STATUS_PENDING,
+                    flag_reason=None,
+                    reviewed_at=None
+                )
+                session.add(review_record)
+            
+            await session.commit()
+            logger.info(
+                f"Created {len(db_segments)} ASR Review records for job {job_id}"
+            )
     
     async def _finalize_job_and_queue_cropping(self, job_id: UUID):
         """

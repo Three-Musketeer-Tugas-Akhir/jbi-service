@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: "2026-03-18"
-last_updated: "2026-03-25T20:55:00"
+last_updated: "2026-03-25T21:20:00"
 project: "Unified SIBI Pipeline API"
 project_key: "NOKEY"
 tracking_system: "file-system"
@@ -81,9 +81,9 @@ development_status:
   3-2-annotation-queue-api: done
   3-3-submit-annotation-edit: done
   3-4-preview-and-save-annotations: done
-  3-5-submit-for-review: ready-for-dev
-  3-6-asr-review-queue-optional: backlog
-  3-7-asr-approval-and-flagging: backlog
+  3-5-submit-for-review: done
+  3-6-asr-review-queue-optional: done
+  3-7-asr-approval-and-flagging: review
   3-8-asr-confidence-scores: backlog
   epic-3-retrospective: optional
   

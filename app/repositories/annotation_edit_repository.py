@@ -110,3 +110,44 @@ class AnnotationEditRepository:
         )
         await self.db.flush()
         return result.rowcount
+    
+    async def update_status(
+        self,
+        edit_id: UUID,
+        status: str
+    ) -> bool:
+        """Update edit status."""
+        edit = await self.get_by_id(edit_id)
+        if not edit:
+            return False
+        
+        edit.status = status
+        await self.db.flush()
+        return True
+    
+    async def has_submitted_edit(self, segment_id: UUID) -> bool:
+        """Check if segment has a submitted edit."""
+        from sqlalchemy import exists
+        
+        query = select(
+            exists().where(
+                AnnotationEdit.segment_id == segment_id,
+                AnnotationEdit.status == AnnotationEdit.STATUS_SUBMITTED,
+                AnnotationEdit.is_deleted == False
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalar()
+    
+    async def get_submitted_edit(
+        self,
+        segment_id: UUID
+    ) -> Optional[AnnotationEdit]:
+        """Get the submitted edit for a segment."""
+        query = select(AnnotationEdit).where(
+            AnnotationEdit.segment_id == segment_id,
+            AnnotationEdit.status == AnnotationEdit.STATUS_SUBMITTED,
+            AnnotationEdit.is_deleted == False
+        )
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()

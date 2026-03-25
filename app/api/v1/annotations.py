@@ -20,8 +20,14 @@ from app.schemas.annotation import (
     AnnotationPreviewResponse,
     SaveDraftRequest,
     SaveDraftResponse,
-    ResetResponse
+    ResetResponse,
+    SubmitForReviewRequest,
+    SubmitForReviewResponse,
+    SubmissionStatusResponse,
+    ReviewStatusResponse,
+    ReviewStatusListResponse
 )
+from app.services.annotation_submission_service import AnnotationSubmissionService
 
 
 router = APIRouter()
@@ -274,3 +280,118 @@ async def get_current_annotation_values(
         user_id=current_user.id
     )
     return values
+
+
+
+@router.get(
+    "/{segment_id}/submission-status",
+    response_model=SubmissionStatusResponse,
+    summary="Check submission status",
+    description="Check if a segment can be submitted and get any warnings."
+)
+async def check_submission_status(
+    segment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Check the submission status for a segment.
+    
+    Returns:
+    - Whether edits exist
+    - Edit count
+    - Any warnings (e.g., no changes made)
+    - Whether submission is allowed
+    """
+    service = AnnotationSubmissionService(db)
+    status_info = await service.check_submission_status(
+        segment_id=segment_id,
+        user_id=current_user.id
+    )
+    return status_info
+
+
+@router.post(
+    "/{segment_id}/submit",
+    response_model=SubmitForReviewResponse,
+    summary="Submit for review",
+    description="Submit annotation for curator review."
+)
+async def submit_for_review(
+    segment_id: UUID,
+    submit_data: SubmitForReviewRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Submit an annotation for curator review.
+    
+    This transitions the annotation from "in progress" to "pending review".
+    The segment will be added to the curator's review queue.
+    
+    If no edits were made, set confirm_no_changes=true to submit ASR-original.
+    """
+    service = AnnotationSubmissionService(db)
+    result = await service.submit_for_review(
+        segment_id=segment_id,
+        user_id=current_user.id,
+        confirm_no_changes=submit_data.confirm_no_changes
+    )
+    return result
+
+
+@router.get(
+    "/{segment_id}/review-status",
+    response_model=ReviewStatusResponse,
+    summary="Get review status",
+    description="Get the review status for a submitted annotation."
+)
+async def get_review_status(
+    segment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    Get the review status for a submitted annotation.
+    
+    Status values:
+    - NOT_SUBMITTED: Not yet submitted
+    - SUBMITTED: Awaiting curator review
+    - PENDING: In curator queue
+    - APPROVED: Accepted by curator
+    - REJECTED: Rejected with feedback
+    """
+    service = AnnotationSubmissionService(db)
+    status_info = await service.get_submission_status(
+        segment_id=segment_id,
+        user_id=current_user.id
+    )
+    return status_info
+
+
+@router.get(
+    "/my-submissions",
+    response_model=ReviewStatusListResponse,
+    summary="List my submissions",
+    description="List all annotations submitted by the current user with their review status."
+)
+async def list_my_submissions(
+    status: Optional[str] = Query(None, description="Filter by status"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("annotator"))
+):
+    """
+    List all annotations submitted by the current user.
+    
+    Returns paginated list with review status for each submission.
+    """
+    service = AnnotationSubmissionService(db)
+    result = await service.list_my_submissions(
+        user_id=current_user.id,
+        status=status,
+        page=page,
+        page_size=page_size
+    )
+    return result
