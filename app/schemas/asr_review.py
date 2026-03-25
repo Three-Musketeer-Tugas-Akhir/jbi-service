@@ -137,3 +137,23 @@ class ASRReviewStatusCheck(BaseModel):
     reviewer_id: Optional[UUID] = None
     can_review: bool
     message: str
+
+
+# ============================================================================
+# ASR Confidence Statistics Schema
+# ============================================================================
+
+class ConfidenceDistribution(BaseModel):
+    """Distribution of confidence scores."""
+    low: int
+    medium: int
+    high: int
+
+
+class ASRConfidenceStatsResponse(BaseModel):
+    """ASR confidence statistics for admin dashboard."""
+    average_confidence: Optional[float] = None
+    min_confidence: Optional[float] = None
+    max_confidence: Optional[float] = None
+    total_segments: int
+    confidence_distribution: ConfidenceDistribution
