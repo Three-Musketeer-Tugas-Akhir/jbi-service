@@ -1,0 +1,192 @@
+"""Annotation queue service."""
+from typing import List, Optional, Tuple
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.repositories.annotation_queue_repository import AnnotationQueueRepository
+from app.repositories.segment_repository import SegmentRepository
+from app.repositories.job_repository import JobRepository
+from app.services.minio_service import get_minio_service
+from app.core.exceptions import NotFoundError, PermissionError
+from app.db.models.annotation import AnnotationQueue
+
+
+class AnnotationQueueService:
+    """Service for annotation queue operations."""
+    
+    def __init__(self, db: AsyncSession):
+        self.db = db
+        self.queue_repo = AnnotationQueueRepository(db)
+        self.segment_repo = SegmentRepository(db)
+        self.job_repo = JobRepository(db)
+        self.minio_service = get_minio_service()
+    
+    async def get_annotator_queue(
+        self,
+        annotator_id: UUID,
+        status: Optional[str] = None,
+        page: int = 1,
+        page_size: int = 20
+    ) -> dict:
+        """Get paginated queue for an annotator."""
+        offset = (page - 1) * page_size
+        
+        # Get queue entries
+        entries = await self.queue_repo.get_by_annotator(
+            annotator_id=annotator_id,
+            status=status,
+            limit=page_size,
+            offset=offset
+        )
+        
+        # Get total count
+        total = await self.queue_repo.count_by_annotator(
+            annotator_id=annotator_id,
+            status=status
+        )
+        
+        # Build response items
+        items = []
+        for entry in entries:
+            item = await self._build_queue_item(entry)
+            items.append(item)
+        
+        pages = (total + page_size - 1) // page_size
+        
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": pages
+        }
+    
+    async def get_segment_for_annotation(
+        self,
+        segment_id: UUID,
+        annotator_id: UUID
+    ) -> dict:
+        """Get complete segment details for annotation."""
+        # Verify segment is assigned to this annotator
+        queue_entry = await self.queue_repo.get_by_segment(segment_id)
+        if not queue_entry:
+            raise NotFoundError(f"Segment {segment_id} not found in annotation queue")
+        
+        if queue_entry.annotator_id != annotator_id:
+            raise PermissionError("This segment is not assigned to you")
+        
+        # Get segment details
+        segment = await self.segment_repo.get_by_id(segment_id)
+        if not segment:
+            raise NotFoundError(f"Segment {segment_id} not found")
+        
+        # Get job details for metadata
+        job = await self.job_repo.get_by_id(segment.job_id)
+        
+        # Generate pre-signed URL
+        video_url = ""
+        if segment.cropped_video_path:
+            video_url = await self.minio_service.generate_presigned_url(
+                object_name=segment.cropped_video_path,
+                expiry=3600  # 1 hour
+            )
+        
+        # Get edit history
+        edit_history = await self._get_edit_history(segment_id)
+        
+        # Determine current values (latest edit or ASR original)
+        current_text, current_start, current_end = await self._get_current_values(
+            segment, edit_history
+        )
+        
+        # Update status to IN_PROGRESS if ASSIGNED
+        if queue_entry.status == AnnotationQueue.STATUS_ASSIGNED:
+            await self.queue_repo.update_status(
+                queue_entry.id,
+                AnnotationQueue.STATUS_IN_PROGRESS
+            )
+        
+        return {
+            "segment_id": segment.id,
+            "job_id": segment.job_id,
+            "original_filename": job.original_filename if job else "Unknown",
+            "video_url": video_url,
+            "video_duration": None,  # TODO: Calculate from video metadata
+            "asr_text": segment.asr_text,
+            "asr_start": segment.asr_start,
+            "asr_end": segment.asr_end,
+            "asr_confidence": segment.asr_confidence,
+            "jbi_start": segment.jbi_start,
+            "jbi_end": segment.jbi_end,
+            "current_text": current_text,
+            "current_start": current_start,
+            "current_end": current_end,
+            "edit_history": edit_history,
+            "queue_status": queue_entry.status,
+            "priority": queue_entry.priority
+        }
+    
+    async def _build_queue_item(self, entry) -> dict:
+        """Build a queue item response with metadata."""
+        segment = await self.segment_repo.get_by_id(entry.segment_id)
+        job = None
+        if segment:
+            job = await self.job_repo.get_by_id(segment.job_id)
+        
+        # Get preview URL (thumbnail or first frame)
+        video_preview_url = ""
+        if segment and segment.cropped_video_path:
+            video_preview_url = await self.minio_service.generate_presigned_url(
+                object_name=segment.cropped_video_path,
+                expiry=3600
+            )
+        
+        # Get current transcript
+        transcript_text = segment.asr_text if segment else None
+        
+        return {
+            "id": entry.id,
+            "segment_id": entry.segment_id,
+            "job_id": segment.job_id if segment else None,
+            "original_filename": job.original_filename if job else "Unknown",
+            "video_preview_url": video_preview_url,
+            "status": entry.status,
+            "priority": entry.priority,
+            "assigned_at": entry.assigned_at,
+            "transcript_text": transcript_text,
+            "asr_confidence": segment.asr_confidence if segment else None
+        }
+    
+    async def _get_edit_history(self, segment_id: UUID) -> List[dict]:
+        """Get edit history for a segment."""
+        # TODO: Implement when annotation_edit repository is available
+        # For now, return empty list
+        return []
+    
+    async def _get_current_values(
+        self,
+        segment,
+        edit_history: List[dict]
+    ) -> Tuple[str, float, float]:
+        """Determine current transcript values from edits or ASR."""
+        # If there are approved edits, use the latest
+        approved_edits = [
+            e for e in edit_history
+            if e.get("status") == "APPROVED"
+        ]
+        
+        if approved_edits:
+            latest = max(approved_edits, key=lambda e: e["edited_at"])
+            return (
+                latest["new_text"],
+                latest["new_start"],
+                latest["new_end"]
+            )
+        
+        # Otherwise use ASR values
+        return (
+            segment.asr_text or "",
+            segment.asr_start or 0.0,
+            segment.asr_end or 0.0
+        )

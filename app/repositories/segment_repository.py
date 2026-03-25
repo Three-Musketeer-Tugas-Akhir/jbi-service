@@ -1,6 +1,6 @@
 """Segment repository for detection results."""
 
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from sqlalchemy import select
@@ -29,6 +29,13 @@ class SegmentRepository:
             .order_by(PipelineSegment.segment_index)
         )
         return result.scalars().all()
+    
+    async def get_by_id(self, segment_id: UUID) -> Optional[PipelineSegment]:
+        """Get segment by ID."""
+        result = await self.db.execute(
+            select(PipelineSegment).where(PipelineSegment.id == segment_id)
+        )
+        return result.scalar_one_or_none()
 
 
 def get_segment_repository(db: AsyncSession) -> SegmentRepository:
