@@ -11,7 +11,8 @@ from typing import Dict, Any
 
 from app.workers.base import BaseWorker
 from app.pipeline.stages.stage2_asr import run_asr, ASRSegmentInput
-from app.services.job_service import job_service
+from app.repositories.job_repository import JobRepository
+from app.repositories.segment_repository import SegmentRepository
 from app.services.queue_service import queue_service
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus
@@ -46,11 +47,14 @@ class ASRWorker(BaseWorker):
         
         # Get job details
         async with async_session() as session:
-            job = await job_service.get_job(session, str(job_id))
-            segments = await job_service.get_segments(session, str(job_id))
+            job_repo = JobRepository(session)
+            segment_repo = SegmentRepository(session)
+            job = await job_repo.get_by_id(job_id)
+            segments = await segment_repo.get_by_job_id(job_id)
             
             # Update status
-            await job_service.update_status(session, str(job_id), JobStatus.TRANSCRIBING)
+            job_repo = JobRepository(session)
+            await job_repo.update_status(job_id, "TRANSCRIBING")
             await session.commit()
         
         # Prepare inputs for pipeline stage
@@ -71,17 +75,16 @@ class ASRWorker(BaseWorker):
         
         # Update segments with ASR data
         async with async_session() as session:
+            segment_repo = SegmentRepository(session)
+            segments = await segment_repo.get_by_job_id(job_id)
             for result in results:
-                await job_service.update_segment_asr(
-                    session,
-                    segment_index=result.segment_index,
-                    job_id=str(job_id),
-                    asr_text=result.text,
-                    asr_confidence=result.confidence,
-                    asr_start=result.start,
-                    asr_end=result.end,
-                    asr_review_flag=result.review_flag
-                )
+                for seg in segments:
+                    if seg.segment_index == result.segment_index:
+                        seg.asr_text = result.text
+                        seg.asr_confidence = result.confidence
+                        seg.asr_start = result.start
+                        seg.asr_end = result.end
+                        break
             await session.commit()
         
         # Populate ASR Review queue if enabled
@@ -157,11 +160,8 @@ class ASRWorker(BaseWorker):
         
         async with async_session() as session:
             # Update job status to ASR_COMPLETED
-            await job_service.update_status(
-                session,
-                str(job_id),
-                JobStatus.ASR_COMPLETED
-            )
+            job_repo = JobRepository(session)
+            await job_repo.update_status(job_id, "ASR_COMPLETED")
             await session.commit()
             
             # Queue cropping job (outside transaction to avoid locking issues)
@@ -185,11 +185,10 @@ class ASRWorker(BaseWorker):
                     exc_info=True
                 )
                 # Update job with error note
-                await job_service.update_status(
-                    session,
-                    str(job_id),
-                    JobStatus.ASR_COMPLETED,
-                    error_message=f"ASR complete but cropping queue failed: {e}"
+                job_repo = JobRepository(session)
+                await job_repo.update_status(
+                    job_id,
+                    "ASR_COMPLETED"
                 )
                 await session.commit()
                 # Re-raise to trigger worker retry

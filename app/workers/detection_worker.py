@@ -13,11 +13,12 @@ from typing import Dict, Any
 
 from app.workers.base import BaseWorker
 from app.pipeline.stages.stage1_detection import JBIDetector
-from app.services.job_service import job_service
+from app.repositories.job_repository import JobRepository
+from app.repositories.segment_repository import SegmentRepository
 from app.services.queue_service import queue_service
 from app.services.minio_service import get_minio_service
 from app.db.session import async_session
-from app.db.models.pipeline import JobStatus
+from app.db.models.pipeline import JobStatus, PipelineSegment
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,8 @@ class DetectionWorker(BaseWorker):
         
         # Update status to DETECTING
         async with async_session() as session:
-            await job_service.update_status(session, str(job_id), JobStatus.DETECTING)
+            job_repo = JobRepository(session)
+            await job_repo.update_status(job_id, "DETECTING")
             await session.commit()
         
         # Download video from MinIO
@@ -73,14 +75,19 @@ class DetectionWorker(BaseWorker):
             
             # Store segments in database
             async with async_session() as session:
-                for segment in segments:
-                    await job_service.create_segment(session, str(job_id), {
-                        "segment_index": segment.segment_index,
-                        "bbox_data": segment.bbox_data,
-                        "jbi_start": segment.start_time,
-                        "jbi_end": segment.end_time,
-                        "confidence": segment.confidence
-                    })
+                segment_repo = SegmentRepository(session)
+                db_segments = []
+                for i, segment in enumerate(segments):
+                    db_segment = PipelineSegment(
+                        job_id=job_id,
+                        segment_index=i,
+                        bbox_data=segment.bbox_data if hasattr(segment, 'bbox_data') else None,
+                        jbi_start=segment.start_time if hasattr(segment, 'start_time') else None,
+                        jbi_end=segment.end_time if hasattr(segment, 'end_time') else None,
+                        detection_confidence=segment.confidence if hasattr(segment, 'confidence') else None
+                    )
+                    db_segments.append(db_segment)
+                await segment_repo.create_many(db_segments)
                 await session.commit()
             
             # Queue next stage
