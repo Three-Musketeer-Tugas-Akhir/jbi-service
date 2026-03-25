@@ -24,7 +24,6 @@ storage/outputs/*
 !storage/outputs/.gitkeep
 
 # --- Model Weights (large binaries) ---
-model_weights/*.pt
 model_weights/*.onnx
 !model_weights/.gitkeep
 
