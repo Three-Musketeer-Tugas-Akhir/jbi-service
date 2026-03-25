@@ -1,9 +1,9 @@
 """Serialize / deserialize PipelineResult ↔ JSONB-compatible dict."""
 
 from app.services.pipeline import PipelineResult
-from app.services.detector import DetectionResult, VideoMetadata
-from app.services.segmenter import SegmentationResult, Segment
-from app.services.cropper import CropResult, CroppedSegment
+from app.pipeline.models.detector import DetectionResult, VideoMetadata
+from app.pipeline.utils.segmenter import SegmentationResult, Segment
+from app.pipeline.models.cropper import CropResult, CroppedSegment
 
 
 def serialize_pipeline_result(r: PipelineResult) -> dict:

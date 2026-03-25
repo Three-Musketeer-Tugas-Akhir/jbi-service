@@ -5,7 +5,7 @@ import logging
 from moviepy import VideoFileClip
 
 from app.core.config import settings
-from app.services.segmenter import Segment
+from app.pipeline.utils.segmenter import Segment
 
 logger = logging.getLogger(__name__)
 
