@@ -5,7 +5,7 @@ Models for video processing pipeline and job queue.
 """
 
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy import DateTime, String, Text, Float, Integer, ForeignKey, Index
@@ -13,6 +13,9 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.db.models.annotation import AnnotationEdit, ASRReview, AnnotationQueue
 
 
 class PipelineJob(Base):
@@ -122,6 +125,23 @@ class PipelineSegment(Base):
     
     # Relationships
     job: Mapped["PipelineJob"] = relationship("PipelineJob", back_populates="segments")
+    annotation_edits: Mapped[List["AnnotationEdit"]] = relationship(
+        "AnnotationEdit",
+        back_populates="segment",
+        cascade="all, delete-orphan"
+    )
+    asr_review: Mapped[Optional["ASRReview"]] = relationship(
+        "ASRReview",
+        back_populates="segment",
+        cascade="all, delete-orphan",
+        uselist=False
+    )
+    queue_assignment: Mapped[Optional["AnnotationQueue"]] = relationship(
+        "AnnotationQueue",
+        back_populates="segment",
+        cascade="all, delete-orphan",
+        uselist=False
+    )
     
     def __repr__(self) -> str:
         return f"<PipelineSegment(id={self.id}, job_id={self.job_id}, index={self.segment_index})>"

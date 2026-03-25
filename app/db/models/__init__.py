@@ -11,6 +11,13 @@ from app.db.models.pipeline import (
     JobStatus,
     QueueStatus
 )
+from app.db.models.annotation import (
+    AnnotationEdit,
+    AnnotationReview,
+    AnnotationComment,
+    ASRReview,
+    AnnotationQueue,
+)
 
 __all__ = [
     "User",
@@ -25,4 +32,9 @@ __all__ = [
     "ConfigPipelineParam",
     "JobStatus",
     "QueueStatus",
+    "AnnotationEdit",
+    "AnnotationReview",
+    "AnnotationComment",
+    "ASRReview",
+    "AnnotationQueue",
 ]

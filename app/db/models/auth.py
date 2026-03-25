@@ -6,7 +6,7 @@ role-based access control, and user-role relationships.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 import uuid as uuid_module
 from uuid import UUID
 
@@ -23,6 +23,9 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.db.models.annotation import AnnotationEdit, AnnotationReview, AnnotationComment, ASRReview, AnnotationQueue
 
 
 class User(Base):
@@ -100,6 +103,38 @@ class User(Base):
     email_verification_tokens: Mapped[List["EmailVerificationToken"]] = relationship(
         "EmailVerificationToken",
         back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    
+    # Annotation domain relationships
+    annotation_edits: Mapped[List["AnnotationEdit"]] = relationship(
+        "AnnotationEdit",
+        back_populates="editor",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    annotation_reviews: Mapped[List["AnnotationReview"]] = relationship(
+        "AnnotationReview",
+        back_populates="curator",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    annotation_comments: Mapped[List["AnnotationComment"]] = relationship(
+        "AnnotationComment",
+        back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    asr_reviews: Mapped[List["ASRReview"]] = relationship(
+        "ASRReview",
+        back_populates="reviewer",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    annotation_queue: Mapped[List["AnnotationQueue"]] = relationship(
+        "AnnotationQueue",
+        back_populates="annotator",
         lazy="selectin",
         cascade="all, delete-orphan"
     )

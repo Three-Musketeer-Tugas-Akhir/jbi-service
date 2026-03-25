@@ -77,7 +77,7 @@ development_status:
   # EPIC 3: Annotation Workflow
   # =====================
   epic-3: backlog
-  3-1-database-schema-annotation-domain: backlog
+  3-1-database-schema-annotation-domain: done
   3-2-annotation-queue-api: backlog
   3-3-submit-annotation-edit: backlog
   3-4-preview-and-save-annotations: backlog
