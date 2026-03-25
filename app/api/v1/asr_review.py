@@ -5,7 +5,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_current_user, require_role
+from app.api.deps import get_current_user, require_role
+from app.db.session import get_db
 from app.db.models.auth import User
 from app.services.asr_review_service import ASRReviewService
 from app.schemas.asr_review import (

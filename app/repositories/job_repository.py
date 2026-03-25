@@ -3,10 +3,12 @@
 from typing import Optional
 from uuid import UUID
 
+from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.pipeline import PipelineJob
+from app.db.session import get_db
 
 
 class JobRepository:
@@ -137,5 +139,5 @@ class JobRepository:
 
 
 # Dependency function
-def get_job_repository(db: AsyncSession) -> JobRepository:
+def get_job_repository(db: AsyncSession = Depends(get_db)) -> JobRepository:
     return JobRepository(db)
