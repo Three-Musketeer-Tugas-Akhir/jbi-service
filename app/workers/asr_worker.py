@@ -59,11 +59,12 @@ class ASRWorker(BaseWorker):
             await session.commit()
         
         # Prepare inputs for pipeline stage
+        # cropped_video_path now stores MinIO object keys, not local paths
         asr_inputs = [
             ASRSegmentInput(
                 segment_index=seg.segment_index,
                 video_path=seg.cropped_video_path or job.video_path,
-                is_local=bool(seg.cropped_video_path)
+                is_local=False  # Always download from MinIO
             )
             for seg in segments
         ]
