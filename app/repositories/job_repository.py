@@ -19,19 +19,31 @@ class JobRepository:
     
     async def create(
         self,
-        job_id: str,
-        video_path: str,
-        video_title: str = "",
+        original_filename: str,
+        file_size: int,
+        created_by: Optional[UUID] = None,
         status: str = "UPLOADED",
         category: Optional[str] = None
     ) -> PipelineJob:
-        """Create a new pipeline job."""
-        from uuid import UUID
+        """Create a new pipeline job.
+        
+        Args:
+            original_filename: Original filename of the uploaded video
+            file_size: Size of the file in bytes
+            created_by: UUID of the user who created the job
+            status: Initial job status (default: UPLOADED)
+            category: Sign language category (SIBI or BISINDO)
+            
+        Returns:
+            Created PipelineJob instance
+        """
+        from uuid import uuid4
         
         job = PipelineJob(
-            id=UUID(job_id),
-            video_path=video_path,
-            original_filename=video_title,
+            id=uuid4(),
+            original_filename=original_filename,
+            file_size=file_size,
+            created_by=created_by,
             status=status,
             current_stage="upload",
             category=category,

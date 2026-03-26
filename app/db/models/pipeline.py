@@ -47,6 +47,12 @@ class PipelineJob(Base):
         index=True,
         comment="Sign language category: SIBI or BISINDO"
     )
+    file_size: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="File size in bytes"
+    )
     created_by: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("auth_users.id", ondelete="SET NULL"),
