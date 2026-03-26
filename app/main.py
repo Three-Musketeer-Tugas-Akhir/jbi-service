@@ -112,17 +112,17 @@ app.add_middleware(LoginRateLimitMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
 # Conditionally add CORS middleware
-if settings.cors_enabled:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    logger.info(f"CORS enabled with origins: {settings.cors_origins_list}")
-else:
-    logger.warning("CORS is DISABLED - all origins allowed without CORS checks")
+# if settings.cors_enabled:
+#     app.add_middleware(
+#         CORSMiddleware,
+#         allow_origins=settings.cors_origins_list,
+#         allow_credentials=True,
+#         allow_methods=["*"],
+#         allow_headers=["*"],
+#     )
+#     logger.info(f"CORS enabled with origins: {settings.cors_origins_list}")
+# else:
+#     logger.warning("CORS is DISABLED - all origins allowed without CORS checks")
 
 
 # ============================================================================
