@@ -272,7 +272,7 @@ class DetectionWorker(BaseWorker):
         segments: list
     ) -> list:
         """
-        Crop segments from the original video.
+        Crop segments from the original video and upload to MinIO.
         
         Args:
             video_path: Path to original video
@@ -280,7 +280,7 @@ class DetectionWorker(BaseWorker):
             segments: List of detected segments with bbox and timestamps
             
         Returns:
-            List of cropped video file paths
+            List of MinIO object keys for cropped videos
         """
         import os
         
@@ -296,7 +296,7 @@ class DetectionWorker(BaseWorker):
                 end_time = getattr(segment, 'end_time', 0)
                 bbox = getattr(segment, 'bbox_data', None)
                 
-                # Output file path
+                # Output file path (local temp)
                 output_path = output_dir / f"segment_{i:04d}.mp4"
                 
                 # Build ffmpeg command for cropping
@@ -362,7 +362,16 @@ class DetectionWorker(BaseWorker):
                     cropped_paths.append(None)
                 else:
                     logger.info(f"Cropped segment {i}: {output_path}")
-                    cropped_paths.append(str(output_path))
+                    
+                    # Upload to MinIO
+                    try:
+                        minio_key = f"jobs/{job_id}/segments/segment_{i:04d}.mp4"
+                        await self.minio_service.upload_file(str(output_path), minio_key)
+                        logger.info(f"Uploaded segment {i} to MinIO: {minio_key}")
+                        cropped_paths.append(minio_key)
+                    except Exception as e:
+                        logger.error(f"Failed to upload segment {i} to MinIO: {e}")
+                        cropped_paths.append(None)
                     
             except Exception as e:
                 logger.error(f"Error cropping segment {i}: {e}")

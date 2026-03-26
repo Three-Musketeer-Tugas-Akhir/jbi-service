@@ -6,6 +6,7 @@ JBI Buffer Formula: jbi_start = max(0, asr_start - 2), jbi_end = min(duration, a
 """
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -20,6 +21,7 @@ from app.pipeline.stages.stage3_cropping import (
 from app.pipeline.utils.storage import StorageManager
 from app.repositories.job_repository import JobRepository
 from app.repositories.segment_repository import SegmentRepository
+from app.services.minio_service import get_minio_service
 from app.workers.base import BaseWorker
 
 logger = logging.getLogger(__name__)
@@ -44,6 +46,7 @@ class CroppingWorker(BaseWorker):
         super().__init__()
         self.cropper = TimestampBasedCropper()
         self.storage = StorageManager()
+        self.minio_service = get_minio_service()
     
     async def process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -176,10 +179,12 @@ class CroppingWorker(BaseWorker):
         for i, segment in enumerate(segments):
             logger.debug("Processing segment %s (%d/%d)", segment.id, i + 1, len(segments))
             
-            # Check if Stage 1 video exists
-            stage1_path = segment.cropped_video_path
-            if not stage1_path or not Path(stage1_path).exists():
-                logger.error("Stage 1 video not found: %s", stage1_path)
+            # Download Stage 1 video from MinIO
+            stage1_key = segment.cropped_video_path
+            stage1_local_path = None
+            
+            if not stage1_key:
+                logger.error("Stage 1 video key is None for segment %s", segment.id)
                 result = CroppingResult(
                     segment_id=str(segment.id),
                     success=False,
@@ -187,37 +192,98 @@ class CroppingWorker(BaseWorker):
                     jbi_start=0.0,
                     jbi_end=0.0,
                     transcript=segment.asr_text or "",
-                    error=f"Stage 1 video not found: {stage1_path}"
+                    error="Stage 1 video key is None"
                 )
                 results.append(result)
                 segment_updates.append((segment.id, result))
                 continue
             
-            # Create cropping input
-            cropping_input = CroppingInput(
-                segment_id=str(segment.id),
-                stage1_video_path=stage1_path,
-                asr_start=segment.asr_start,
-                asr_end=segment.asr_end,
-                transcript=segment.asr_text or ""
-            )
-            
-            # Process cropping
-            result = await self.cropper.crop_segment(
-                input_data=cropping_input,
-                output_dir=output_dir
-            )
-            
-            results.append(result)
-            segment_updates.append((segment.id, result))
-            
-            if result.success:
-                logger.info(
-                    "Segment %s cropped: JBI [%.2f -> %.2f] -> %s",
-                    segment.id, result.jbi_start, result.jbi_end, result.stage2_video_path
+            try:
+                # Download from MinIO to local temp file
+                stage1_data = await self.minio_service.download_file(stage1_key)
+                with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+                    tmp.write(stage1_data)
+                    stage1_local_path = tmp.name
+                logger.debug("Downloaded stage1 video for segment %s: %s", segment.id, stage1_local_path)
+            except Exception as e:
+                logger.error("Failed to download stage1 video for segment %s: %s", segment.id, e)
+                result = CroppingResult(
+                    segment_id=str(segment.id),
+                    success=False,
+                    stage2_video_path=None,
+                    jbi_start=0.0,
+                    jbi_end=0.0,
+                    transcript=segment.asr_text or "",
+                    error=f"Failed to download stage1 video: {e}"
                 )
-            else:
-                logger.error("Segment %s cropping failed: %s", segment.id, result.error)
+                results.append(result)
+                segment_updates.append((segment.id, result))
+                continue
+            
+            try:
+                # Create cropping input
+                cropping_input = CroppingInput(
+                    segment_id=str(segment.id),
+                    stage1_video_path=stage1_local_path,
+                    asr_start=segment.asr_start,
+                    asr_end=segment.asr_end,
+                    transcript=segment.asr_text or ""
+                )
+                
+                # Process cropping
+                result = await self.cropper.crop_segment(
+                    input_data=cropping_input,
+                    output_dir=output_dir
+                )
+                
+                # If successful, upload to MinIO and update result
+                if result.success and result.stage2_video_path:
+                    try:
+                        # Upload to MinIO
+                        stage2_key = f"jobs/{job_id}/stage2/{segment.id}_stage2.mp4"
+                        await self.minio_service.upload_file(result.stage2_video_path, stage2_key)
+                        logger.info("Uploaded stage2 video for segment %s: %s", segment.id, stage2_key)
+                        
+                        # Update result with MinIO key
+                        result = CroppingResult(
+                            segment_id=result.segment_id,
+                            success=result.success,
+                            stage2_video_path=stage2_key,
+                            jbi_start=result.jbi_start,
+                            jbi_end=result.jbi_end,
+                            transcript=result.transcript,
+                            error=result.error
+                        )
+                    except Exception as e:
+                        logger.error("Failed to upload stage2 video for segment %s: %s", segment.id, e)
+                        result = CroppingResult(
+                            segment_id=str(segment.id),
+                            success=False,
+                            stage2_video_path=None,
+                            jbi_start=result.jbi_start,
+                            jbi_end=result.jbi_end,
+                            transcript=result.transcript,
+                            error=f"Failed to upload stage2 video: {e}"
+                        )
+                
+                results.append(result)
+                segment_updates.append((segment.id, result))
+                
+                if result.success:
+                    logger.info(
+                        "Segment %s cropped: JBI [%.2f -> %.2f] -> %s",
+                        segment.id, result.jbi_start, result.jbi_end, result.stage2_video_path
+                    )
+                else:
+                    logger.error("Segment %s cropping failed: %s", segment.id, result.error)
+                    
+            finally:
+                # Clean up temp file
+                if stage1_local_path and Path(stage1_local_path).exists():
+                    try:
+                        Path(stage1_local_path).unlink()
+                    except OSError:
+                        pass
         
         # Batch update all segments in a single database transaction
         await self._batch_update_segments(segment_updates)
