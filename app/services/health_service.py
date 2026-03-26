@@ -1,5 +1,6 @@
 """Health check service for system monitoring."""
 
+import asyncio
 import shutil
 import logging
 from datetime import datetime
@@ -66,8 +67,8 @@ class HealthService:
         try:
             from app.services.minio_service import get_minio_service
             minio = get_minio_service()
-            # Try to list buckets as connectivity check
-            buckets = await minio.client.list_buckets()
+            # Try to list buckets as connectivity check (run in thread since it's sync)
+            await asyncio.to_thread(minio.client.list_buckets)
             return "connected"
         except Exception as e:
             logger.warning(f"MinIO health check failed: {e}")
