@@ -471,7 +471,7 @@ class Upload(Base):
     category: Mapped[Optional[str]] = mapped_column(
         String(50),
         nullable=True,
-        comment="Video category (KT1, KT2, KT3, etc.)"
+        comment="Sign language category: SIBI or BISINDO"
     )
     checksum: Mapped[Optional[str]] = mapped_column(
         String(64),
