@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional, List
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, String, Float, Text, Boolean, DateTime, Integer
+from sqlalchemy import ForeignKey, String, Float, Text, Boolean, DateTime, Integer, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -26,7 +26,7 @@ class AnnotationEdit(Base):
     __tablename__ = "annotation_edits"
     
     # Primary key
-    id: Mapped[UUID] = mapped_column(primary_key=True, server_default="gen_random_uuid()")
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
     
     # Foreign keys
     segment_id: Mapped[UUID] = mapped_column(ForeignKey("pipeline_segments.id", ondelete="CASCADE"), index=True)
@@ -45,7 +45,7 @@ class AnnotationEdit(Base):
     # Status and metadata
     status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="PENDING")
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
-    edited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="NOW()", nullable=False)
+    edited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     
     # Relationships
@@ -70,7 +70,7 @@ class AnnotationReview(Base):
     __tablename__ = "annotation_reviews"
     
     # Primary key
-    id: Mapped[UUID] = mapped_column(primary_key=True, server_default="gen_random_uuid()")
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
     
     # Foreign keys
     edit_id: Mapped[UUID] = mapped_column(ForeignKey("annotation_edits.id", ondelete="CASCADE"), index=True)
@@ -79,7 +79,7 @@ class AnnotationReview(Base):
     # Review details
     status: Mapped[str] = mapped_column(String(50), nullable=False)
     feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="Curator feedback to annotator")
-    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="NOW()", nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Relationships
     edit: Mapped["AnnotationEdit"] = relationship("AnnotationEdit", back_populates="reviews")
@@ -99,7 +99,7 @@ class AnnotationComment(Base):
     __tablename__ = "annotation_comments"
     
     # Primary key
-    id: Mapped[UUID] = mapped_column(primary_key=True, server_default="gen_random_uuid()")
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
     
     # Foreign keys
     edit_id: Mapped[UUID] = mapped_column(ForeignKey("annotation_edits.id", ondelete="CASCADE"), index=True)
@@ -107,7 +107,7 @@ class AnnotationComment(Base):
     
     # Comment content
     comment: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="NOW()", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     
     # Relationships
     edit: Mapped["AnnotationEdit"] = relationship("AnnotationEdit", back_populates="comments")
@@ -123,7 +123,7 @@ class ASRReview(Base):
     __tablename__ = "asr_reviews"
     
     # Primary key
-    id: Mapped[UUID] = mapped_column(primary_key=True, server_default="gen_random_uuid()")
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
     
     # Foreign keys
     segment_id: Mapped[UUID] = mapped_column(ForeignKey("pipeline_segments.id", ondelete="CASCADE"), index=True)
@@ -158,7 +158,7 @@ class AnnotationQueue(Base):
     __tablename__ = "annotation_queue"
     
     # Primary key
-    id: Mapped[UUID] = mapped_column(primary_key=True, server_default="gen_random_uuid()")
+    id: Mapped[UUID] = mapped_column(primary_key=True, server_default=func.gen_random_uuid())
     
     # Foreign keys
     segment_id: Mapped[UUID] = mapped_column(ForeignKey("pipeline_segments.id", ondelete="CASCADE"), unique=True)
@@ -166,8 +166,8 @@ class AnnotationQueue(Base):
     
     # Queue metadata
     status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="ASSIGNED")
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", comment="Higher = higher priority")
-    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default="NOW()", nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text('0'), comment="Higher = higher priority")
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     

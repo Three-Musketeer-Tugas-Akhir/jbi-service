@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import DateTime, String, Text, Float, Integer, ForeignKey, Index
+from sqlalchemy import DateTime, String, Text, Float, Integer, ForeignKey, Index, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,7 +26,7 @@ class PipelineJob(Base):
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
-        server_default="gen_random_uuid()"
+        server_default=func.gen_random_uuid()
     )
     video_path: Mapped[str] = mapped_column(String(500), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -40,13 +40,13 @@ class PipelineJob(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default="NOW()",
+        server_default=func.now(),
         nullable=False,
         index=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default="NOW()",
+        server_default=func.now(),
         nullable=False
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(
@@ -98,7 +98,7 @@ class PipelineSegment(Base):
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
-        server_default="gen_random_uuid()"
+        server_default=func.gen_random_uuid()
     )
     job_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -155,7 +155,7 @@ class PipelineJobLog(Base):
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
-        server_default="gen_random_uuid()"
+        server_default=func.gen_random_uuid()
     )
     job_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -167,7 +167,7 @@ class PipelineJobLog(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default="NOW()",
+        server_default=func.now(),
         nullable=False,
         index=True
     )
@@ -187,18 +187,18 @@ class QueueJob(Base):
     id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
         primary_key=True,
-        server_default="gen_random_uuid()"
+        server_default=func.gen_random_uuid()
     )
     queue_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    priority: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
-    attempts: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
-    max_attempts: Mapped[int] = mapped_column(Integer, server_default="3", nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, server_default=text('0'), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, server_default=text('0'), nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, server_default=text('3'), nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default="NOW()",
+        server_default=func.now(),
         nullable=False
     )
     scheduled_at: Mapped[Optional[datetime]] = mapped_column(
@@ -225,7 +225,7 @@ class ConfigPipelineParam(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default="NOW()",
+        server_default=func.now(),
         nullable=False
     )
     
