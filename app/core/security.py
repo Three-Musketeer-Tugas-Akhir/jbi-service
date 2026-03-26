@@ -306,6 +306,8 @@ class JWTAuthService:
                 token,
                 self.secret_key,
                 algorithms=[self.algorithm],
+                audience="anotasi-client",
+                issuer="anotasi-api",
                 options={"require": ["sub", "role", "iat", "exp", "type"]}
             )
             
