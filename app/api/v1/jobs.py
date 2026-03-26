@@ -56,21 +56,37 @@ router = APIRouter()
 # ── Helper: build status response from a DB record ──────────────────────
 
 def _record_to_status_response(record) -> JobStatusResponse:
-    """Convert a JobRecord ORM instance to a JobStatusResponse."""
+    """Convert a PipelineJob ORM instance to a JobStatusResponse."""
+    # Build progress info if job is in a processing state
     progress = None
-    if record.status == JobStatus.PROCESSING.value and record.progress_total > 0:
-        progress = JobProgressResponse(
-            phase=record.progress_phase,
-            current=record.progress_current,
-            total=record.progress_total,
-            percent=record.progress_percent,
-        )
+    processing_states = {
+        "DETECTING",
+        "TRANSCRIBING", 
+        "CROPPING",
+    }
+    
+    # Try to get progress data if available on the record
+    if record.status in processing_states:
+        # Check if record has progress fields (may not exist in current schema)
+        progress_phase = getattr(record, 'current_stage', record.status.lower())
+        progress_current = getattr(record, 'progress_current', 0)
+        progress_total = getattr(record, 'progress_total', 0)
+        progress_percent = getattr(record, 'progress_percent', 0.0)
+        
+        if progress_total > 0:
+            progress = JobProgressResponse(
+                phase=progress_phase,
+                current=progress_current,
+                total=progress_total,
+                percent=progress_percent,
+            )
+    
     return JobStatusResponse(
-        job_id=record.id,
+        job_id=str(record.id),
         status=record.status,
-        video_title=record.video_title or None,
+        video_title=record.original_filename or None,
         progress=progress,
-        error=record.error,
+        error=record.error_message,
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
@@ -78,7 +94,17 @@ def _record_to_status_response(record) -> JobStatusResponse:
 
 # ── GET /jobs ─────────────────────────────────────────────────────────────
 
-VALID_STATUSES = {"queued", "processing", "completed", "failed", "cancelled"}
+# Valid statuses from PipelineJob model (see app/db/models/pipeline.py)
+VALID_STATUSES = {
+    "UPLOADED",
+    "QUEUED", 
+    "DETECTING",
+    "TRANSCRIBING",
+    "CROPPING",
+    "READY_FOR_ANNOTATION",
+    "FAILED",
+    "CANCELLED"
+}
 
 
 @router.get(
