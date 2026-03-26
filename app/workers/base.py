@@ -10,6 +10,7 @@ import asyncio
 import logging
 
 from app.db.session import async_session
+from app.db.models.pipeline import QueueJob
 from app.services.queue_service import queue_service
 
 logger = logging.getLogger(__name__)
@@ -62,12 +63,12 @@ class BaseWorker(ABC):
                 logger.exception(f"Error in worker loop: {e}")
                 await asyncio.sleep(5)  # Back off on error
     
-    async def _dequeue(self) -> Optional[Dict[str, Any]]:
+    async def _dequeue(self) -> Optional[QueueJob]:
         """
         Atomically fetch the next pending job from the queue.
         
         Returns:
-            Job payload dict or None if no jobs available
+            QueueJob object or None if no jobs available
         """
         async with async_session() as session:
             job = await queue_service.dequeue(
@@ -77,20 +78,20 @@ class BaseWorker(ABC):
             await session.commit()
             return job
     
-    async def _process_with_retry(self, job: Dict[str, Any]) -> None:
+    async def _process_with_retry(self, job: QueueJob) -> None:
         """
         Process a job with automatic retry logic.
         
         Args:
-            job: The job payload from the queue
+            job: The QueueJob from the queue
         """
-        job_id = job.get("job_id", "unknown")
+        job_id = job.payload.get("job_id", "unknown") if job.payload else "unknown"
         attempts = 0
         
         while attempts < self.max_retries:
             try:
                 logger.info(f"Processing job {job_id} (attempt {attempts + 1})")
-                result = await self.process(job["payload"])
+                result = await self.process(job.payload)
                 
                 # Mark job as completed
                 await self._mark_completed(job, result)
@@ -124,22 +125,22 @@ class BaseWorker(ABC):
         """
         pass
     
-    async def _mark_completed(self, job: Dict[str, Any], result: dict) -> None:
+    async def _mark_completed(self, job: QueueJob, result: dict) -> None:
         """Mark job as completed in queue."""
         async with async_session() as session:
             await queue_service.mark_completed(
                 session, 
-                job_id=job["id"],
+                job_id=job.id,
                 result=result
             )
             await session.commit()
     
-    async def _mark_failed(self, job: Dict[str, Any], error: str) -> None:
+    async def _mark_failed(self, job: QueueJob, error: str) -> None:
         """Mark job as failed in queue."""
         async with async_session() as session:
             await queue_service.mark_failed(
                 session,
-                job_id=job["id"],
+                job_id=job.id,
                 error_message=error
             )
             await session.commit()
