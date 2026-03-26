@@ -8,7 +8,7 @@ from app.services.jbi_detector import (
     JBIDetector, JBIDetection, JBISegment, 
     get_jbi_detector, _jbi_detector
 )
-from app.services.detector import DetectionResult, VideoMetadata
+from app.pipeline.models.detector import DetectionResult, VideoMetadata
 from app.core.exceptions import ProcessingError
 
 

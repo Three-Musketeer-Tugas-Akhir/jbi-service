@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     # Eagerly load the YOLO model so the health check reports healthy
-    from app.services.detector import get_detector
+    from app.pipeline.models.detector import get_detector
     get_detector()
     start_cleanup_scheduler()
     yield
