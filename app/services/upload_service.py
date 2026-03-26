@@ -29,6 +29,9 @@ from app.db.models import Upload, PipelineJob, QueueJob, JobStatus, User
 
 logger = logging.getLogger(__name__)
 
+# Valid sign language categories
+VALID_CATEGORIES = {"SIBI", "BISINDO"}
+
 
 class UploadService:
     """Service for handling Tus Protocol chunked uploads."""
@@ -132,6 +135,13 @@ class UploadService:
         # Parse metadata
         parsed_metadata = self.parse_tus_metadata(metadata)
         
+        # Validate category if provided
+        category = parsed_metadata.get("category")
+        if category is not None and category not in VALID_CATEGORIES:
+            raise ValidationError(
+                f"Invalid category '{category}'. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}"
+            )
+        
         # Calculate chunks
         total_chunks = (file_size + self.DEFAULT_CHUNK_SIZE - 1) // self.DEFAULT_CHUNK_SIZE
         
@@ -155,7 +165,7 @@ class UploadService:
             temp_prefix=temp_prefix,
             final_bucket=self.FINAL_BUCKET,
             final_key=None,
-            category=parsed_metadata.get("category"),
+            category=category,
             user_id=user.id,
             status="pending",
             expires_at=datetime.utcnow() + timedelta(hours=self.UPLOAD_EXPIRY_HOURS),
