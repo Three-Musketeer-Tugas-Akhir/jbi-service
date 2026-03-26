@@ -71,8 +71,8 @@ class Settings(BaseSettings):
 
     # --- ASR Configuration ---
     # Tuned to match asr_code.ipynb settings exactly
-    whisper_model_size: str = "medium"  # tiny, base, small, medium, large-v3
-    whisper_compute_type: str = "int8_float16"  # int8, float16, int8_float16
+    whisper_model_size: str = "large-v3"  # tiny, base, small, medium, large-v3
+    whisper_compute_type: str = "float16"  # int8, float16, int8_float16
     whisper_beam_size: int = 5
     whisper_language: str = "id"  # Indonesian
     model_cache_dir: str = "model_weights"
