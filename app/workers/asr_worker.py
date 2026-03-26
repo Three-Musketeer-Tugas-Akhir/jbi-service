@@ -15,7 +15,7 @@ from app.repositories.job_repository import JobRepository
 from app.repositories.segment_repository import SegmentRepository
 from app.services.queue_service import queue_service
 from app.db.session import async_session
-from app.db.models.pipeline import JobStatus
+from app.db.models.pipeline import JobStatus, PipelineTranscript
 from app.core.exceptions import ProcessingError
 
 logger = logging.getLogger(__name__)
@@ -98,18 +98,40 @@ class ASRWorker(BaseWorker):
                 f"{len(failed_segments)}/{len(results)} segments failed"
             )
         
-        # Update segments with ASR data
+        # Update segments with ASR data and store individual utterances
         async with async_session() as session:
             segment_repo = SegmentRepository(session)
             segments = await segment_repo.get_by_job_id(job_id)
+            
             for result in results:
                 for seg in segments:
                     if seg.segment_index == result.segment_index:
+                        # Update summary fields in pipeline_segments
                         seg.asr_text = result.text
                         seg.asr_confidence = result.confidence
                         seg.asr_start = result.start
                         seg.asr_end = result.end
+                        seg.asr_review_flag = result.review_flag
+                        
+                        # Store individual utterances in pipeline_transcripts
+                        for utt in result.utterances:
+                            transcript = PipelineTranscript(
+                                segment_id=seg.id,
+                                utterance_index=utt.utterance_index,
+                                text=utt.text,
+                                start=utt.start,
+                                end=utt.end,
+                                confidence=utt.confidence
+                            )
+                            session.add(transcript)
+                        
+                        logger.info(
+                            "Stored %d utterances for segment %s", 
+                            len(result.utterances), 
+                            seg.id
+                        )
                         break
+            
             await session.commit()
         
         # Populate ASR Review queue if enabled

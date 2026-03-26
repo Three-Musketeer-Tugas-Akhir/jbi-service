@@ -70,8 +70,9 @@ class Settings(BaseSettings):
     from_email: str = "noreply@anotasi.lbi.ac.id"
 
     # --- ASR Configuration ---
-    whisper_model_size: str = "base"  # tiny, base, small, medium, large-v3
-    whisper_compute_type: str = "int8"  # int8, float16, int8_float16
+    # Tuned to match asr_code.ipynb settings exactly
+    whisper_model_size: str = "medium"  # tiny, base, small, medium, large-v3
+    whisper_compute_type: str = "int8_float16"  # int8, float16, int8_float16
     whisper_beam_size: int = 5
     whisper_language: str = "id"  # Indonesian
     model_cache_dir: str = "model_weights"

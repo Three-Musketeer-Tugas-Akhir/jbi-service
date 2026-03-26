@@ -21,6 +21,16 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ASRUtterance:
+    """Individual utterance from ASR transcription."""
+    utterance_index: int
+    text: str
+    start: float  # Relative to segment start
+    end: float    # Relative to segment start
+    confidence: float
+
+
+@dataclass
 class ASRResult:
     """Result from ASR processing of a segment."""
     segment_index: int
@@ -29,6 +39,7 @@ class ASRResult:
     end: float
     confidence: float
     review_flag: bool
+    utterances: List[ASRUtterance]  # Individual utterances
 
 
 @dataclass
@@ -82,7 +93,8 @@ async def run_asr(
                 start=0.0,
                 end=0.0,
                 confidence=0.0,
-                review_flag=True  # Flag failed segments for review
+                review_flag=True,  # Flag failed segments for review
+                utterances=[]  # Empty utterances on failure
             ))
     
     return results
@@ -136,7 +148,8 @@ async def _process_single_segment(
                 start=0.0,
                 end=0.0,
                 confidence=0.0,
-                review_flag=True  # Flag for review
+                review_flag=True,  # Flag for review
+                utterances=[]  # Empty utterances
             )
         
         # 5. Check confidence
@@ -153,13 +166,26 @@ async def _process_single_segment(
                 f"ASR end timestamp ({result.end}s) exceeds 1 hour for segment {segment_index}"
             )
         
+        # Build individual utterances list (matching notebook format)
+        utterances = [
+            ASRUtterance(
+                utterance_index=idx,
+                text=seg.text,
+                start=seg.start,
+                end=seg.end,
+                confidence=seg.confidence
+            )
+            for idx, seg in enumerate(result.segments)
+        ]
+        
         return ASRResult(
             segment_index=segment_index,
             text=result.text,
             start=result.start,
             end=result.end,
             confidence=result.average_confidence,
-            review_flag=review_flag
+            review_flag=review_flag,
+            utterances=utterances
         )
         
     except asyncio.TimeoutError:

@@ -162,6 +162,12 @@ class PipelineSegment(Base):
         cascade="all, delete-orphan",
         uselist=False
     )
+    transcripts: Mapped[List["PipelineTranscript"]] = relationship(
+        "PipelineTranscript",
+        back_populates="segment",
+        cascade="all, delete-orphan",
+        order_by="PipelineTranscript.utterance_index"
+    )
     
     def __repr__(self) -> str:
         return f"<PipelineSegment(id={self.id}, job_id={self.job_id}, index={self.segment_index})>"
@@ -251,6 +257,69 @@ class ConfigPipelineParam(Base):
     
     def __repr__(self) -> str:
         return f"<ConfigPipelineParam(key={self.key})>"
+
+
+class PipelineTranscript(Base):
+    """
+    Individual ASR transcript utterance.
+    
+    One row per utterance/statement from Whisper transcription.
+    References pipeline_segments for grouping.
+    """
+    
+    __tablename__ = "pipeline_transcripts"
+    
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid()
+    )
+    segment_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("pipeline_segments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    utterance_index: Mapped[int] = mapped_column(
+        Integer, 
+        nullable=False,
+        comment="Index of utterance within segment (0, 1, 2, ...)"
+    )
+    text: Mapped[str] = mapped_column(
+        Text, 
+        nullable=False,
+        comment="Transcribed text for this utterance"
+    )
+    start: Mapped[float] = mapped_column(
+        Float, 
+        nullable=False,
+        comment="Start time in seconds (relative to segment start)"
+    )
+    end: Mapped[float] = mapped_column(
+        Float, 
+        nullable=False,
+        comment="End time in seconds (relative to segment start)"
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float, 
+        nullable=False,
+        default=0.0,
+        comment="Confidence score for this utterance (0-1)"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
+    
+    # Relationships
+    segment: Mapped["PipelineSegment"] = relationship(
+        "PipelineSegment", 
+        back_populates="transcripts"
+    )
+    
+    def __repr__(self) -> str:
+        return f"<PipelineTranscript(id={self.id}, segment_id={self.segment_id}, index={self.utterance_index})>"
 
 
 # Status constants
