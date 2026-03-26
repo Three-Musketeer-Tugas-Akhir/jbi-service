@@ -22,7 +22,8 @@ class JobRepository:
         job_id: str,
         video_path: str,
         video_title: str = "",
-        status: str = "UPLOADED"
+        status: str = "UPLOADED",
+        category: Optional[str] = None
     ) -> PipelineJob:
         """Create a new pipeline job."""
         from uuid import UUID
@@ -33,6 +34,7 @@ class JobRepository:
             original_filename=video_title,
             status=status,
             current_stage="upload",
+            category=category,
         )
         self.db.add(job)
         await self.db.flush()
@@ -63,6 +65,28 @@ class JobRepository:
             job.status = status
             if error_message:
                 job.error_message = error_message
+            await self.db.flush()
+            return True
+        return False
+    
+    async def update_category(
+        self,
+        job_id: UUID,
+        category: str
+    ) -> bool:
+        """
+        Update job category (SIBI or BISINDO).
+        
+        Args:
+            job_id: Job UUID
+            category: Sign language category (SIBI or BISINDO)
+            
+        Returns:
+            True if job was found and updated, False otherwise
+        """
+        job = await self.get_by_id(job_id)
+        if job:
+            job.category = category
             await self.db.flush()
             return True
         return False
@@ -141,14 +165,16 @@ class JobRepository:
     async def list_filtered(
         self,
         status: Optional[str] = None,
+        category: Optional[str] = None,
         limit: int = 20,
         offset: int = 0
     ) -> Tuple[List[PipelineJob], int]:
         """
-        List jobs with optional status filtering and pagination.
+        List jobs with optional status and category filtering and pagination.
         
         Args:
             status: Filter by job status (optional)
+            category: Filter by sign language category (optional)
             limit: Max number of jobs to return
             offset: Number of jobs to skip
             
@@ -163,6 +189,11 @@ class JobRepository:
         if status:
             base_query = base_query.where(PipelineJob.status == status)
             count_query = count_query.where(PipelineJob.status == status)
+        
+        # Apply category filter if provided
+        if category:
+            base_query = base_query.where(PipelineJob.category == category)
+            count_query = count_query.where(PipelineJob.category == category)
         
         # Get total count
         total_result = await self.db.execute(count_query)

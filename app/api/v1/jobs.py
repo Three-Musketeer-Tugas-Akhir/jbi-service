@@ -21,6 +21,8 @@ from app.schemas import (
     SegmentResponse,
     BboxResponse,
     ErrorResponse,
+    CategoryUpdateResponse,
+    SignLanguageCategory,
 )
 from app.db.models.pipeline import JobStatus
 from app.repositories.job_repository import JobRepository, get_job_repository
@@ -85,6 +87,7 @@ def _record_to_status_response(record) -> JobStatusResponse:
         job_id=str(record.id),
         status=record.status,
         video_title=record.original_filename or None,
+        category=record.category,
         progress=progress,
         error=record.error_message,
         created_at=record.created_at,
@@ -106,6 +109,12 @@ VALID_STATUSES = {
     "CANCELLED"
 }
 
+# Valid sign language categories
+VALID_CATEGORIES = {
+    SignLanguageCategory.SIBI.value,
+    SignLanguageCategory.BISINDO.value,
+}
+
 
 @router.get(
     "/jobs",
@@ -115,10 +124,11 @@ VALID_STATUSES = {
 async def list_jobs(
     session: AsyncSession = Depends(get_db),
     status: Optional[str] = Query(None, description="Filter by job status"),
+    category: Optional[str] = Query(None, description="Filter by sign language category (SIBI or BISINDO)"),
     limit: int = Query(20, ge=1, le=100, description="Max jobs to return"),
     offset: int = Query(0, ge=0, description="Number of jobs to skip"),
 ):
-    """List all jobs with optional status filtering and pagination.
+    """List all jobs with optional status and category filtering and pagination.
 
     Jobs are sorted by creation time (newest first).
     """
@@ -127,9 +137,15 @@ async def list_jobs(
             status_code=400,
             detail=f"Invalid status '{status}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}",
         )
+    
+    if category is not None and category not in VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category '{category}'. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}",
+        )
 
     records, total = await JobRepository(session).list_filtered(
-        status=status, limit=limit, offset=offset,
+        status=status, category=category, limit=limit, offset=offset,
     )
 
     jobs = [_record_to_status_response(r) for r in records]
@@ -150,15 +166,18 @@ async def create_job(
     session: AsyncSession = Depends(get_db),
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
+    category: Optional[str] = Form(None, description="Sign language category (SIBI or BISINDO)"),
 ):
     """Upload a video or provide a URL to start a detection job.
 
     Provide either a `file` (multipart upload) or a `url` (public video link).
     If both are provided, `file` takes priority.
+    
+    Optional category field to classify the sign language type (SIBI or BISINDO).
     """
     logger.debug(
-        "create_job called — file=%s, url=%s",
-        file.filename if file else None, url,
+        "create_job called — file=%s, url=%s, category=%s",
+        file.filename if file else None, url, category,
     )
 
     if file is None and url is None:
@@ -166,6 +185,13 @@ async def create_job(
         raise HTTPException(
             status_code=400,
             detail="Either 'file' or 'url' must be provided",
+        )
+    
+    # Validate category if provided
+    if category is not None and category not in VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category '{category}'. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}",
         )
 
     job_id = str(uuid.uuid4())
@@ -187,9 +213,11 @@ async def create_job(
         logger.debug("URL downloaded to %s, size=%d bytes", file_path, file_size)
 
     # --- Create job record in DB ---
-    logger.debug("Creating DB record — job_id=%s, video_title=%s", job_id, video_title)
-    record = await JobRepository(session).create( job_id, str(file_path), video_title=video_title)
-    logger.debug("DB record created — status=%s, created_at=%s", record.status, record.created_at)
+    logger.debug("Creating DB record — job_id=%s, video_title=%s, category=%s", job_id, video_title, category)
+    record = await JobRepository(session).create(
+        job_id, str(file_path), video_title=video_title, category=category
+    )
+    logger.debug("DB record created — status=%s, category=%s, created_at=%s", record.status, record.category, record.created_at)
 
     logger.info("Job created: id=%s, source=%s", job_id, "upload" if file else "url")
 
@@ -202,6 +230,7 @@ async def create_job(
         status=record.status,
         original_filename=record.original_filename,
         file_size=file_size,
+        category=record.category,
         created_at=record.created_at,
         message="Job created successfully",
     )
@@ -303,6 +332,53 @@ async def get_job_status(job_id: str, session: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
     return _record_to_status_response(record)
+
+
+# ── PUT /jobs/{job_id}/category ─────────────────────────────────────────
+
+@router.put(
+    "/jobs/{job_id}/category",
+    response_model=CategoryUpdateResponse,
+    responses={
+        404: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+    },
+)
+async def update_job_category(
+    job_id: str,
+    category: str = Form(..., description="Sign language category (SIBI or BISINDO)"),
+    session: AsyncSession = Depends(get_db),
+):
+    """Update the sign language category of a job.
+    
+    Any user can update the category. The category can be set to:
+    - SIBI (Sistem Isyarat Bahasa Indonesia)
+    - BISINDO (Bahasa Isyarat Indonesia)
+    """
+    # Validate category
+    if category not in VALID_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category '{category}'. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}",
+        )
+    
+    # Check if job exists
+    record = await JobRepository(session).get_by_id(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+    
+    # Update category
+    success = await JobRepository(session).update_category(job_id, category)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update category")
+    
+    logger.info("Job category updated: job_id=%s, category=%s", job_id, category)
+    
+    return CategoryUpdateResponse(
+        job_id=job_id,
+        category=category,
+        message=f"Category updated to {category}",
+    )
 
 
 # ── DELETE /jobs/{job_id} ────────────────────────────────────────────────

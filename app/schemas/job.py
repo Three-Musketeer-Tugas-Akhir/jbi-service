@@ -5,6 +5,7 @@ Pydantic models for job API requests and responses.
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import Optional, List
 from uuid import UUID
 
@@ -16,12 +17,19 @@ class JobCreate(BaseModel):
     video_url: HttpUrl
 
 
+class SignLanguageCategory(str, Enum):
+    """Sign language category enum."""
+    SIBI = "SIBI"
+    BISINDO = "BISINDO"
+
+
 class JobCreateResponse(BaseModel):
     """Response for POST /api/v1/jobs."""
     id: UUID
     status: str
     original_filename: str
     file_size: int
+    category: Optional[str] = None
     created_at: datetime
     message: str
 
@@ -35,6 +43,7 @@ class JobResponse(BaseModel):
     status: str
     original_filename: str
     file_size: int
+    category: Optional[str] = None
     current_stage: Optional[str] = None
     error_message: Optional[str] = None
     created_at: datetime
@@ -66,6 +75,7 @@ class JobStatusResponse(BaseModel):
     job_id: str
     status: str
     video_title: Optional[str] = None
+    category: Optional[str] = None
     progress: Optional[JobProgressResponse] = None
     error: Optional[str] = None
     created_at: datetime
@@ -138,6 +148,7 @@ class JobStatusDetailResponse(BaseModel):
     id: str = Field(..., description="Job UUID")
     status: str = Field(..., description="Current job status")
     current_stage: Optional[str] = Field(None, description="Current processing stage")
+    category: Optional[str] = Field(None, description="Sign language category (SIBI/BISINDO)")
     progress: int = Field(..., ge=0, le=100, description="Completion percentage (0-100)")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
@@ -152,6 +163,7 @@ class JobListItemResponse(BaseModel):
     id: str = Field(..., description="Job UUID")
     status: str = Field(..., description="Current job status")
     current_stage: Optional[str] = Field(None, description="Current processing stage")
+    category: Optional[str] = Field(None, description="Sign language category (SIBI/BISINDO)")
     progress: int = Field(..., ge=0, le=100, description="Completion percentage (0-100)")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
@@ -187,6 +199,13 @@ class HealthResponse(BaseModel):
     yolo_model: str = Field(..., description="YOLO model status (loaded/not_loaded)")
     gpu_available: bool = Field(..., description="GPU availability")
     disk_space: str = Field(..., description="Disk space status (OK/low/critical)")
+
+
+class CategoryUpdateResponse(BaseModel):
+    """Response for category update endpoint."""
+    job_id: str = Field(..., description="Job UUID")
+    category: str = Field(..., description="Updated category (SIBI/BISINDO)")
+    message: str = Field(..., description="Success message")
 
 
 class ErrorResponse(BaseModel):

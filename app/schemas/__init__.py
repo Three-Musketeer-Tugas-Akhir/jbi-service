@@ -42,6 +42,8 @@ from app.schemas.job import (
     JobListResponse,
     HealthResponse,
     ErrorResponse,
+    SignLanguageCategory,
+    CategoryUpdateResponse,
 )
 
 # User/Profile schemas (from auth domain)
@@ -120,4 +122,6 @@ __all__ = [
     "JobListResponse",
     "HealthResponse",
     "ErrorResponse",
+    "SignLanguageCategory",
+    "CategoryUpdateResponse",
 ]

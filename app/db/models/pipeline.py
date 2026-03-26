@@ -18,6 +18,12 @@ if TYPE_CHECKING:
     from app.db.models.annotation import AnnotationEdit, ASRReview, AnnotationQueue
 
 
+class SignLanguageCategory:
+    """Sign language category constants."""
+    SIBI = "SIBI"      # Sistem Isyarat Bahasa Indonesia
+    BISINDO = "BISINDO"  # Bahasa Isyarat Indonesia
+
+
 class PipelineJob(Base):
     """Video processing job."""
     
@@ -33,6 +39,14 @@ class PipelineJob(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     current_stage: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    
+    # Sign language category (SIBI or BISINDO)
+    category: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        index=True,
+        comment="Sign language category: SIBI or BISINDO"
+    )
     created_by: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True),
         ForeignKey("auth_users.id", ondelete="SET NULL"),
