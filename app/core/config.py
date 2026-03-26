@@ -45,6 +45,7 @@ class Settings(BaseSettings):
 
     # --- Server ---
     cors_origins: str = "*"
+    use_cors: bool = True  # Toggle CORS middleware on/off
     api_v1_prefix: str = "/api/v1"
     uvicorn_host: str = "0.0.0.0"
     uvicorn_port: int = 8000
@@ -108,6 +109,11 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",")]
+
+    @property
+    def cors_enabled(self) -> bool:
+        """Return whether CORS middleware should be enabled."""
+        return self.use_cors
 
 
 settings = Settings()
