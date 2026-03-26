@@ -8,12 +8,13 @@ from pathlib import Path
 # Add app to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from app.services.asr_worker import run_asr_worker
+from app.workers.asr_worker import ASRWorker
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run_asr_worker())
+        worker = ASRWorker()
+        asyncio.run(worker.run())
     except KeyboardInterrupt:
         print("Worker stopped by user")
         sys.exit(0)
