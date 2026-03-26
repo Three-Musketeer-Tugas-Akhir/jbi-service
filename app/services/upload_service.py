@@ -21,7 +21,8 @@ from uuid import UUID, uuid4
 from minio import Minio
 from minio.commonconfig import ComposeSource
 from minio.error import S3Error
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import StorageError, NotFoundError, ValidationError
@@ -41,12 +42,12 @@ class UploadService:
     FINAL_BUCKET = "raw-videos"
     UPLOAD_EXPIRY_HOURS = 24
     
-    def __init__(self, db: Session, minio_client: Optional[Minio] = None):
+    def __init__(self, db: AsyncSession, minio_client: Optional[Minio] = None):
         """
         Initialize upload service.
         
         Args:
-            db: Database session
+            db: Database session (async)
             minio_client: Optional MinIO client (creates new if not provided)
         """
         self.db = db
@@ -104,7 +105,7 @@ class UploadService:
         
         return result
     
-    def create_upload(
+    async def create_upload(
         self,
         user: User,
         file_size: int,
@@ -175,8 +176,8 @@ class UploadService:
         )
         
         self.db.add(upload)
-        self.db.commit()
-        self.db.refresh(upload)
+        await self.db.flush()
+        await self.db.refresh(upload)
         
         logger.info(
             f"Created upload {upload_id} for user {user.id}: "
@@ -185,7 +186,7 @@ class UploadService:
         
         return upload
     
-    def get_upload(self, upload_id: str, user_id: UUID) -> Upload:
+    async def get_upload(self, upload_id: str, user_id: UUID) -> Upload:
         """
         Get upload by ID, verifying user ownership.
         
@@ -199,17 +200,20 @@ class UploadService:
         Raises:
             NotFoundError: If upload not found or not owned by user
         """
-        upload = self.db.query(Upload).filter(
-            Upload.upload_id == upload_id,
-            Upload.user_id == user_id
-        ).first()
+        result = await self.db.execute(
+            select(Upload).where(
+                Upload.upload_id == upload_id,
+                Upload.user_id == user_id
+            )
+        )
+        upload = result.scalar_one_or_none()
         
         if not upload:
             raise NotFoundError(f"Upload {upload_id} not found")
         
         return upload
     
-    def get_upload_offset(self, upload_id: str, user_id: UUID) -> int:
+    async def get_upload_offset(self, upload_id: str, user_id: UUID) -> int:
         """
         Get current upload offset for resume.
         
@@ -220,7 +224,7 @@ class UploadService:
         Returns:
             Number of bytes received so far
         """
-        upload = self.get_upload(upload_id, user_id)
+        upload = await self.get_upload(upload_id, user_id)
         
         # Calculate offset from received chunks
         if upload.status == "complete":
@@ -236,7 +240,7 @@ class UploadService:
         
         return offset
     
-    def store_chunk(
+    async def store_chunk(
         self,
         upload_id: str,
         user_id: UUID,
@@ -261,7 +265,7 @@ class UploadService:
             NotFoundError: If upload not found
             ValidationError: If chunk is invalid
         """
-        upload = self.get_upload(upload_id, user_id)
+        upload = await self.get_upload(upload_id, user_id)
         
         # Validate offset aligns with chunk boundaries
         chunk_index = offset // upload.chunk_size
@@ -280,15 +284,10 @@ class UploadService:
             logger.debug(f"Chunk {chunk_index} already received for upload {upload_id}")
             return offset + len(chunk_data)
         
-        # Mark as uploading (for parallel tracking)
-        if chunk_index not in upload.chunks_uploading:
-            upload.chunks_uploading.append(chunk_index)
-            self.db.commit()
+        # Store chunk in MinIO temp bucket
+        chunk_key = f"{upload.temp_prefix}chunk_{chunk_index:08d}"
         
         try:
-            # Store chunk in MinIO temp bucket
-            chunk_key = f"{upload.temp_prefix}chunk_{chunk_index:08d}"
-            
             self.minio.put_object(
                 bucket_name=upload.temp_bucket,
                 object_name=chunk_key,
@@ -297,11 +296,11 @@ class UploadService:
             )
             
             # Update upload record
-            upload.chunks_received.append(chunk_index)
-            upload.chunks_received.sort()
-            upload.chunks_uploading = [
-                c for c in upload.chunks_uploading if c != chunk_index
-            ]
+            chunks_received = list(upload.chunks_received)
+            chunks_received.append(chunk_index)
+            chunks_received.sort()
+            upload.chunks_received = chunks_received
+            
             upload.status = "uploading"
             upload.updated_at = datetime.utcnow()
             
@@ -310,7 +309,7 @@ class UploadService:
                 upload.status = "assembling"
                 logger.info(f"All chunks received for upload {upload_id}, starting assembly")
             
-            self.db.commit()
+            await self.db.flush()
             
             new_offset = offset + len(chunk_data)
             logger.debug(
@@ -321,16 +320,10 @@ class UploadService:
             return new_offset
             
         except S3Error as e:
-            # Remove from uploading list on error
-            upload.chunks_uploading = [
-                c for c in upload.chunks_uploading if c != chunk_index
-            ]
-            self.db.commit()
-            
             logger.error(f"Failed to store chunk {chunk_index} for upload {upload_id}: {e}")
             raise StorageError(f"Failed to store chunk: {e}")
     
-    def assemble_file(self, upload: Upload) -> str:
+    async def assemble_file(self, upload: Upload) -> str:
         """
         Assemble all chunks into final file.
         
@@ -388,7 +381,7 @@ class UploadService:
             logger.error(f"Failed to assemble upload {upload.upload_id}: {e}")
             raise StorageError(f"Failed to assemble file: {e}")
     
-    def cancel_upload(self, upload_id: str, user_id: UUID) -> None:
+    async def cancel_upload(self, upload_id: str, user_id: UUID) -> None:
         """
         Cancel upload and cleanup temporary chunks.
         
@@ -396,18 +389,18 @@ class UploadService:
             upload_id: Tus upload ID
             user_id: User ID
         """
-        upload = self.get_upload(upload_id, user_id)
+        upload = await self.get_upload(upload_id, user_id)
         
         # Cleanup temp chunks
-        self._cleanup_temp_chunks(upload)
+        await self._cleanup_temp_chunks(upload)
         
         # Mark as cancelled
         upload.status = "cancelled"
-        self.db.commit()
+        await self.db.flush()
         
         logger.info(f"Cancelled upload {upload_id}")
     
-    def _cleanup_temp_chunks(self, upload: Upload) -> None:
+    async def _cleanup_temp_chunks(self, upload: Upload) -> None:
         """Delete temporary chunk files from MinIO."""
         for i in range(upload.total_chunks):
             chunk_key = f"{upload.temp_prefix}chunk_{i:08d}"
@@ -416,7 +409,7 @@ class UploadService:
             except S3Error as e:
                 logger.warning(f"Failed to delete chunk {chunk_key}: {e}")
     
-    def cleanup_stale_uploads(self, max_age_hours: int = 24) -> int:
+    async def cleanup_stale_uploads(self, max_age_hours: int = 24) -> int:
         """
         Cleanup incomplete uploads older than specified hours.
         
@@ -428,21 +421,24 @@ class UploadService:
         """
         cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
         
-        stale_uploads = self.db.query(Upload).filter(
-            Upload.status.in_(["pending", "uploading", "assembling"]),
-            Upload.expires_at < cutoff,
-        ).all()
+        result = await self.db.execute(
+            select(Upload).where(
+                Upload.status.in_(["pending", "uploading", "assembling"]),
+                Upload.expires_at < cutoff,
+            )
+        )
+        stale_uploads = result.scalars().all()
         
         count = 0
         for upload in stale_uploads:
             try:
-                self._cleanup_temp_chunks(upload)
+                await self._cleanup_temp_chunks(upload)
                 upload.status = "cancelled"
                 count += 1
             except Exception as e:
                 logger.error(f"Failed to cleanup upload {upload.upload_id}: {e}")
         
-        self.db.commit()
+        await self.db.flush()
         
         if count > 0:
             logger.info(f"Cleaned up {count} stale uploads")

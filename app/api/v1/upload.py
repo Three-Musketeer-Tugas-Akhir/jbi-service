@@ -8,6 +8,8 @@ Implements Tus 1.0.0 protocol for resumable uploads:
 - DELETE /files/{id} - Cancel upload
 """
 
+import base64
+import hashlib
 import logging
 from typing import Optional
 
@@ -21,7 +23,7 @@ from fastapi import (
     status,
     BackgroundTasks
 )
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.exceptions import NotFoundError, ValidationError, StorageError
@@ -35,18 +37,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/upload", tags=["upload"])
 
 
-# ── Helper Functions ─────────────────────────────────────────────────
-
-async def get_upload_service(db: Session = Depends(get_db)) -> UploadService:
-    """Dependency to get UploadService with database session."""
-    return UploadService(db)
-
-
-async def get_pipeline_job_service(db: Session = Depends(get_db)) -> PipelineJobService:
-    """Dependency to get PipelineJobService with database session."""
-    return PipelineJobService(db)
-
-
 # ── Tus Protocol Endpoints ────────────────────────────────────────────
 
 @router.post("/files", status_code=status.HTTP_201_CREATED)
@@ -56,7 +46,7 @@ async def create_upload(
     upload_metadata: Optional[str] = Header(None, alias="Upload-Metadata", description="Base64-encoded metadata"),
     content_type: Optional[str] = Header(None, alias="Content-Type"),
     current_user: User = Depends(get_current_user),
-    upload_service: UploadService = Depends(get_upload_service),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Create new upload resource (Tus Protocol).
@@ -72,7 +62,8 @@ async def create_upload(
         Tus-Resumable: 1.0.0
     """
     try:
-        upload = upload_service.create_upload(
+        upload_service = UploadService(db)
+        upload = await upload_service.create_upload(
             user=current_user,
             file_size=upload_length,
             metadata=upload_metadata
@@ -106,7 +97,7 @@ async def create_upload(
 async def get_upload_status(
     upload_id: str,
     current_user: User = Depends(get_current_user),
-    upload_service: UploadService = Depends(get_upload_service),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get upload status and current offset (Tus Protocol).
@@ -123,8 +114,9 @@ async def get_upload_status(
         404 Not Found if upload doesn't exist
     """
     try:
-        offset = upload_service.get_upload_offset(upload_id, current_user.id)
-        upload = upload_service.get_upload(upload_id, current_user.id)
+        upload_service = UploadService(db)
+        offset = await upload_service.get_upload_offset(upload_id, current_user.id)
+        upload = await upload_service.get_upload(upload_id, current_user.id)
         
         headers = {
             "Upload-Offset": str(offset),
@@ -138,7 +130,6 @@ async def get_upload_status(
         if upload.category or upload.filename:
             metadata_parts = []
             if upload.filename:
-                import base64
                 filename_b64 = base64.b64encode(upload.filename.encode()).decode()
                 metadata_parts.append(f"filename {filename_b64}")
             if upload.category:
@@ -166,8 +157,7 @@ async def upload_chunk(
     upload_checksum: Optional[str] = Header(None, alias="Upload-Checksum", description="Optional checksum"),
     content_type: str = Header(..., alias="Content-Type"),
     current_user: User = Depends(get_current_user),
-    upload_service: UploadService = Depends(get_upload_service),
-    pipeline_service: PipelineJobService = Depends(get_pipeline_job_service),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Upload a file chunk (Tus Protocol).
@@ -201,9 +191,6 @@ async def upload_chunk(
         # Verify checksum if provided
         if upload_checksum:
             try:
-                import hashlib
-                import base64
-                
                 # Parse checksum header (format: "sha256 base64value")
                 algo, checksum_b64 = upload_checksum.split(" ", 1)
                 if algo.lower() != "sha256":
@@ -222,7 +209,8 @@ async def upload_chunk(
                 # Continue anyway - checksum is optional
         
         # Store chunk
-        new_offset = upload_service.store_chunk(
+        upload_service = UploadService(db)
+        new_offset = await upload_service.store_chunk(
             upload_id=upload_id,
             user_id=current_user.id,
             chunk_data=chunk_data,
@@ -230,7 +218,7 @@ async def upload_chunk(
         )
         
         # Check if upload is complete (all chunks received)
-        upload = upload_service.get_upload(upload_id, current_user.id)
+        upload = await upload_service.get_upload(upload_id, current_user.id)
         
         if upload.status == "assembling":
             # Trigger file assembly and job creation in background
@@ -238,8 +226,6 @@ async def upload_chunk(
                 _assemble_and_create_job,
                 upload_id,
                 current_user.id,
-                upload_service,
-                pipeline_service
             )
         
         return Response(
@@ -266,51 +252,63 @@ async def upload_chunk(
 
 async def _assemble_and_create_job(
     upload_id: str,
-    user_id: str,
-    upload_service: UploadService,
-    pipeline_service: PipelineJobService,
+    user_id: UUID,
 ):
     """
     Background task to assemble file and create pipeline job.
     
     Called when all chunks are received.
     """
-    try:
-        logger.info(f"Starting assembly for upload {upload_id}")
-        
-        # Get upload
-        upload = upload_service.get_upload(upload_id, user_id)
-        
-        # Assemble file
-        final_key = upload_service.assemble_file(upload)
-        upload.final_key = final_key
-        
-        # Get user
-        user = upload_service.db.query(User).filter(User.id == user_id).first()
-        
-        # Create pipeline job
-        job = await pipeline_service.create_pipeline_job(upload, user)
-        
-        logger.info(
-            f"Upload {upload_id} complete. Created pipeline job {job.id}"
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to assemble upload {upload_id}: {e}")
-        # Mark upload as failed
+    from app.db.session import async_session
+    
+    async with async_session() as db:
         try:
-            upload = upload_service.get_upload(upload_id, user_id)
-            upload.status = "failed"
-            upload_service.db.commit()
-        except Exception as cleanup_error:
-            logger.error(f"Failed to mark upload as failed: {cleanup_error}")
+            logger.info(f"Starting assembly for upload {upload_id}")
+            
+            upload_service = UploadService(db)
+            pipeline_service = PipelineJobService(db)
+            
+            # Get upload
+            upload = await upload_service.get_upload(upload_id, user_id)
+            
+            # Assemble file
+            final_key = await upload_service.assemble_file(upload)
+            upload.final_key = final_key
+            
+            # Get user
+            from sqlalchemy import select
+            from app.db.models import User
+            result = await db.execute(select(User).where(User.id == user_id))
+            user = result.scalar_one_or_none()
+            
+            if not user:
+                raise Exception(f"User {user_id} not found")
+            
+            # Create pipeline job
+            job = await pipeline_service.create_pipeline_job(upload, user)
+            
+            await db.commit()
+            
+            logger.info(
+                f"Upload {upload_id} complete. Created pipeline job {job.id}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to assemble upload {upload_id}: {e}")
+            # Mark upload as failed
+            try:
+                upload = await upload_service.get_upload(upload_id, user_id)
+                upload.status = "failed"
+                await db.commit()
+            except Exception as cleanup_error:
+                logger.error(f"Failed to mark upload as failed: {cleanup_error}")
 
 
 @router.delete("/files/{upload_id}")
 async def cancel_upload(
     upload_id: str,
     current_user: User = Depends(get_current_user),
-    upload_service: UploadService = Depends(get_upload_service),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Cancel upload and cleanup temporary chunks (Tus Protocol).
@@ -320,7 +318,9 @@ async def cancel_upload(
         404 Not Found if upload doesn't exist
     """
     try:
-        upload_service.cancel_upload(upload_id, current_user.id)
+        upload_service = UploadService(db)
+        await upload_service.cancel_upload(upload_id, current_user.id)
+        await db.commit()
         
         logger.info(f"Cancelled upload {upload_id}")
         
@@ -342,8 +342,7 @@ async def cancel_upload(
 async def get_detailed_status(
     upload_id: str,
     current_user: User = Depends(get_current_user),
-    upload_service: UploadService = Depends(get_upload_service),
-    pipeline_service: PipelineJobService = Depends(get_pipeline_job_service),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Get detailed upload status including pipeline job info.
@@ -352,7 +351,10 @@ async def get_detailed_status(
         JSON with upload status and job details
     """
     try:
-        upload = upload_service.get_upload(upload_id, current_user.id)
+        upload_service = UploadService(db)
+        pipeline_service = PipelineJobService(db)
+        
+        upload = await upload_service.get_upload(upload_id, current_user.id)
         
         result = {
             "upload_id": upload.upload_id,
@@ -370,7 +372,7 @@ async def get_detailed_status(
         
         # Add job info if available
         if upload.job_id:
-            pipeline_status = pipeline_service.get_pipeline_status(upload.job_id)
+            pipeline_status = await pipeline_service.get_pipeline_status(upload.job_id)
             result["pipeline_job"] = pipeline_status
         
         return result
@@ -385,7 +387,7 @@ async def get_detailed_status(
 @router.post("/cleanup")
 async def cleanup_stale_uploads(
     current_user: User = Depends(get_current_user),
-    upload_service: UploadService = Depends(get_upload_service),
+    db: AsyncSession = Depends(get_db),
     max_age_hours: int = 24,
 ):
     """
@@ -398,7 +400,9 @@ async def cleanup_stale_uploads(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        count = upload_service.cleanup_stale_uploads(max_age_hours)
+        upload_service = UploadService(db)
+        count = await upload_service.cleanup_stale_uploads(max_age_hours)
+        await db.commit()
         
         return {
             "cleaned": count,

@@ -10,7 +10,8 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.models import (
@@ -35,12 +36,12 @@ class PipelineJobService:
     - Establishes dependencies between stages
     """
     
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         """
         Initialize service.
         
         Args:
-            db: Database session
+            db: Database session (async)
         """
         self.db = db
         self.minio = MinIOService()
@@ -78,7 +79,7 @@ class PipelineJobService:
             is_cancelled=False,
         )
         self.db.add(job)
-        self.db.flush()  # Get job.id without full commit
+        await self.db.flush()  # Get job.id without full commit
         
         # 2. Create queue jobs for each pipeline stage
         queue_jobs = await self._create_queue_jobs(job, upload)
@@ -92,7 +93,7 @@ class PipelineJobService:
         upload.status = "complete"
         upload.completed_at = datetime.utcnow()
         
-        self.db.commit()
+        await self.db.flush()
         
         logger.info(
             f"Created pipeline job {job.id} for upload {upload.upload_id} "
@@ -146,7 +147,7 @@ class PipelineJobService:
         )
         self.db.add(detection_job)
         queue_jobs.append(detection_job)
-        self.db.flush()  # Get ID for dependency
+        await self.db.flush()  # Get ID for dependency
         
         # Stage 2: ASR (Whisper transcription)
         # Depends on detection completion
@@ -172,7 +173,7 @@ class PipelineJobService:
         )
         self.db.add(asr_job)
         queue_jobs.append(asr_job)
-        self.db.flush()
+        await self.db.flush()
         
         # Stage 3: Cropping (Video segmentation)
         # Depends on ASR completion
@@ -199,7 +200,7 @@ class PipelineJobService:
         self.db.add(cropping_job)
         queue_jobs.append(cropping_job)
         
-        self.db.flush()
+        await self.db.flush()
         
         logger.debug(
             f"Created queue jobs for pipeline job {job.id}: "
@@ -264,10 +265,13 @@ class PipelineJobService:
             Next QueueJob if found, None otherwise
         """
         # Find the next job that depends on this one
-        next_job = self.db.query(QueueJob).filter(
-            QueueJob.depends_on == current_queue_job.id,
-            QueueJob.status == "pending"
-        ).first()
+        result = await self.db.execute(
+            select(QueueJob).where(
+                QueueJob.depends_on == current_queue_job.id,
+                QueueJob.status == "pending"
+            )
+        )
+        next_job = result.scalar_one_or_none()
         
         if next_job:
             # Keep it pending - worker will pick it up
@@ -284,7 +288,7 @@ class PipelineJobService:
         )
         return None
     
-    def get_pipeline_status(self, job_id: UUID) -> dict:
+    async def get_pipeline_status(self, job_id: UUID) -> dict:
         """
         Get complete pipeline status including all stages.
         
@@ -294,13 +298,18 @@ class PipelineJobService:
         Returns:
             Status dictionary with all stages
         """
-        job = self.db.query(PipelineJob).filter(PipelineJob.id == job_id).first()
+        result = await self.db.execute(
+            select(PipelineJob).where(PipelineJob.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+        
         if not job:
             return {"error": "Job not found"}
         
-        queue_jobs = self.db.query(QueueJob).filter(
-            QueueJob.job_id == job_id
-        ).order_by(QueueJob.priority).all()
+        queue_result = await self.db.execute(
+            select(QueueJob).where(QueueJob.job_id == job_id).order_by(QueueJob.priority)
+        )
+        queue_jobs = queue_result.scalars().all()
         
         stages = []
         for qj in queue_jobs:
