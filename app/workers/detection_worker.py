@@ -111,7 +111,8 @@ class DetectionWorker(BaseWorker):
     async def _run_detection(self, video_path: str, job_id: UUID):
         """Run detection on video."""
         # Use the detector from pipeline stage
-        jbi_segments = await self.detector.detect_and_segment(video_path)
+        from pathlib import Path
+        jbi_segments = await self.detector.detect(Path(video_path))
         return jbi_segments
     
     async def _queue_next_stage(self, job_id: UUID, segments):

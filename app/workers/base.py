@@ -129,19 +129,21 @@ class BaseWorker(ABC):
         """Mark job as completed in queue."""
         async with async_session() as session:
             await queue_service.mark_completed(
-                session, 
                 job_id=job.id,
-                result=result
+                db=session
             )
             await session.commit()
     
     async def _mark_failed(self, job: QueueJob, error: str) -> None:
         """Mark job as failed in queue."""
         async with async_session() as session:
+            # Attach job to session if not already attached
+            if job not in session:
+                job = await session.merge(job)
             await queue_service.mark_failed(
-                session,
-                job_id=job.id,
-                error_message=error
+                job=job,
+                error_message=error,
+                db=session
             )
             await session.commit()
     
