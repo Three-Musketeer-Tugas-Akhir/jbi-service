@@ -57,6 +57,11 @@ class MinIOService:
             self._ensure_bucket_exists()
             self._initialized = True
     
+    @property
+    def client(self):
+        """Access the MinIO client."""
+        return self._client
+    
     def _ensure_bucket_exists(self) -> None:
         """Create bucket if it doesn't exist."""
         try:
