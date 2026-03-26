@@ -133,7 +133,8 @@ class JobService:
                 queue_name="detection",
                 payload={
                     "job_id": str(job.id),
-                    "stage": "detection"
+                    "stage": "detection",
+                    "video_key": video_path
                 }
             )
             
