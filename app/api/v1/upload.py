@@ -24,12 +24,11 @@ from fastapi import (
     status,
     BackgroundTasks
 )
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.core.exceptions import NotFoundError, ValidationError, StorageError
-from app.db.models import User, Upload
-from app.db.session import get_db
+from app.db.models import User
+from app.db.session import async_session
 from app.services.upload_service import UploadService
 from app.services.pipeline_job_service import PipelineJobService
 
@@ -47,7 +46,6 @@ async def create_upload(
     upload_metadata: Optional[str] = Header(None, alias="Upload-Metadata", description="Base64-encoded metadata"),
     content_type: Optional[str] = Header(None, alias="Content-Type"),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Create new upload resource (Tus Protocol).
@@ -63,12 +61,14 @@ async def create_upload(
         Tus-Resumable: 1.0.0
     """
     try:
-        upload_service = UploadService(db)
-        upload = await upload_service.create_upload(
-            user=current_user,
-            file_size=upload_length,
-            metadata=upload_metadata
-        )
+        async with async_session() as db:
+            upload_service = UploadService(db)
+            upload = await upload_service.create_upload(
+                user=current_user,
+                file_size=upload_length,
+                metadata=upload_metadata
+            )
+            await db.commit()
         
         logger.info(
             f"Created upload {upload.upload_id} for user {current_user.id}: "
@@ -98,7 +98,6 @@ async def create_upload(
 async def get_upload_status(
     upload_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Get upload status and current offset (Tus Protocol).
@@ -115,29 +114,30 @@ async def get_upload_status(
         404 Not Found if upload doesn't exist
     """
     try:
-        upload_service = UploadService(db)
-        offset = await upload_service.get_upload_offset(upload_id, current_user.id)
-        upload = await upload_service.get_upload(upload_id, current_user.id)
-        
-        headers = {
-            "Upload-Offset": str(offset),
-            "Upload-Length": str(upload.file_size),
-            "Tus-Resumable": "1.0.0",
-            "Cache-Control": "no-store",
-            "Content-Length": "0",
-        }
-        
-        # Add Upload-Metadata if available
-        if upload.category or upload.filename:
-            metadata_parts = []
-            if upload.filename:
-                filename_b64 = base64.b64encode(upload.filename.encode()).decode()
-                metadata_parts.append(f"filename {filename_b64}")
-            if upload.category:
-                category_b64 = base64.b64encode(upload.category.encode()).decode()
-                metadata_parts.append(f"category {category_b64}")
-            if metadata_parts:
-                headers["Upload-Metadata"] = ",".join(metadata_parts)
+        async with async_session() as db:
+            upload_service = UploadService(db)
+            offset = await upload_service.get_upload_offset(upload_id, current_user.id)
+            upload = await upload_service.get_upload(upload_id, current_user.id)
+            
+            headers = {
+                "Upload-Offset": str(offset),
+                "Upload-Length": str(upload.file_size),
+                "Tus-Resumable": "1.0.0",
+                "Cache-Control": "no-store",
+                "Content-Length": "0",
+            }
+            
+            # Add Upload-Metadata if available
+            if upload.category or upload.filename:
+                metadata_parts = []
+                if upload.filename:
+                    filename_b64 = base64.b64encode(upload.filename.encode()).decode()
+                    metadata_parts.append(f"filename {filename_b64}")
+                if upload.category:
+                    category_b64 = base64.b64encode(upload.category.encode()).decode()
+                    metadata_parts.append(f"category {category_b64}")
+                if metadata_parts:
+                    headers["Upload-Metadata"] = ",".join(metadata_parts)
         
         return Response(status_code=200, headers=headers)
         
@@ -158,12 +158,9 @@ async def upload_chunk(
     upload_checksum: Optional[str] = Header(None, alias="Upload-Checksum", description="Optional checksum"),
     content_type: str = Header(..., alias="Content-Type"),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Upload a file chunk (Tus Protocol).
-    
-    Supports parallel uploads - chunks can arrive in any order.
     
     Headers:
         Upload-Offset: Byte offset for this chunk
@@ -179,7 +176,7 @@ async def upload_chunk(
         Upload-Offset header with new offset
     """
     try:
-        # Read chunk data
+        # Read chunk data first (before acquiring DB connection)
         chunk_data = await request.body()
         
         # Validate content length
@@ -192,7 +189,6 @@ async def upload_chunk(
         # Verify checksum if provided
         if upload_checksum:
             try:
-                # Parse checksum header (format: "sha256 base64value")
                 algo, checksum_b64 = upload_checksum.split(" ", 1)
                 if algo.lower() != "sha256":
                     raise HTTPException(status_code=400, detail="Only sha256 checksums supported")
@@ -207,22 +203,26 @@ async def upload_chunk(
                 raise
             except Exception as e:
                 logger.warning(f"Checksum verification failed: {e}")
-                # Continue anyway - checksum is optional
         
-        # Store chunk
-        upload_service = UploadService(db)
-        new_offset = await upload_service.store_chunk(
-            upload_id=upload_id,
-            user_id=current_user.id,
-            chunk_data=chunk_data,
-            offset=upload_offset
-        )
+        # Use short database transaction for chunk storage
+        async with async_session() as db:
+            upload_service = UploadService(db)
+            
+            new_offset = await upload_service.store_chunk(
+                upload_id=upload_id,
+                user_id=current_user.id,
+                chunk_data=chunk_data,
+                offset=upload_offset
+            )
+            
+            # Check if upload is complete
+            upload = await upload_service.get_upload(upload_id, current_user.id)
+            is_complete = upload.status == "assembling"
+            
+            await db.commit()
         
-        # Check if upload is complete (all chunks received)
-        upload = await upload_service.get_upload(upload_id, current_user.id)
-        
-        if upload.status == "assembling":
-            # Trigger file assembly and job creation in background
+        # Trigger background assembly if complete (outside DB transaction)
+        if is_complete:
             background_tasks.add_task(
                 _assemble_and_create_job,
                 upload_id,
@@ -260,8 +260,6 @@ async def _assemble_and_create_job(
     
     Called when all chunks are received.
     """
-    from app.db.session import async_session
-    
     async with async_session() as db:
         try:
             logger.info(f"Starting assembly for upload {upload_id}")
@@ -309,7 +307,6 @@ async def _assemble_and_create_job(
 async def cancel_upload(
     upload_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Cancel upload and cleanup temporary chunks (Tus Protocol).
@@ -319,9 +316,10 @@ async def cancel_upload(
         404 Not Found if upload doesn't exist
     """
     try:
-        upload_service = UploadService(db)
-        await upload_service.cancel_upload(upload_id, current_user.id)
-        await db.commit()
+        async with async_session() as db:
+            upload_service = UploadService(db)
+            await upload_service.cancel_upload(upload_id, current_user.id)
+            await db.commit()
         
         logger.info(f"Cancelled upload {upload_id}")
         
@@ -337,13 +335,10 @@ async def cancel_upload(
         raise HTTPException(status_code=500, detail="Failed to cancel upload")
 
 
-# ── Additional Endpoints ─────────────────────────────────────────────
-
 @router.get("/files/{upload_id}/status")
 async def get_detailed_status(
     upload_id: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
     """
     Get detailed upload status including pipeline job info.
@@ -352,29 +347,30 @@ async def get_detailed_status(
         JSON with upload status and job details
     """
     try:
-        upload_service = UploadService(db)
-        pipeline_service = PipelineJobService(db)
-        
-        upload = await upload_service.get_upload(upload_id, current_user.id)
-        
-        result = {
-            "upload_id": upload.upload_id,
-            "filename": upload.filename,
-            "status": upload.status,
-            "file_size": upload.file_size,
-            "chunks_received": len(upload.chunks_received),
-            "total_chunks": upload.total_chunks,
-            "progress_percent": round(
-                (len(upload.chunks_received) / upload.total_chunks) * 100, 2
-            ) if upload.total_chunks > 0 else 0,
-            "created_at": upload.created_at.isoformat() if upload.created_at else None,
-            "expires_at": upload.expires_at.isoformat() if upload.expires_at else None,
-        }
-        
-        # Add job info if available
-        if upload.job_id:
-            pipeline_status = await pipeline_service.get_pipeline_status(upload.job_id)
-            result["pipeline_job"] = pipeline_status
+        async with async_session() as db:
+            upload_service = UploadService(db)
+            pipeline_service = PipelineJobService(db)
+            
+            upload = await upload_service.get_upload(upload_id, current_user.id)
+            
+            result = {
+                "upload_id": upload.upload_id,
+                "filename": upload.filename,
+                "status": upload.status,
+                "file_size": upload.file_size,
+                "chunks_received": len(upload.chunks_received),
+                "total_chunks": upload.total_chunks,
+                "progress_percent": round(
+                    (len(upload.chunks_received) / upload.total_chunks) * 100, 2
+                ) if upload.total_chunks > 0 else 0,
+                "created_at": upload.created_at.isoformat() if upload.created_at else None,
+                "expires_at": upload.expires_at.isoformat() if upload.expires_at else None,
+            }
+            
+            # Add job info if available
+            if upload.job_id:
+                pipeline_status = await pipeline_service.get_pipeline_status(upload.job_id)
+                result["pipeline_job"] = pipeline_status
         
         return result
         
@@ -388,7 +384,6 @@ async def get_detailed_status(
 @router.post("/cleanup")
 async def cleanup_stale_uploads(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
     max_age_hours: int = 24,
 ):
     """
@@ -401,9 +396,10 @@ async def cleanup_stale_uploads(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        upload_service = UploadService(db)
-        count = await upload_service.cleanup_stale_uploads(max_age_hours)
-        await db.commit()
+        async with async_session() as db:
+            upload_service = UploadService(db)
+            count = await upload_service.cleanup_stale_uploads(max_age_hours)
+            await db.commit()
         
         return {
             "cleaned": count,
