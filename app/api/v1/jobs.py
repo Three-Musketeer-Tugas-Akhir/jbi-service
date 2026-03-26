@@ -150,15 +150,15 @@ async def create_job(
             "Processing file upload — filename=%s, content_type=%s",
             file.filename, file.content_type,
         )
-        file_path = await _handle_file_upload(job_id, file)
+        file_path, file_size = await _handle_file_upload(job_id, file)
         video_title = file.filename or ""
-        logger.debug("File saved to %s", file_path)
+        logger.debug("File saved to %s, size=%d bytes", file_path, file_size)
     else:
         logger.debug("Processing URL download — url=%s", url)
-        file_path = _handle_url_download(job_id, url)
+        file_path, file_size = _handle_url_download(job_id, url)
         # Extract filename from URL path
         video_title = Path(url).name.split("?")[0] if url else ""
-        logger.debug("URL downloaded to %s", file_path)
+        logger.debug("URL downloaded to %s, size=%d bytes", file_path, file_size)
 
     # --- Create job record in DB ---
     logger.debug("Creating DB record — job_id=%s, video_title=%s", job_id, video_title)
@@ -172,14 +172,16 @@ async def create_job(
     background_tasks.add_task(process_job, job_id, str(file_path))
 
     return JobCreateResponse(
-        job_id=record.id,
+        id=record.id,
         status=record.status,
-        video_title=record.video_title,
+        original_filename=record.original_filename,
+        file_size=file_size,
         created_at=record.created_at,
+        message="Job created successfully",
     )
 
 
-async def _handle_file_upload(job_id: str, file: UploadFile) -> Path:
+async def _handle_file_upload(job_id: str, file: UploadFile) -> tuple[Path, int]:
     """Process a multipart file upload. Returns saved file path."""
     logger.debug("_handle_file_upload — reading file into memory")
     content = await file.read()
@@ -214,11 +216,11 @@ async def _handle_file_upload(job_id: str, file: UploadFile) -> Path:
         logger.debug("_handle_file_upload — video validation failed: %s", exc)
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc))
+    
+    return file_path, file_size
 
-    return file_path
 
-
-def _handle_url_download(job_id: str, url: str) -> Path:
+def _handle_url_download(job_id: str, url: str) -> tuple[Path, int]:
     """Download a video from URL. Returns saved file path."""
     ext = infer_extension(url)
     logger.debug("_handle_url_download — inferred extension=%s from url=%s", ext, url)
@@ -253,7 +255,7 @@ def _handle_url_download(job_id: str, url: str) -> Path:
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return file_path
+    return file_path, file_size
 
 
 # ── GET /jobs/{job_id} ───────────────────────────────────────────────────

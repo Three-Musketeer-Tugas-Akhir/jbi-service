@@ -19,19 +19,20 @@ class JobRepository:
     
     async def create(
         self,
-        original_filename: str,
-        file_size: int,
-        created_by: UUID,
+        job_id: str,
+        video_path: str,
+        video_title: str = "",
         status: str = "UPLOADED"
     ) -> PipelineJob:
         """Create a new pipeline job."""
+        from uuid import UUID
+        
         job = PipelineJob(
-            video_path="",  # Will be set to MinIO path after upload
-            original_filename=original_filename,
-            file_size=file_size,
+            id=UUID(job_id),
+            video_path=video_path,
+            original_filename=video_title,
             status=status,
             current_stage="upload",
-            created_by=created_by
         )
         self.db.add(job)
         await self.db.flush()
