@@ -263,16 +263,44 @@ class CroppingWorker(BaseWorker):
             current_start = utterance.start
             current_end = utterance.end
             
+            # Validate original utterance timestamps
+            if current_start >= current_end:
+                logger.warning(
+                    "Skipping utterance %s with invalid original timestamps: %.2f -> %.2f",
+                    utterance_id, current_start, current_end
+                )
+                return {
+                    "transcript_id": utterance_id,
+                    "utterance_index": utterance.utterance_index,
+                    "success": False,
+                    "error": f"Invalid original timestamps: {current_start:.2f} >= {current_end:.2f}"
+                }
+            
+            # Skip utterances that start after video ends
+            if current_start >= video_duration:
+                logger.warning(
+                    "Skipping utterance %s that starts after video ends: %.2f >= %.2f",
+                    utterance_id, current_start, video_duration
+                )
+                return {
+                    "transcript_id": utterance_id,
+                    "utterance_index": utterance.utterance_index,
+                    "success": False,
+                    "error": f"Utterance starts after video ends: {current_start:.2f} >= {video_duration:.2f}"
+                }
+            
             # Apply notebook algorithm for start time
             is_first = utterance_index == 0
             if not is_first:
                 current_start += 1.0  # Add 1s offset after first clip
             
+            # Clamp start to video duration (can't start after video ends)
+            current_start = min(current_start, video_duration)
+            
             # Calculate end time based on next utterance (dynamic buffer)
             next_start = None
             if utterance_index + 1 < total_utterances:
                 # Get next utterance from database
-                # We'll need to query it or pass it in
                 next_utt = await self._get_next_utterance(utterance)
                 if next_utt:
                     next_start = next_utt.start
@@ -295,7 +323,7 @@ class CroppingWorker(BaseWorker):
             # Clamp to video duration
             current_end = min(current_end, video_duration)
             
-            # Ensure valid range
+            # Ensure valid range after adjustments
             if current_start >= current_end:
                 logger.warning(
                     "Invalid time range for utterance %s: %.2f -> %.2f",
