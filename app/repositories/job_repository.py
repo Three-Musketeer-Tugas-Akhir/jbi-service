@@ -69,14 +69,24 @@ class JobRepository:
         """
         Update job status.
         
+        Args:
+            job_id: Job UUID
+            status: New status
+            error_message: Optional error message for FAILED status
+            
         Returns:
             True if job was found and updated, False otherwise
         """
+        from datetime import datetime
+        
         job = await self.get_by_id(job_id)
         if job:
             job.status = status
             if error_message:
                 job.error_message = error_message
+            # Set completion timestamp for terminal states
+            if status in ["READY_FOR_ANNOTATION", "FAILED"]:
+                job.completed_at = datetime.utcnow()
             await self.db.flush()
             return True
         return False
