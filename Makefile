@@ -21,6 +21,7 @@ help:
 	@echo "  make docker-build  - Build Docker images"
 	@echo "  make docker-up     - Start Docker services"
 	@echo "  make docker-down   - Stop Docker services"
+	@echo "  make seed-users    - Seed database with test users and roles"
 	@echo "  make clean         - Clean cache and temporary files"
 
 # Installation
@@ -121,3 +122,13 @@ generate-client:
 	@echo "Generating API client from OpenAPI spec..."
 	@curl -s http://localhost:8000/openapi.json > openapi.json
 	@echo "OpenAPI spec saved to openapi.json"
+
+# Seed database with users and roles
+seed-users:
+	@echo "🌱 Seeding database with users and roles..."
+	python scripts/seed_users.py
+
+# Seed in Docker environment
+seed-users-docker:
+	@echo "🌱 Seeding database in Docker..."
+	docker compose exec api-gpu python scripts/seed_users.py
