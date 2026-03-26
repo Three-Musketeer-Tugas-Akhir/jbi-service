@@ -43,6 +43,7 @@ from app.schemas.job import (
     HealthResponse,
     ErrorResponse,
     SignLanguageCategory,
+    CategoryUpdateRequest,
     CategoryUpdateResponse,
 )
 
@@ -123,5 +124,6 @@ __all__ = [
     "HealthResponse",
     "ErrorResponse",
     "SignLanguageCategory",
+    "CategoryUpdateRequest",
     "CategoryUpdateResponse",
 ]

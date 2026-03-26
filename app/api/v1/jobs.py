@@ -21,6 +21,7 @@ from app.schemas import (
     SegmentResponse,
     BboxResponse,
     ErrorResponse,
+    CategoryUpdateRequest,
     CategoryUpdateResponse,
     SignLanguageCategory,
 )
@@ -346,7 +347,7 @@ async def get_job_status(job_id: str, session: AsyncSession = Depends(get_db)):
 )
 async def update_job_category(
     job_id: str,
-    category: str = Form(..., description="Sign language category (SIBI or BISINDO)"),
+    request: CategoryUpdateRequest,
     session: AsyncSession = Depends(get_db),
 ):
     """Update the sign language category of a job.
@@ -354,7 +355,16 @@ async def update_job_category(
     Any user can update the category. The category can be set to:
     - SIBI (Sistem Isyarat Bahasa Indonesia)
     - BISINDO (Bahasa Isyarat Indonesia)
+    
+    Request body:
+    ```json
+    {
+        "category": "SIBI"
+    }
+    ```
     """
+    category = request.category
+    
     # Validate category
     if category not in VALID_CATEGORIES:
         raise HTTPException(

@@ -201,6 +201,11 @@ class HealthResponse(BaseModel):
     disk_space: str = Field(..., description="Disk space status (OK/low/critical)")
 
 
+class CategoryUpdateRequest(BaseModel):
+    """Request body for category update endpoint."""
+    category: str = Field(..., description="Sign language category (SIBI or BISINDO)")
+
+
 class CategoryUpdateResponse(BaseModel):
     """Response for category update endpoint."""
     job_id: str = Field(..., description="Job UUID")
