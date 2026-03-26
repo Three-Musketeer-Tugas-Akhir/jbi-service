@@ -462,7 +462,7 @@ def _cleanup_upload(video_path: str):
 async def get_job_results(job_id: str, session: AsyncSession = Depends(get_db)):
     """Get the detection and segmentation results of a completed job.
 
-    Only available when job status is "completed". For other states:
+    Only available when job status is "READY_FOR_ANNOTATION". For other states:
     - queued/processing: 409 (not ready yet)
     - failed/cancelled: 409 (no results available)
     - not found: 404
@@ -471,16 +471,17 @@ async def get_job_results(job_id: str, session: AsyncSession = Depends(get_db)):
     if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    if record.status != JobStatus.COMPLETED.value:
+    # Results are only available when job is in READY_FOR_ANNOTATION state
+    if record.status != JobStatus.READY_FOR_ANNOTATION:
         raise HTTPException(
             status_code=409,
-            detail=f"Job '{job_id}' is '{record.status}' — results are only available for completed jobs",
+            detail=f"Job '{job_id}' is '{record.status}' — results are only available when job is completed (READY_FOR_ANNOTATION)",
         )
 
     if not record.result_data:
         raise HTTPException(
             status_code=500,
-            detail=f"Job '{job_id}' is completed but result data is missing",
+            detail=f"Job '{job_id}' is READY_FOR_ANNOTATION but result data is missing",
         )
 
     result = deserialize_pipeline_result(job_id, record.result_data)
