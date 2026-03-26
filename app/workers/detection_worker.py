@@ -75,17 +75,31 @@ class DetectionWorker(BaseWorker):
             # Run detection (pure ML, no DB)
             segments = await self._run_detection(video_path, job_id)
             
-            # Store segments in database
+            if not segments:
+                logger.warning(f"No segments detected for job {job_id}")
+                # Update job status and complete
+                async with async_session() as session:
+                    job_repo = JobRepository(session)
+                    await job_repo.update_status(job_id, "READY_FOR_ANNOTATION")
+                    await session.commit()
+                return {"segments_detected": 0, "confidence": 0}
+            
+            # Crop segments from the original video
+            logger.info(f"Cropping {len(segments)} segments for job {job_id}")
+            cropped_segments = await self._crop_segments(video_path, job_id, segments)
+            
+            # Store segments in database with cropped video paths
             async with async_session() as session:
                 segment_repo = SegmentRepository(session)
                 db_segments = []
-                for i, segment in enumerate(segments):
+                for i, (segment, cropped_path) in enumerate(zip(segments, cropped_segments)):
                     db_segment = PipelineSegment(
                         job_id=job_id,
                         segment_index=i,
                         bbox_data=segment.bbox_data if hasattr(segment, 'bbox_data') else None,
                         jbi_start=segment.start_time if hasattr(segment, 'start_time') else None,
-                        jbi_end=segment.end_time if hasattr(segment, 'end_time') else None
+                        jbi_end=segment.end_time if hasattr(segment, 'end_time') else None,
+                        cropped_video_path=cropped_path
                     )
                     db_segments.append(db_segment)
                 await segment_repo.create_many(db_segments)
@@ -241,6 +255,108 @@ class DetectionWorker(BaseWorker):
                 except OSError:
                     pass
             raise
+    
+    async def _crop_segments(
+        self, 
+        video_path: str, 
+        job_id: UUID, 
+        segments: list
+    ) -> list:
+        """
+        Crop segments from the original video.
+        
+        Args:
+            video_path: Path to original video
+            job_id: Job ID for output naming
+            segments: List of detected segments with bbox and timestamps
+            
+        Returns:
+            List of cropped video file paths
+        """
+        import os
+        
+        # Create output directory for cropped segments
+        output_dir = Path(f"storage/outputs/{job_id}/segments")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        cropped_paths = []
+        
+        for i, segment in enumerate(segments):
+            try:
+                start_time = getattr(segment, 'start_time', 0)
+                end_time = getattr(segment, 'end_time', 0)
+                bbox = getattr(segment, 'bbox_data', None)
+                
+                # Output file path
+                output_path = output_dir / f"segment_{i:04d}.mp4"
+                
+                # Build ffmpeg command for cropping
+                # First extract the time segment, then apply bbox crop if available
+                duration = end_time - start_time
+                
+                if bbox and len(bbox) >= 4:
+                    # bbox format: [x, y, width, height]
+                    x, y, w, h = bbox[0], bbox[1], bbox[2], bbox[3]
+                    # Ensure even dimensions for x264
+                    w = w - (w % 2)
+                    h = h - (h % 2)
+                    x = x - (x % 2)
+                    y = y - (y % 2)
+                    
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-ss", str(start_time),
+                        "-t", str(duration),
+                        "-i", video_path,
+                        "-vf", f"crop={w}:{h}:{x}:{y}",
+                        "-c:v", "libx264",
+                        "-preset", "fast",
+                        "-crf", "23",
+                        "-c:a", "aac",
+                        "-hide_banner",
+                        "-loglevel", "error",
+                        str(output_path)
+                    ]
+                else:
+                    # No bbox, just extract time segment
+                    cmd = [
+                        "ffmpeg",
+                        "-y",
+                        "-ss", str(start_time),
+                        "-t", str(duration),
+                        "-i", video_path,
+                        "-c:v", "libx264",
+                        "-preset", "fast",
+                        "-crf", "23",
+                        "-c:a", "aac",
+                        "-hide_banner",
+                        "-loglevel", "error",
+                        str(output_path)
+                    ]
+                
+                # Run ffmpeg
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                stdout, stderr = await process.communicate()
+                
+                if process.returncode != 0:
+                    error_msg = stderr.decode() if stderr else "Unknown error"
+                    logger.error(f"Failed to crop segment {i}: {error_msg}")
+                    cropped_paths.append(None)
+                else:
+                    logger.info(f"Cropped segment {i}: {output_path}")
+                    cropped_paths.append(str(output_path))
+                    
+            except Exception as e:
+                logger.error(f"Error cropping segment {i}: {e}")
+                cropped_paths.append(None)
+        
+        return cropped_paths
     
     async def _queue_next_stage(self, job_id: UUID, segments):
         """Queue ASR stage after detection."""
