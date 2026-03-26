@@ -26,11 +26,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.exceptions import StorageError, NotFoundError, ValidationError
 from app.db.models import Upload, PipelineJob, QueueJob, JobStatus, User
+from app.schemas.job import SignLanguageCategory
 
 logger = logging.getLogger(__name__)
-
-# Valid sign language categories
-VALID_CATEGORIES = {"SIBI", "BISINDO"}
 
 
 class UploadService:
@@ -137,10 +135,15 @@ class UploadService:
         
         # Validate category if provided
         category = parsed_metadata.get("category")
-        if category is not None and category not in VALID_CATEGORIES:
-            raise ValidationError(
-                f"Invalid category '{category}'. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}"
-            )
+        if category is not None:
+            try:
+                # Validate using enum
+                SignLanguageCategory(category)
+            except ValueError:
+                valid_values = [c.value for c in SignLanguageCategory]
+                raise ValidationError(
+                    f"Invalid category '{category}'. Must be one of: {', '.join(valid_values)}"
+                )
         
         # Calculate chunks
         total_chunks = (file_size + self.DEFAULT_CHUNK_SIZE - 1) // self.DEFAULT_CHUNK_SIZE
