@@ -88,6 +88,15 @@ class DetectionWorker(BaseWorker):
             logger.info(f"Cropping {len(segments)} segments for job {job_id}")
             cropped_segments = await self._crop_segments(video_path, job_id, segments)
             
+            # Validate that at least some segments were cropped successfully
+            successful_crops = [p for p in cropped_segments if p is not None]
+            if not successful_crops:
+                raise ProcessingError(f"All {len(segments)} segments failed to crop")
+            
+            failed_count = len(cropped_segments) - len(successful_crops)
+            if failed_count > 0:
+                logger.warning(f"{failed_count}/{len(segments)} segments failed to crop for job {job_id}")
+            
             # Store segments in database with cropped video paths
             async with async_session() as session:
                 segment_repo = SegmentRepository(session)
@@ -294,9 +303,12 @@ class DetectionWorker(BaseWorker):
                 # First extract the time segment, then apply bbox crop if available
                 duration = end_time - start_time
                 
-                if bbox and len(bbox) >= 4:
-                    # bbox format: [x, y, width, height]
-                    x, y, w, h = bbox[0], bbox[1], bbox[2], bbox[3]
+                if bbox and isinstance(bbox, dict):
+                    # bbox format: {"x": ..., "y": ..., "width": ..., "height": ...}
+                    x = bbox.get("x", 0)
+                    y = bbox.get("y", 0)
+                    w = bbox.get("width", 0)
+                    h = bbox.get("height", 0)
                     # Ensure even dimensions for x264
                     w = w - (w % 2)
                     h = h - (h % 2)
