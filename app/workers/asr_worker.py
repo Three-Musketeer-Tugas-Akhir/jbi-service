@@ -98,7 +98,8 @@ class ASRWorker(BaseWorker):
                 f"{len(failed_segments)}/{len(results)} segments failed"
             )
         
-        # Update segments with ASR data and store individual utterances
+        # Store individual utterances in pipeline_transcripts
+        # Note: ASR data is now stored only at utterance-level, not in pipeline_segments
         async with async_session() as session:
             segment_repo = SegmentRepository(session)
             segments = await segment_repo.get_by_job_id(job_id)
@@ -106,11 +107,7 @@ class ASRWorker(BaseWorker):
             for result in results:
                 for seg in segments:
                     if seg.segment_index == result.segment_index:
-                        # Update summary fields in pipeline_segments
-                        seg.asr_text = result.text
-                        seg.asr_confidence = result.confidence
-                        seg.asr_start = result.start
-                        seg.asr_end = result.end
+                        # Update only the review flag in pipeline_segments
                         seg.asr_review_flag = result.review_flag
                         
                         # Store individual utterances in pipeline_transcripts

@@ -128,20 +128,16 @@ class PipelineSegment(Base):
     )
     segment_index: Mapped[int] = mapped_column(Integer, nullable=False)
     bbox_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-    asr_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    asr_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    asr_start: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    asr_end: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     asr_review_flag: Mapped[bool] = mapped_column(
         default=False,
         nullable=False,
         comment="True if segment needs ASR review (low confidence or failed)"
     )
-    jbi_start: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    jbi_end: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     cropped_video_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    stage2_video_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Note: ASR and cropping data moved to pipeline_transcripts (utterance-level)
+    # - asr_text, asr_confidence, asr_start, asr_end -> pipeline_transcripts
+    # - jbi_start, jbi_end, stage2_video_path -> pipeline_transcripts
     
     # Relationships
     job: Mapped["PipelineJob"] = relationship("PipelineJob", back_populates="segments")
