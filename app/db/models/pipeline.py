@@ -34,7 +34,7 @@ class PipelineJob(Base):
         primary_key=True,
         server_default=func.gen_random_uuid()
     )
-    video_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    video_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     current_stage: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
