@@ -306,6 +306,17 @@ class PipelineTranscript(Base):
         default=0.0,
         comment="Confidence score for this utterance (0-1)"
     )
+    video_path: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="MinIO key to cropped video for this utterance"
+    )
+    status: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        default="pending",
+        comment="Cropping status: pending, cropped, failed"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
