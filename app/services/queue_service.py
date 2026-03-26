@@ -68,7 +68,8 @@ class QueueService:
             return job
         else:
             # Create new session (for standalone operations)
-            async with get_db_session() as db:
+            from app.db.session import async_session
+            async with async_session() as db:
                 db.add(job)
                 await db.commit()
                 await db.refresh(job)

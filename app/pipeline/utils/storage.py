@@ -15,13 +15,13 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def download_video(video_key: str, local_path: str) -> bytes:
+async def download_video(video_key: str, local_path: Optional[str] = None) -> bytes:
     """
     Download video from storage.
     
     Args:
         video_key: S3/MinIO object key
-        local_path: Local file path to save
+        local_path: Optional local file path (not used, kept for compatibility)
         
     Returns:
         Downloaded file bytes
