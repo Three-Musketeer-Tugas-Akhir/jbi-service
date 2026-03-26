@@ -95,7 +95,7 @@ services:
       minio:
         condition: service_healthy
     volumes:
-      - ./model_weights:/app/model_weights:ro
+      - ./model_weights:/app/model_weights
       - uploads_data:/app/storage/uploads
       - outputs_data:/app/storage/outputs
     deploy:
@@ -124,7 +124,7 @@ services:
       minio:
         condition: service_healthy
     volumes:
-      - ./model_weights:/app/model_weights:ro
+      - ./model_weights:/app/model_weights
       - uploads_data:/app/storage/uploads
       - outputs_data:/app/storage/outputs
     deploy:

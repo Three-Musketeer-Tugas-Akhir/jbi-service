@@ -16,6 +16,7 @@ from app.repositories.segment_repository import SegmentRepository
 from app.services.queue_service import queue_service
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus
+from app.core.exceptions import ProcessingError
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,29 @@ class ASRWorker(BaseWorker):
             segments=asr_inputs,
             progress_callback=lambda c, t: logger.info("ASR progress: %d/%d", c, t)
         )
+        
+        # Check if any segments succeeded (confidence > 0 or text not empty)
+        successful_segments = [r for r in results if r.confidence > 0 or r.text.strip()]
+        failed_segments = [r for r in results if r.confidence == 0 and not r.text.strip()]
+        
+        if not successful_segments:
+            # All segments failed - mark job as FAILED
+            logger.error(f"ASR failed for all {len(results)} segments in job {job_id}")
+            async with async_session() as session:
+                job_repo = JobRepository(session)
+                await job_repo.update_status(
+                    job_id, 
+                    "FAILED", 
+                    error_message=f"ASR failed for all {len(results)} segments"
+                )
+                await session.commit()
+            raise ProcessingError(f"ASR failed for all {len(results)} segments")
+        
+        if failed_segments:
+            logger.warning(
+                f"ASR partially failed for job {job_id}: "
+                f"{len(failed_segments)}/{len(results)} segments failed"
+            )
         
         # Update segments with ASR data
         async with async_session() as session:
