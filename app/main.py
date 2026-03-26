@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.core.swagger_config import TAGS_METADATA, SECURITY_SCHEMES, SWAGGER_UI_CONFIG, REDOC_CONFIG
 from app.db.session import engine
 from app.db.base import Base
-from app.api.v1 import admin, annotations, asr_review, auth, health, jobs, users
+from app.api.v1 import admin, annotations, asr_review, auth, health, jobs, users, upload
 from app.services.scheduler import start_cleanup_scheduler, stop_cleanup_scheduler
 from app.core.exceptions import register_exception_handlers
 from app.logging_config import setup_logging
@@ -112,24 +112,17 @@ app.add_middleware(LoginRateLimitMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
 # Conditionally add CORS middleware
-# if settings.cors_enabled:
-#     app.add_middleware(
-#         CORSMiddleware,
-#         allow_origins=settings.cors_origins_list,
-#         allow_credentials=True,
-#         allow_methods=["*"],
-#         allow_headers=["*"],
-#     )
-#     logger.info(f"CORS enabled with origins: {settings.cors_origins_list}")
-# else:
-#     logger.warning("CORS is DISABLED - all origins allowed without CORS checks")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=['*'],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if settings.cors_enabled:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    logger.info(f"CORS enabled with origins: {settings.cors_origins_list}")
+else:
+    logger.warning("CORS is DISABLED - all origins allowed without CORS checks")
 
 # ============================================================================
 # Custom Swagger UI & ReDoc Endpoints
@@ -211,6 +204,11 @@ app.include_router(
     asr_review.router,
     prefix=f"{settings.api_v1_prefix}/asr-review",
     tags=["asr-review"]
+)
+app.include_router(
+    upload.router,
+    prefix=settings.api_v1_prefix,
+    tags=["upload"]
 )
 
 

@@ -9,7 +9,10 @@ from app.db.models.pipeline import (
     QueueJob,
     ConfigPipelineParam,
     JobStatus,
-    QueueStatus
+    QueueStatus,
+    Upload,
+    PipelineTranscript,
+    SignLanguageCategory,
 )
 from app.db.models.annotation import (
     AnnotationEdit,
@@ -32,6 +35,9 @@ __all__ = [
     "ConfigPipelineParam",
     "JobStatus",
     "QueueStatus",
+    "Upload",
+    "PipelineTranscript",
+    "SignLanguageCategory",
     "AnnotationEdit",
     "AnnotationReview",
     "AnnotationComment",

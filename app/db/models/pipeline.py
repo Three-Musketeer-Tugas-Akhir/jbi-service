@@ -233,8 +233,29 @@ class QueueJob(Base):
         nullable=True
     )
     
+    # Dependency tracking for pipeline stages (added for chunked upload)
+    job_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("pipeline_jobs.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+        comment="Associated pipeline job"
+    )
+    depends_on: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("queue_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Previous stage queue job that must complete first"
+    )
+    stage: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        comment="Pipeline stage: detection, asr, cropping"
+    )
+    
     def __repr__(self) -> str:
-        return f"<QueueJob(id={self.id}, queue={self.queue_name}, status={self.status})>"
+        return f"<QueueJob(id={self.id}, queue={self.queue_name}, status={self.status}, stage={self.stage})>"
 
 
 class ConfigPipelineParam(Base):
@@ -351,3 +372,170 @@ class QueueStatus:
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class Upload(Base):
+    """
+    Resumable file upload tracking for Tus Protocol.
+    
+    Tracks chunked uploads and links to pipeline job after completion.
+    """
+    
+    __tablename__ = "uploads"
+    
+    id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid()
+    )
+    upload_id: Mapped[str] = mapped_column(
+        String(64),
+        unique=True,
+        index=True,
+        nullable=False,
+        comment="Tus upload ID (UUID)"
+    )
+    filename: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        comment="Original filename"
+    )
+    file_size: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="Total file size in bytes (max 10GB)"
+    )
+    mime_type: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="File MIME type"
+    )
+    
+    # Upload status
+    status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="pending",
+        index=True,
+        comment="pending, uploading, assembling, complete, cancelled, failed"
+    )
+    
+    # Chunk tracking
+    chunk_size: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=5 * 1024 * 1024,  # 5MB
+        comment="Size of each chunk in bytes"
+    )
+    total_chunks: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="Total number of chunks"
+    )
+    chunks_received: Mapped[list] = mapped_column(
+        JSONB,
+        default=list,
+        comment="List of received chunk indices [0, 1, 2, 5, ...]"
+    )
+    chunks_uploading: Mapped[list] = mapped_column(
+        JSONB,
+        default=list,
+        comment="List of chunks currently being uploaded"
+    )
+    
+    # Storage locations
+    temp_bucket: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="temp-uploads",
+        comment="MinIO bucket for temporary chunks"
+    )
+    temp_prefix: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False,
+        comment="Path prefix in temp bucket (uploads/{user_id}/{upload_id}/)"
+    )
+    final_bucket: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="raw-videos",
+        comment="MinIO bucket for assembled file"
+    )
+    final_key: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Final path in raw-videos bucket"
+    )
+    
+    # Metadata
+    category: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        comment="Video category (KT1, KT2, KT3, etc.)"
+    )
+    checksum: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+        comment="SHA-256 checksum of complete file"
+    )
+    
+    # User relation
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("auth_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    
+    # Job relation (set after assembly)
+    job_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("pipeline_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+    job: Mapped[Optional["PipelineJob"]] = relationship(
+        "PipelineJob",
+        back_populates="upload",
+        foreign_keys=[job_id]
+    )
+    
+    # Timestamps
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="Cleanup incomplete uploads after this time"
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_upload_status_expires', 'status', 'expires_at'),
+        Index('idx_upload_user_created', 'user_id', 'created_at'),
+    )
+    
+    def __repr__(self) -> str:
+        return f"<Upload(id={self.id}, upload_id={self.upload_id}, status={self.status})>"
+
+
+# Add relationship to PipelineJob
+PipelineJob.upload = relationship(
+    "Upload",
+    back_populates="job",
+    foreign_keys=[Upload.job_id],
+    uselist=False
+)

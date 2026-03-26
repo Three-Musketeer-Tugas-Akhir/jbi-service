@@ -618,7 +618,7 @@ async def upload_video_pipeline(
     
     - **video**: Video file (MP4, AVI, MKV, MOV)
     - Max size: 10GB
-    - Returns job ID for tracking
+    - Returns job ID for trackingvideo
     """
     try:
         # Validate content type if provided
