@@ -106,8 +106,6 @@ class DetectionWorker(BaseWorker):
                         job_id=job_id,
                         segment_index=i,
                         bbox_data=segment.bbox_data if hasattr(segment, 'bbox_data') else None,
-                        jbi_start=segment.start_time if hasattr(segment, 'start_time') else None,
-                        jbi_end=segment.end_time if hasattr(segment, 'end_time') else None,
                         cropped_video_path=cropped_path
                     )
                     db_segments.append(db_segment)
