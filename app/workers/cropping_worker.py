@@ -241,7 +241,10 @@ class CroppingWorker(BaseWorker):
                     try:
                         # Upload to MinIO
                         stage2_key = f"jobs/{job_id}/stage2/{segment.id}_stage2.mp4"
-                        await self.minio_service.upload_file(result.stage2_video_path, stage2_key)
+                        # Read file and upload as bytes
+                        with open(result.stage2_video_path, "rb") as f:
+                            file_bytes = f.read()
+                        await self.minio_service.upload_file(file_bytes, stage2_key)
                         logger.info("Uploaded stage2 video for segment %s: %s", segment.id, stage2_key)
                         
                         # Update result with MinIO key

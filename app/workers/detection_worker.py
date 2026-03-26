@@ -366,7 +366,10 @@ class DetectionWorker(BaseWorker):
                     # Upload to MinIO
                     try:
                         minio_key = f"jobs/{job_id}/segments/segment_{i:04d}.mp4"
-                        await self.minio_service.upload_file(str(output_path), minio_key)
+                        # Read file and upload as bytes
+                        with open(output_path, "rb") as f:
+                            file_bytes = f.read()
+                        await self.minio_service.upload_file(file_bytes, minio_key)
                         logger.info(f"Uploaded segment {i} to MinIO: {minio_key}")
                         cropped_paths.append(minio_key)
                     except Exception as e:
