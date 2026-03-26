@@ -1,10 +1,10 @@
 """Job repository for database operations."""
 
-from typing import Optional
+from typing import Optional, Tuple, List
 from uuid import UUID
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.pipeline import PipelineJob
@@ -137,6 +137,48 @@ class JobRepository:
         if not job:
             return False
         return job.is_cancelled
+    
+    async def list_filtered(
+        self,
+        status: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> Tuple[List[PipelineJob], int]:
+        """
+        List jobs with optional status filtering and pagination.
+        
+        Args:
+            status: Filter by job status (optional)
+            limit: Max number of jobs to return
+            offset: Number of jobs to skip
+            
+        Returns:
+            Tuple of (list of jobs, total count)
+        """
+        # Build base query
+        base_query = select(PipelineJob)
+        count_query = select(func.count(PipelineJob.id))
+        
+        # Apply status filter if provided
+        if status:
+            base_query = base_query.where(PipelineJob.status == status)
+            count_query = count_query.where(PipelineJob.status == status)
+        
+        # Get total count
+        total_result = await self.db.execute(count_query)
+        total = total_result.scalar()
+        
+        # Get paginated results, sorted by creation time (newest first)
+        query = (
+            base_query
+            .order_by(PipelineJob.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.db.execute(query)
+        records = result.scalars().all()
+        
+        return list(records), total
 
 
 # Dependency function

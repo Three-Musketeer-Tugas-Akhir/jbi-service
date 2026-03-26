@@ -103,7 +103,7 @@ async def list_jobs(
         )
 
     records, total = await JobRepository(session).list_filtered(
-        session, status=status, limit=limit, offset=offset,
+        status=status, limit=limit, offset=offset,
     )
 
     jobs = [_record_to_status_response(r) for r in records]
