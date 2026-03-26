@@ -71,8 +71,8 @@ class BaseWorker(ABC):
         """
         async with async_session() as session:
             job = await queue_service.dequeue(
-                session, 
-                queue_name=self.queue_name
+                queue_name=self.queue_name,
+                db=session
             )
             await session.commit()
             return job
