@@ -78,8 +78,8 @@ class HealthService:
         try:
             from app.pipeline.models.detector import get_detector
             detector = get_detector()
-            # Check if model is loaded by checking model attribute
-            if hasattr(detector, 'model') and detector.model is not None:
+            # Check if model is loaded by checking _model attribute (private)
+            if hasattr(detector, '_model') and detector._model is not None:
                 return "loaded"
             return "not_loaded"
         except Exception as e:
