@@ -67,6 +67,7 @@ COPY app/ ./app/
 COPY run.py .
 COPY run_detection_worker.py .
 COPY run_asr_worker.py .
+COPY run_cropping_worker.py .
 
 # Create storage directories
 RUN mkdir -p storage/uploads storage/outputs model_weights

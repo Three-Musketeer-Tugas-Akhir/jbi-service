@@ -136,6 +136,35 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
 
+  # ── Cropping Worker (GPU) ────────────────────────────────
+  cropping-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    profiles: ["gpu"]
+    command: python run_cropping_worker.py
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./model_weights:/app/model_weights
+      - uploads_data:/app/storage/uploads
+      - outputs_data:/app/storage/outputs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
   # ── MinIO Object Storage ─────────────────────────────────
   minio:
     image: minio/minio:latest
