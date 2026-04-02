@@ -40,6 +40,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application code and entry point
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 COPY run.py .
 
 # Create storage directories
