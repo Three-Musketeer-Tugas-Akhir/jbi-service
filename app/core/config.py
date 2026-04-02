@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # --- Database ---
-    database_url: str = "postgresql+asyncpg://postgres:123456@localhost:5432/anotasi_db"
+    database_url: str = "postgresql+asyncpg://postgres:Pastibisa123!@localhost:5432/anotasi_db"
     database_echo: bool = False  # SQLAlchemy SQL logging (enable in dev)
 
     # --- Server ---
