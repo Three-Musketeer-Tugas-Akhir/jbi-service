@@ -13,7 +13,7 @@ services:
     environment:
       POSTGRES_DB: anotasi_db
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: Pastibisa123!
     ports:
       - "5432:5432"
     volumes:
