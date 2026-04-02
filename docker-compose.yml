@@ -36,7 +36,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
     depends_on:
       db:
         condition: service_healthy
@@ -59,7 +59,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
     depends_on:
       db:
         condition: service_healthy
