@@ -3,8 +3,9 @@ import logging
 from pathlib import Path
 from typing import Optional, Annotated
 
+import asyncio
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -33,6 +34,7 @@ from app.services.validator import (
 )
 from app.services.downloader import download_video, infer_extension, DownloadError
 from app.services.job_service import JobService, get_job_service
+from app.services.minio_service import get_minio_service
 from app.workers.tasks import process_job
 from app.core.exceptions import ValidationError, NotFoundError, PermissionError, ConflictError
 from app.db.models.auth import User
@@ -918,6 +920,147 @@ async def cancel_job_pipeline(
                 "error": {
                     "code": "CONFLICT",
                     "message": str(e)
+                }
+            }
+        )
+
+
+def _get_media_type(filename: str) -> str:
+    """Infer MIME type from filename extension."""
+    ext = Path(filename).suffix.lower()
+    mime_types = {
+        ".mp4": "video/mp4",
+        ".avi": "video/x-msvideo",
+        ".mkv": "video/x-matroska",
+        ".mov": "video/quicktime",
+    }
+    return mime_types.get(ext, "video/mp4")
+
+
+@router.get(
+    "/pipeline/jobs/{job_id}/original",
+    summary="Download original video file (new pipeline)",
+    tags=["Pipeline Jobs"],
+    responses={
+        200: {"content": {"video/*": {}}, "description": "Original video file"},
+        404: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+    },
+)
+async def download_original_video_pipeline(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository)
+):
+    """
+    Download the original uploaded video file for a job.
+
+    - Streams the original video file
+    - Users can only download their own jobs
+    - Admins can download any job
+    """
+    try:
+        try:
+            job_uuid = uuid.UUID(job_id)
+        except ValueError:
+            raise NotFoundError(f"Job {job_id} not found")
+
+        job = await job_repo.get_by_id(job_uuid)
+        if not job:
+            raise NotFoundError(f"Job {job_id} not found")
+
+        # Authorization check
+        if not current_user.is_admin and str(job.created_by) != str(current_user.id):
+            raise PermissionError("Not authorized to access this job")
+
+        if not job.video_path:
+            raise NotFoundError(f"Original video for job {job_id} not found")
+
+        video_path = job.video_path
+        path_obj = Path(video_path)
+
+        # Local file path
+        if path_obj.is_absolute() or path_obj.exists():
+            if not path_obj.exists():
+                raise NotFoundError("Original video file not found on disk")
+
+            media_type = _get_media_type(job.original_filename or video_path)
+            return FileResponse(
+                path=str(path_obj),
+                media_type=media_type,
+                filename=job.original_filename,
+            )
+
+        # MinIO object
+        minio_service = get_minio_service()
+
+        exists = await minio_service.object_exists(video_path)
+        if not exists:
+            raise NotFoundError("Original video not found in storage")
+
+        media_type = _get_media_type(job.original_filename or video_path)
+
+        async def _stream_minio():
+            response = await asyncio.to_thread(
+                minio_service.client.get_object,
+                minio_service._bucket_name,
+                video_path
+            )
+            try:
+                while True:
+                    chunk = await asyncio.to_thread(response.read, 8192)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                await asyncio.to_thread(response.close)
+
+        headers = {
+            "Content-Disposition": f'inline; filename="{job.original_filename}"'
+        }
+
+        # Add Content-Length if available
+        try:
+            object_size = await minio_service.get_object_size(video_path)
+            headers["Content-Length"] = str(object_size)
+        except Exception:
+            pass
+
+        return StreamingResponse(
+            _stream_minio(),
+            media_type=media_type,
+            headers=headers,
+        )
+
+    except NotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": str(e)
+                }
+            }
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": str(e)
+                }
+            }
+        )
+    except Exception as e:
+        logger.exception("Failed to stream original video for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to stream original video: {str(e)}"
                 }
             }
         )
