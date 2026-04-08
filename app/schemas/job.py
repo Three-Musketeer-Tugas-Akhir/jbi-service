@@ -272,3 +272,41 @@ class Stage2ResultsResponse(BaseModel):
     """Response for GET /api/v1/pipeline/jobs/{job_id}/stage2/results."""
     id: str = Field(..., description="Job UUID")
     results: List[Stage2SegmentResponse] = Field(..., description="List of segments with ASR data")
+
+
+# ============================================================================
+# Stage 3 Results Schemas
+# ============================================================================
+
+class Stage3Summary(BaseModel):
+    """Summary of Stage 3 cropping results."""
+    total_utterances: int = Field(..., description="Total utterances across all segments")
+    cropped: int = Field(..., description="Number of successfully cropped utterances")
+    failed: int = Field(..., description="Number of failed utterances")
+    pending: int = Field(..., description="Number of pending utterances")
+
+
+class Stage3UtteranceResponse(BaseModel):
+    """Individual cropped utterance result for Stage 3."""
+    id: str = Field(..., description="Transcript UUID")
+    utterance_index: int = Field(..., description="Index within segment (0-based)")
+    text: str = Field(..., description="Transcribed text")
+    start: float = Field(..., description="CROPPED start time in seconds (relative to segment)")
+    end: float = Field(..., description="CROPPED end time in seconds (relative to segment)")
+    confidence: float = Field(..., description="ASR confidence score (0-1)")
+    url: Optional[str] = Field(None, description="Asset URL for cropped utterance video")
+    status: str = Field(..., description="Cropping status: cropped, pending, or failed")
+
+
+class Stage3SegmentResponse(BaseModel):
+    """Segment with cropped utterances for Stage 3."""
+    segment_id: str = Field(..., description="Segment UUID")
+    asr_review_flag: bool = Field(..., description="True if segment needs ASR review")
+    utterances: List[Stage3UtteranceResponse] = Field(..., description="List of cropped utterances")
+
+
+class Stage3ResultsResponse(BaseModel):
+    """Response for GET /api/v1/pipeline/jobs/{job_id}/stage3/results."""
+    id: str = Field(..., description="Job UUID")
+    summary: Stage3Summary = Field(..., description="Summary of cropping status")
+    results: List[Stage3SegmentResponse] = Field(..., description="List of segments with cropped utterances")

@@ -51,6 +51,10 @@ from app.schemas.job import (
     Stage2ResultsResponse,
     Stage2SegmentResponse,
     Stage2UtteranceResponse,
+    Stage3ResultsResponse,
+    Stage3SegmentResponse,
+    Stage3UtteranceResponse,
+    Stage3Summary,
 )
 
 # Terminal states
@@ -1384,6 +1388,219 @@ async def get_stage2_results(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": f"Failed to get stage 2 results: {str(e)}"
+                }
+            }
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 3 RESULTS API
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/pipeline/jobs/{job_id}/stage3/results",
+    response_model=Stage3ResultsResponse,
+    summary="Get Stage 3 (cropping) results",
+    tags=["Pipeline Jobs"],
+    responses={
+        404: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+    }
+)
+async def get_stage3_results(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository),
+):
+    """
+    Get Stage 3 cropping results with final cropped timestamps and videos.
+    
+    Returns segments with their cropped utterances, including the FINAL timestamps
+    after the cropping algorithm has been applied, along with the cropped video URLs.
+    
+    - **id**: Job UUID
+    - **summary**: Overview of cropping status (total, cropped, failed, pending)
+    - **results**: List of segments containing cropped utterances
+    
+    ## Cropping Algorithm
+    The cropping worker applies the following algorithm to each utterance:
+    - First utterance: start unchanged
+    - Subsequent utterances: start += 1s offset
+    - End calculated based on gap to next utterance:
+      - Gap > 2s: add 2s buffer
+      - Gap <= 2s: extend to next + 1s
+    - Last utterance: extend to video duration or +1s
+    
+    ## Authorization
+    - Users can only access their own job results
+    - Admins can access any job results
+    
+    ## Example Response
+    ```json
+    {
+      "id": "196d54f7-f2c2-4326-ad0e-c3849b8d3d72",
+      "summary": {
+        "total_utterances": 10,
+        "cropped": 9,
+        "failed": 1,
+        "pending": 0
+      },
+      "results": [
+        {
+          "segment_id": "segment-uuid",
+          "asr_review_flag": false,
+          "utterances": [
+            {
+              "id": "utterance-uuid",
+              "utterance_index": 0,
+              "text": "Ini adalah contoh transkripsi",
+              "start": 1.0,
+              "end": 6.5,
+              "confidence": 0.92,
+              "url": "/api/v1/assets/jobs/.../utterance_xxx.mp4",
+              "status": "cropped"
+            }
+          ]
+        }
+      ]
+    }
+    ```
+    
+    ## Difference from Stage 2
+    - **Stage 2**: Returns ORIGINAL ASR timestamps (from Whisper)
+    - **Stage 3**: Returns CROPPED timestamps (modified by algorithm)
+    - **Stage 2**: URL points to segment video (Stage 1)
+    - **Stage 3**: URL points to individual utterance video (Stage 3)
+    """
+    try:
+        # Validate job_id format
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Get job from database
+        job = await job_repo.get_by_id(job_uuid)
+        if not job:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Authorization check
+        if not current_user.is_admin and str(job.created_by) != str(current_user.id):
+            raise PermissionError("Not authorized to access this job")
+        
+        # Get segments with their transcripts
+        from sqlalchemy.orm import selectinload
+        from sqlalchemy import select
+        from app.db.models.pipeline import PipelineSegment, PipelineTranscript
+        
+        # Query segments with eager-loaded transcripts
+        result = await db.execute(
+            select(PipelineSegment)
+            .where(PipelineSegment.job_id == job_uuid)
+            .options(selectinload(PipelineSegment.transcripts))
+            .order_by(PipelineSegment.segment_index)
+        )
+        segments = result.scalars().all()
+        
+        # Build response and calculate summary
+        results = []
+        total_utterances = 0
+        cropped_count = 0
+        failed_count = 0
+        pending_count = 0
+        
+        for segment in segments:
+            # Build utterances list
+            utterances = []
+            for transcript in segment.transcripts:
+                total_utterances += 1
+                
+                # Count by status
+                status = transcript.status or "pending"
+                if status == "cropped":
+                    cropped_count += 1
+                elif status == "failed":
+                    failed_count += 1
+                else:
+                    pending_count += 1
+                
+                # Build asset URL for cropped utterance video
+                if transcript.video_path:
+                    if transcript.video_path.startswith("jobs/"):
+                        url = f"/api/v1/assets/{transcript.video_path}"
+                    else:
+                        url = f"/api/v1/assets/jobs/{job_id}/utterances/{transcript.video_path}"
+                else:
+                    # Default pattern
+                    url = f"/api/v1/assets/jobs/{job_id}/utterances/utterance_{segment.segment_index:04d}_{transcript.utterance_index:04d}.mp4"
+                
+                utterances.append(
+                    Stage3UtteranceResponse(
+                        id=str(transcript.id),
+                        utterance_index=transcript.utterance_index,
+                        text=transcript.text,
+                        start=transcript.start,
+                        end=transcript.end,
+                        confidence=transcript.confidence,
+                        url=url,
+                        status=status,
+                    )
+                )
+            
+            # Sort utterances by index
+            utterances.sort(key=lambda u: u.utterance_index)
+            
+            results.append(
+                Stage3SegmentResponse(
+                    segment_id=str(segment.id),
+                    asr_review_flag=segment.asr_review_flag or False,
+                    utterances=utterances,
+                )
+            )
+        
+        # Build summary
+        summary = Stage3Summary(
+            total_utterances=total_utterances,
+            cropped=cropped_count,
+            failed=failed_count,
+            pending=pending_count,
+        )
+        
+        return Stage3ResultsResponse(
+            id=job_id,
+            summary=summary,
+            results=results,
+        )
+        
+    except NotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": str(e)
+                }
+            }
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": str(e)
+                }
+            }
+        )
+    except Exception as e:
+        logger.exception("Failed to get stage 3 results for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to get stage 3 results: {str(e)}"
                 }
             }
         )
