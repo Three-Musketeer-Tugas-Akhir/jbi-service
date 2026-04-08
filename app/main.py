@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.core.swagger_config import TAGS_METADATA, SECURITY_SCHEMES, SWAGGER_UI_CONFIG, REDOC_CONFIG
 from app.db.session import engine
 from app.db.base import Base
-from app.api.v1 import admin, admin_audit, annotations, asr_review, assets, auth, health, jobs, users, upload
+from app.api.v1 import admin, admin_audit, annotations, annotation_sync, asr_review, assets, auth, health, jobs, users, upload
 from app.services.scheduler import start_cleanup_scheduler, stop_cleanup_scheduler
 from app.core.exceptions import register_exception_handlers
 from app.logging_config import setup_logging
@@ -221,6 +221,11 @@ app.include_router(
     admin_audit.router,
     prefix=settings.api_v1_prefix,
     tags=["admin-audit"]
+)
+app.include_router(
+    annotation_sync.router,
+    prefix=f"{settings.api_v1_prefix}/annotations",
+    tags=["annotation-sync"]
 )
 
 

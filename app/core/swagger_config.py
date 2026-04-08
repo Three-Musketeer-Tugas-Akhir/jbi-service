@@ -186,6 +186,64 @@ TAGS_METADATA: List[Dict[str, str]] = [
         Do not delete or modify audit log entries.
         """,
     },
+    {
+        "name": "annotation-sync",
+        "description": """
+        Video-audio synchronization workbench for temporal alignment.
+        
+        **Requires annotator role.**
+        
+        ## Purpose
+        
+        Align sign language video (JBI) with ASR audio timestamps to handle
+        temporal asynchrony. Sign language often takes longer to complete
+        than the corresponding spoken audio.
+        
+        ## The Problem: Temporal Asynchrony
+        
+        - Audio "Saya makan nasi di restoran": 5.0s - 10.0s
+        - JBI completion (including sign for "restoran"): 5.0s - 12.5s
+        - Gap: 2.5 seconds of visual content beyond audio boundary
+        
+        ## Solution: Video Boundary Extension
+        
+        - Extend video end time beyond audio_end to capture complete JBI
+        - Store sync metadata: video_start_offset, video_end_offset
+        - Stitch multiple chunks if extension spans segments
+        
+        ## Available Operations
+        
+        - **Get Sync**: Retrieve sync data with quality indicators
+        - **Update Boundaries**: Adjust video start/end times
+        - **Fine-Tune**: Millisecond-precision adjustments (±100ms buttons)
+        - **Validate**: Set TEXT_MATCH, VIDEO_COMPLETE, SYNC_LOCKED status
+        - **Preview**: View stitched video with extended boundaries
+        - **Timeline**: Get range slider configuration
+        
+        ## Data Structure
+        
+        ```json
+        {
+          "audio_start": 5.0,
+          "audio_end": 10.0,
+          "video_start_offset": 4.8,
+          "video_end_offset": 12.5,
+          "glosa": "SAYA MAKAN NASI RESTORAN",
+          "sync_status": "SYNCED",
+          "indicators": {
+            "text_match": true,
+            "video_complete": true,
+            "sync_locked": true
+          }
+        }
+        ```
+        
+        ## Millisecond Precision
+        
+        Default precision: 33ms (1 frame @ 30fps)
+        Adjustment range: ±5000ms (±5 seconds)
+        """,
+    },
 ]
 
 

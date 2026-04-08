@@ -15,6 +15,7 @@ from app.db.base import Base
 if TYPE_CHECKING:
     from app.db.models.pipeline import PipelineSegment
     from app.db.models.auth import User
+    from app.db.models.annotation_sync import AnnotationSync
 
 
 class AnnotationEdit(Base):
@@ -53,6 +54,7 @@ class AnnotationEdit(Base):
     editor: Mapped[Optional["User"]] = relationship("User", back_populates="annotation_edits")
     reviews: Mapped[List["AnnotationReview"]] = relationship("AnnotationReview", back_populates="edit", cascade="all, delete-orphan")
     comments: Mapped[List["AnnotationComment"]] = relationship("AnnotationComment", back_populates="edit", cascade="all, delete-orphan")
+    sync_data: Mapped[Optional["AnnotationSync"]] = relationship("AnnotationSync", back_populates="annotation_edit", uselist=False, cascade="all, delete-orphan")
     
     # Status constants
     STATUS_DRAFT = "DRAFT"
