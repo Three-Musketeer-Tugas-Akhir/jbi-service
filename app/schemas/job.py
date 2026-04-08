@@ -217,3 +217,29 @@ class ErrorResponse(BaseModel):
     """Standard error response body."""
     error: str
     detail: str
+
+
+# ============================================================================
+# Stage 1 Results Schemas
+# ============================================================================
+
+class BboxDataResponse(BaseModel):
+    """Bounding box data for a segment."""
+    x: float = Field(..., description="X coordinate (top-left)")
+    y: float = Field(..., description="Y coordinate (top-left)")
+    width: float = Field(..., description="Bounding box width")
+    height: float = Field(..., description="Bounding box height")
+
+
+class SegmentResultResponse(BaseModel):
+    """Single segment result for stage 1."""
+    id: str = Field(..., description="Segment UUID")
+    segment_index: int = Field(..., description="Segment index (0-based)")
+    bbox_data: Optional[BboxDataResponse] = Field(None, description="Bounding box coordinates")
+    url: str = Field(..., description="Asset URL for the segment video")
+
+
+class Stage1ResultsResponse(BaseModel):
+    """Response for GET /api/v1/pipeline/jobs/{job_id}/stage1/results."""
+    id: str = Field(..., description="Job UUID")
+    results: List[SegmentResultResponse] = Field(..., description="List of segment results")

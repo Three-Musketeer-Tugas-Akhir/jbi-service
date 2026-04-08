@@ -45,6 +45,9 @@ from app.schemas.job import (
     JobStatusDetailResponse,
     JobListItemResponse,
     JobListDetailedResponse,
+    Stage1ResultsResponse,
+    SegmentResultResponse,
+    BboxDataResponse,
 )
 
 # Terminal states
@@ -1061,6 +1064,155 @@ async def download_original_video_pipeline(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": f"Failed to stream original video: {str(e)}"
+                }
+            }
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 1 RESULTS API
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/pipeline/jobs/{job_id}/stage1/results",
+    response_model=Stage1ResultsResponse,
+    summary="Get Stage 1 (detection) results",
+    tags=["Pipeline Jobs"],
+    responses={
+        404: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+    }
+)
+async def get_stage1_results(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository),
+):
+    """
+    Get Stage 1 detection results with segment information.
+    
+    Returns segments with bounding box data and asset URLs.
+    
+    - **id**: Job UUID
+    - **results**: List of segment results containing:
+      - Segment ID and index
+      - Bounding box coordinates (x, y, width, height)
+      - Asset URL for accessing the segment video
+    
+    ## Authorization
+    - Users can only access their own job results
+    - Admins can access any job results
+    
+    ## Example Response
+    ```json
+    {
+      "id": "196d54f7-f2c2-4326-ad0e-c3849b8d3d72",
+      "results": [
+        {
+          "id": "segment-uuid",
+          "segment_index": 0,
+          "bbox_data": {
+            "x": 100.5,
+            "y": 200.0,
+            "width": 300.0,
+            "height": 150.0
+          },
+          "url": "/api/v1/assets/jobs/196d54f7-f2c2-4326-ad0e-c3849b8d3d72/segments/segment_0000.mp4"
+        }
+      ]
+    }
+    ```
+    """
+    try:
+        # Validate job_id format
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Get job from database
+        job = await job_repo.get_by_id(job_uuid)
+        if not job:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Authorization check
+        if not current_user.is_admin and str(job.created_by) != str(current_user.id):
+            raise PermissionError("Not authorized to access this job")
+        
+        # Get segments for this job
+        from app.repositories.segment_repository import SegmentRepository, get_segment_repository
+        segment_repo = get_segment_repository(db)
+        segments = await segment_repo.get_by_job_id(job_uuid)
+        
+        # Build response
+        results = []
+        for segment in segments:
+            # Parse bbox_data from JSON
+            bbox_data = None
+            if segment.bbox_data:
+                bbox_data = BboxDataResponse(
+                    x=segment.bbox_data.get("x", 0.0),
+                    y=segment.bbox_data.get("y", 0.0),
+                    width=segment.bbox_data.get("width", 0.0),
+                    height=segment.bbox_data.get("height", 0.0),
+                )
+            
+            # Build asset URL
+            # Use the cropped_video_path if available (MinIO key), otherwise construct from pattern
+            if segment.cropped_video_path:
+                # If it's a MinIO key, use it directly
+                if segment.cropped_video_path.startswith("jobs/"):
+                    url = f"/api/v1/assets/{segment.cropped_video_path}"
+                else:
+                    # Legacy path format
+                    url = f"/api/v1/assets/jobs/{job_id}/segments/segment_{segment.segment_index:04d}.mp4"
+            else:
+                # Default pattern
+                url = f"/api/v1/assets/jobs/{job_id}/segments/segment_{segment.segment_index:04d}.mp4"
+            
+            results.append(
+                SegmentResultResponse(
+                    id=str(segment.id),
+                    segment_index=segment.segment_index,
+                    bbox_data=bbox_data,
+                    url=url,
+                )
+            )
+        
+        return Stage1ResultsResponse(
+            id=job_id,
+            results=results,
+        )
+        
+    except NotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": str(e)
+                }
+            }
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": str(e)
+                }
+            }
+        )
+    except Exception as e:
+        logger.exception("Failed to get stage 1 results for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to get stage 1 results: {str(e)}"
                 }
             }
         )

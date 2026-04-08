@@ -117,6 +117,40 @@ TAGS_METADATA: List[Dict[str, str]] = [
         - High: >= 0.9
         """,
     },
+    {
+        "name": "assets",
+        "description": """
+        Asset streaming from MinIO S3 storage.
+        
+        ## Purpose
+        
+        Stream video files and other assets stored in MinIO with authorization checks.
+        
+        ## Authorization
+        
+        - **Users**: Can only access assets for their own jobs
+        - **Admins**: Can access all assets
+        
+        ## Supported File Types
+        
+        - Video: `.mp4`, `.avi`, `.mkv`, `.mov`, `.webm`
+        - Data: `.json`, `.txt`
+        
+        ## Usage
+        
+        Assets are accessed via their MinIO object path:
+        ```
+        /api/v1/assets/jobs/{job_id}/original/video.mp4
+        /api/v1/assets/jobs/{job_id}/segments/segment_0000.mp4
+        ```
+        
+        ## Features
+        
+        - **Streaming**: Memory-efficient video streaming
+        - **Range Requests**: Support for video seeking (`Range: bytes=0-1023`)
+        - **Caching**: 1-hour browser cache for performance
+        """,
+    },
 ]
 
 
