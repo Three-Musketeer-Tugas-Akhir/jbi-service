@@ -8,9 +8,11 @@ from app.repositories.asr_review_repository import ASRReviewRepository
 from app.repositories.segment_repository import SegmentRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.annotation_queue_repository import AnnotationQueueRepository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.services.minio_service import get_minio_service
 from app.core.exceptions import NotFoundError, PermissionError
 from app.db.models.annotation import ASRReview, AnnotationQueue
+from app.db.models.audit import AuditAction
 
 
 class ASRReviewService:
@@ -25,6 +27,7 @@ class ASRReviewService:
         self.job_repo = JobRepository(db)
         self.queue_repo = AnnotationQueueRepository(db)
         self.minio_service = get_minio_service()
+        self.audit_repo = AuditLogRepository(db)
     
     async def get_review_queue(
         self,
@@ -224,6 +227,21 @@ class ASRReviewService:
             reviewer_id=reviewer_id
         )
         
+        # Log ASR review approval
+        await self.audit_repo.create(
+            action=AuditAction.ASR_REVIEW_SUBMITTED,
+            resource_type="asr_review",
+            actor_id=reviewer_id,
+            resource_id=review_id,
+            details={
+                "segment_id": str(review.segment_id),
+                "confidence_score": review.confidence_score,
+                "action": "approved",
+                "notes": notes
+            }
+        )
+        await self.db.commit()
+        
         return {
             "review_id": review_id,
             "segment_id": review.segment_id,
@@ -274,6 +292,21 @@ class ASRReviewService:
         if segment:
             segment.asr_text = corrected_text
             await self.db.flush()
+        
+        # Log ASR review correction
+        await self.audit_repo.create(
+            action=AuditAction.ASR_REVIEW_CORRECTED,
+            resource_type="asr_review",
+            actor_id=reviewer_id,
+            resource_id=review_id,
+            details={
+                "segment_id": str(review.segment_id),
+                "confidence_score": review.confidence_score,
+                "corrected": True,
+                "has_notes": bool(notes)
+            }
+        )
+        await self.db.commit()
         
         return {
             "review_id": review_id,

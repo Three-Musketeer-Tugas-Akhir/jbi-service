@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ValidationError, NotFoundError, PermissionError
 from app.core.cache import job_status_cache
 from app.db.models.auth import User
+from app.db.models.audit import AuditAction
 from app.db.models.pipeline import PipelineJob, PipelineSegment
 from app.repositories.job_repository import JobRepository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.services.minio_service import get_minio_service
 from app.services.queue_service import queue_service
 
@@ -31,10 +33,11 @@ class JobService:
     MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
     MIN_FILE_SIZE = 1  # 1 byte (reject empty files)
     
-    def __init__(self, db: AsyncSession, job_repo: JobRepository):
+    def __init__(self, db: AsyncSession, job_repo: JobRepository, audit_repo: AuditLogRepository = None):
         self.db = db
         self.job_repo = job_repo
         self.minio_service = get_minio_service()
+        self.audit_repo = audit_repo or AuditLogRepository(db)
     
     def _validate_file(self, filename: str, file_size: int) -> None:
         """Validate file format and size."""
@@ -143,6 +146,20 @@ class JobService:
             
             # Refresh to get updated timestamps
             await self.db.refresh(job)
+            
+            # Log job creation
+            await self.audit_repo.create(
+                action=AuditAction.JOB_CREATED,
+                resource_type="job",
+                actor_id=user.id,
+                resource_id=job.id,
+                details={
+                    "original_filename": filename,
+                    "file_size": file_size,
+                    "video_path": video_path
+                }
+            )
+            await self.db.commit()
             
             return job
             
@@ -419,6 +436,19 @@ class JobService:
         
         if not success:
             raise ConflictError(f"Cannot cancel job in '{job.status}' status")
+        
+        # Log job cancellation
+        await self.audit_repo.create(
+            action=AuditAction.JOB_CANCELLED,
+            resource_type="job",
+            actor_id=cancelled_by,
+            resource_id=job_uuid,
+            details={
+                "previous_status": job.status,
+                "queue_jobs_cancelled": queue_cancelled
+            }
+        )
+        await self.db.commit()
         
         # Invalidate cache
         self.invalidate_job_cache(job_id, current_user_id)

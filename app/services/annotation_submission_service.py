@@ -9,8 +9,10 @@ from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.repositories.annotation_queue_repository import AnnotationQueueRepository
 from app.repositories.annotation_review_repository import AnnotationReviewRepository
 from app.repositories.segment_repository import SegmentRepository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.core.exceptions import NotFoundError, PermissionError, ValidationError, ConflictError
 from app.db.models.annotation import AnnotationEdit, AnnotationQueue, AnnotationReview
+from app.db.models.audit import AuditAction
 
 
 class AnnotationSubmissionService:
@@ -22,6 +24,7 @@ class AnnotationSubmissionService:
         self.queue_repo = AnnotationQueueRepository(db)
         self.review_repo = AnnotationReviewRepository(db)
         self.segment_repo = SegmentRepository(db)
+        self.audit_repo = AuditLogRepository(db)
     
     async def check_submission_status(
         self,
@@ -162,6 +165,20 @@ class AnnotationSubmissionService:
             reviewed_at=datetime.utcnow()
         )
         review = await self.review_repo.create(review)
+        
+        # Log annotation submission
+        await self.audit_repo.create(
+            action=AuditAction.ANNOTATION_SUBMITTED,
+            resource_type="annotation",
+            actor_id=user_id,
+            resource_id=latest_edit.id,
+            details={
+                "segment_id": str(segment_id),
+                "review_id": str(review.id),
+                "is_asr_original": not confirm_no_changes and (not latest_edit or latest_edit.status == AnnotationEdit.STATUS_DRAFT)
+            }
+        )
+        await self.db.commit()
         
         return {
             "segment_id": segment_id,

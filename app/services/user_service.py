@@ -12,8 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.db.models.auth import User
+from app.db.models.audit import AuditAction
 from app.repositories.user_repository import UserRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.services.email_service import email_service
 from app.core.security import generate_temporary_password, validate_password_strength
 from math import ceil

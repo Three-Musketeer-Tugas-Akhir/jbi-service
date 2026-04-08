@@ -5,14 +5,17 @@ Models for compliance audit logging.
 """
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import DateTime, String, func, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.db.models.auth import User
 
 
 class AuditLog(Base):
@@ -72,6 +75,14 @@ class AuditLog(Base):
         comment="IP address of request (IPv6 compatible)"
     )
     
+    # Relationships
+    actor: Mapped[Optional["User"]] = relationship(
+        "User",
+        lazy="joined",
+        foreign_keys="AuditLog.actor_id",
+        primaryjoin="AuditLog.actor_id == User.id"
+    )
+    
     def __repr__(self) -> str:
         return (
             f"<AuditLog(id={self.id}, action={self.action}, "
@@ -107,3 +118,35 @@ class AuditAction:
     # Email verification
     EMAIL_VERIFICATION_SENT = "email.verification_sent"
     EMAIL_VERIFIED = "email.verified"
+    
+    # Job management
+    JOB_CREATED = "job.created"
+    JOB_CANCELLED = "job.cancelled"
+    JOB_DELETED = "job.deleted"
+    JOB_STATUS_CHANGED = "job.status_changed"
+    
+    # Pipeline
+    PIPELINE_STAGE_STARTED = "pipeline.stage_started"
+    PIPELINE_STAGE_COMPLETED = "pipeline.stage_completed"
+    PIPELINE_STAGE_FAILED = "pipeline.stage_failed"
+    
+    # Annotation
+    ANNOTATION_CREATED = "annotation.created"
+    ANNOTATION_UPDATED = "annotation.updated"
+    ANNOTATION_SUBMITTED = "annotation.submitted"
+    ANNOTATION_APPROVED = "annotation.approved"
+    ANNOTATION_REJECTED = "annotation.rejected"
+    ANNOTATION_DELETED = "annotation.deleted"
+    
+    # ASR Review
+    ASR_REVIEW_SUBMITTED = "asr_review.submitted"
+    ASR_REVIEW_CORRECTED = "asr_review.corrected"
+    
+    # Upload
+    UPLOAD_STARTED = "upload.started"
+    UPLOAD_COMPLETED = "upload.completed"
+    UPLOAD_CANCELLED = "upload.cancelled"
+    
+    # Admin
+    CONFIG_CHANGED = "config.changed"
+    AUDIT_EXPORT_REQUESTED = "audit.export_requested"

@@ -151,6 +151,41 @@ TAGS_METADATA: List[Dict[str, str]] = [
         - **Caching**: 1-hour browser cache for performance
         """,
     },
+    {
+        "name": "admin-audit",
+        "description": """
+        Audit log management and compliance tracking.
+        
+        **Requires admin role.**
+        
+        ## Purpose
+        
+        View and analyze audit logs for security compliance and system monitoring.
+        All significant system actions are recorded for audit purposes.
+        
+        ## Available Operations
+        
+        - **List Logs**: Filter and paginate audit logs
+        - **View Details**: Get detailed information about specific log entries
+        - **Statistics**: Get activity summaries and analytics
+        - **Export**: Export logs to JSON or CSV format
+        
+        ## Actions Tracked
+        
+        - User management (create, update, deactivate)
+        - Authentication (login, logout, failed attempts)
+        - Job lifecycle (create, cancel, delete, status changes)
+        - Annotation workflow (create, submit, approve, reject)
+        - ASR review (submitted, corrected)
+        - Upload operations
+        - Configuration changes
+        
+        ## Compliance
+        
+        Audit logs are immutable and retained for compliance purposes.
+        Do not delete or modify audit log entries.
+        """,
+    },
 ]
 
 
