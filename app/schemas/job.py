@@ -243,3 +243,32 @@ class Stage1ResultsResponse(BaseModel):
     """Response for GET /api/v1/pipeline/jobs/{job_id}/stage1/results."""
     id: str = Field(..., description="Job UUID")
     results: List[SegmentResultResponse] = Field(..., description="List of segment results")
+
+
+# ============================================================================
+# Stage 2 Results Schemas
+# ============================================================================
+
+class Stage2UtteranceResponse(BaseModel):
+    """Individual ASR utterance result."""
+    id: str = Field(..., description="Transcript UUID")
+    utterance_index: int = Field(..., description="Index within segment (0-based)")
+    text: str = Field(..., description="Transcribed text")
+    start: float = Field(..., description="Start time in seconds (relative to segment)")
+    end: float = Field(..., description="End time in seconds (relative to segment)")
+    confidence: float = Field(..., description="ASR confidence score (0-1)")
+    url: Optional[str] = Field(None, description="Asset URL for utterance video")
+    status: str = Field(..., description="Cropping status: pending, cropped, or failed")
+
+
+class Stage2SegmentResponse(BaseModel):
+    """Segment with ASR utterances for Stage 2."""
+    segment_id: str = Field(..., description="Segment UUID")
+    asr_review_flag: bool = Field(..., description="True if segment needs ASR review")
+    utterances: List[Stage2UtteranceResponse] = Field(..., description="List of utterances")
+
+
+class Stage2ResultsResponse(BaseModel):
+    """Response for GET /api/v1/pipeline/jobs/{job_id}/stage2/results."""
+    id: str = Field(..., description="Job UUID")
+    results: List[Stage2SegmentResponse] = Field(..., description="List of segments with ASR data")

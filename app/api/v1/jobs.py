@@ -48,6 +48,9 @@ from app.schemas.job import (
     Stage1ResultsResponse,
     SegmentResultResponse,
     BboxDataResponse,
+    Stage2ResultsResponse,
+    Stage2SegmentResponse,
+    Stage2UtteranceResponse,
 )
 
 # Terminal states
@@ -1213,6 +1216,174 @@ async def get_stage1_results(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": f"Failed to get stage 1 results: {str(e)}"
+                }
+            }
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STAGE 2 RESULTS API
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/pipeline/jobs/{job_id}/stage2/results",
+    response_model=Stage2ResultsResponse,
+    summary="Get Stage 2 (ASR) results",
+    tags=["Pipeline Jobs"],
+    responses={
+        404: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+    }
+)
+async def get_stage2_results(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository),
+):
+    """
+    Get Stage 2 ASR results with utterance-level transcription data.
+    
+    Returns segments with their transcribed utterances, timestamps, and confidence scores.
+    
+    - **id**: Job UUID
+    - **results**: List of segments containing:
+      - Segment ID and ASR review flag
+      - List of utterances with text, timestamps, confidence, and asset URLs
+    
+    ## Authorization
+    - Users can only access their own job results
+    - Admins can access any job results
+    
+    ## Example Response
+    ```json
+    {
+      "id": "196d54f7-f2c2-4326-ad0e-c3849b8d3d72",
+      "results": [
+        {
+          "segment_id": "segment-uuid",
+          "asr_review_flag": false,
+          "utterances": [
+            {
+              "id": "utterance-uuid",
+              "utterance_index": 0,
+              "text": "Ini adalah contoh transkripsi",
+              "start": 0.0,
+              "end": 3.5,
+              "confidence": 0.92,
+              "url": "/api/v1/assets/jobs/.../utterance_0000_0000.mp4",
+              "status": "cropped"
+            }
+          ]
+        }
+      ]
+    }
+    ```
+    """
+    try:
+        # Validate job_id format
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Get job from database
+        job = await job_repo.get_by_id(job_uuid)
+        if not job:
+            raise NotFoundError(f"Job {job_id} not found")
+        
+        # Authorization check
+        if not current_user.is_admin and str(job.created_by) != str(current_user.id):
+            raise PermissionError("Not authorized to access this job")
+        
+        # Get segments with their transcripts
+        from app.repositories.segment_repository import SegmentRepository, get_segment_repository
+        from sqlalchemy.orm import selectinload
+        from sqlalchemy import select
+        from app.db.models.pipeline import PipelineSegment, PipelineTranscript
+        
+        # Query segments with eager-loaded transcripts
+        result = await db.execute(
+            select(PipelineSegment)
+            .where(PipelineSegment.job_id == job_uuid)
+            .options(selectinload(PipelineSegment.transcripts))
+            .order_by(PipelineSegment.segment_index)
+        )
+        segments = result.scalars().all()
+        
+        # Build response
+        results = []
+        for segment in segments:
+            # Build utterances list
+            utterances = []
+            for transcript in segment.transcripts:
+                # Build asset URL for utterance video
+                if transcript.video_path:
+                    if transcript.video_path.startswith("jobs/"):
+                        url = f"/api/v1/assets/{transcript.video_path}"
+                    else:
+                        url = f"/api/v1/assets/jobs/{job_id}/utterances/{transcript.video_path}"
+                else:
+                    # Default pattern: utterance_{segment_index}_{utterance_index}.mp4
+                    url = f"/api/v1/assets/jobs/{job_id}/utterances/utterance_{segment.segment_index:04d}_{transcript.utterance_index:04d}.mp4"
+                
+                utterances.append(
+                    Stage2UtteranceResponse(
+                        id=str(transcript.id),
+                        utterance_index=transcript.utterance_index,
+                        text=transcript.text,
+                        start=transcript.start,
+                        end=transcript.end,
+                        confidence=transcript.confidence,
+                        url=url,
+                        status=transcript.status or "pending",
+                    )
+                )
+            
+            # Sort utterances by index
+            utterances.sort(key=lambda u: u.utterance_index)
+            
+            results.append(
+                Stage2SegmentResponse(
+                    segment_id=str(segment.id),
+                    asr_review_flag=segment.asr_review_flag or False,
+                    utterances=utterances,
+                )
+            )
+        
+        return Stage2ResultsResponse(
+            id=job_id,
+            results=results,
+        )
+        
+    except NotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": str(e)
+                }
+            }
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": str(e)
+                }
+            }
+        )
+    except Exception as e:
+        logger.exception("Failed to get stage 2 results for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to get stage 2 results: {str(e)}"
                 }
             }
         )
