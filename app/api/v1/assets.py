@@ -134,8 +134,8 @@ def get_current_user_optional(
 @router.get("/{path:path}")
 async def get_asset(
     path: str,
-    token: Optional[str] = Query(None, description="Streaming token for video access (alternative to JWT)"),
     request: Request,
+    token: Optional[str] = Query(None, description="Streaming token for video access (alternative to JWT)"),
     current_user: User = Depends(get_current_user),
 ):
     """
