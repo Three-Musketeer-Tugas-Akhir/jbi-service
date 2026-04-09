@@ -178,10 +178,11 @@ class MinIOService:
         expiry: int
     ) -> str:
         """Synchronous presigned URL generation."""
+        from datetime import timedelta
         return self._client.presigned_get_object(
             bucket_name=self._bucket_name,
             object_name=object_name,
-            expires=expiry
+            expires=timedelta(seconds=expiry)
         )
     
     async def generate_presigned_url(
