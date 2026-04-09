@@ -48,7 +48,7 @@ async def get_annotation_queue(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get the annotation queue for the current annotator.
@@ -75,7 +75,7 @@ async def get_annotation_queue(
 async def get_segment_for_annotation(
     segment_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get complete details for a segment to annotate.
@@ -105,7 +105,7 @@ async def create_annotation_edit(
     segment_id: UUID,
     edit_data: AnnotationEditCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Create a new annotation edit for a segment.
@@ -139,7 +139,7 @@ async def create_annotation_edit(
 async def get_annotation_edits(
     segment_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get the edit history for a segment.
@@ -170,7 +170,7 @@ async def preview_annotation(
     segment_id: UUID,
     preview_data: AnnotationPreviewRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get a preview of the annotation with specified timestamps.
@@ -202,7 +202,7 @@ async def save_annotation_draft(
     segment_id: UUID,
     draft_data: SaveDraftRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Save annotation edits as a draft.
@@ -239,7 +239,7 @@ async def save_annotation_draft(
 async def reset_annotation(
     segment_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Reset all edits for a segment back to ASR-original state.
@@ -266,7 +266,7 @@ async def reset_annotation(
 async def get_current_annotation_values(
     segment_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get the current annotation values for a segment.
@@ -293,7 +293,7 @@ async def get_current_annotation_values(
 async def check_submission_status(
     segment_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Check the submission status for a segment.
@@ -322,7 +322,7 @@ async def submit_for_review(
     segment_id: UUID,
     submit_data: SubmitForReviewRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Submit an annotation for curator review.
@@ -350,7 +350,7 @@ async def submit_for_review(
 async def get_review_status(
     segment_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get the review status for a submitted annotation.
@@ -381,7 +381,7 @@ async def list_my_submissions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     List all annotations submitted by the current user.

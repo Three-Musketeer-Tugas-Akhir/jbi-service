@@ -275,11 +275,11 @@ def require_role(*allowed_roles: str):
 require_admin = require_role("admin")
 """Dependency for admin-only endpoints."""
 
-require_annotator = require_role("annotator")
-"""Dependency for annotator-only endpoints."""
+require_annotator = require_role("admin", "annotator")
+"""Dependency for annotator endpoints (admin allowed)."""
 
-require_curator = require_role("curator")
-"""Dependency for curator-only endpoints."""
+require_curator = require_role("admin", "curator")
+"""Dependency for curator endpoints (admin allowed)."""
 
-require_annotator_or_curator = require_role("annotator", "curator")
-"""Dependency for annotator or curator endpoints."""
+require_annotator_or_curator = require_role("admin", "annotator", "curator")
+"""Dependency for annotator, curator, or admin endpoints."""

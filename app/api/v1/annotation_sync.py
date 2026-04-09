@@ -40,7 +40,7 @@ router = APIRouter(prefix="/sync", tags=["annotation-sync"])
 async def get_sync_data(
     edit_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get synchronization data for an annotation edit.
@@ -69,7 +69,7 @@ async def update_sync_boundaries(
     edit_id: UUID,
     update_data: AnnotationSyncUpdateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Update video boundaries for synchronization.
@@ -103,7 +103,7 @@ async def fine_tune_sync(
     edit_id: UUID,
     tune_data: AnnotationSyncFineTuneRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Fine-tune sync boundaries with millisecond precision.
@@ -133,7 +133,7 @@ async def validate_sync(
     edit_id: UUID,
     validate_data: AnnotationSyncValidateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Validate synchronization and update status indicators.
@@ -166,7 +166,7 @@ async def get_stitched_preview(
     edit_id: UUID,
     buffer_seconds: float = Query(2.0, description="Buffer time for stitching"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get preview for stitched video.
@@ -196,7 +196,7 @@ async def get_sync_context(
     segment_id: UUID,
     context_range: int = Query(2, ge=0, le=5, description="Number of neighboring segments"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get sync context with neighboring segments.
@@ -225,7 +225,7 @@ async def get_sync_context(
 async def get_timeline_range(
     edit_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get timeline configuration for the sync editor.
@@ -272,7 +272,7 @@ async def merge_with_segment(
     edit_id: UUID,
     merge_data: MergeSegmentRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Merge video with adjacent segment.

@@ -33,7 +33,7 @@ async def get_asr_review_queue(
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get the ASR Review queue.
@@ -65,7 +65,7 @@ async def get_asr_review_queue(
 async def get_asr_review_detail(
     review_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get complete details for an ASR review.
@@ -92,7 +92,7 @@ async def get_asr_review_detail(
 async def get_asr_review_by_segment(
     segment_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get ASR review status for a specific segment.
@@ -136,7 +136,7 @@ from app.schemas.asr_review import (
 async def check_asr_review_status(
     review_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Check the status of an ASR review.
@@ -162,7 +162,7 @@ async def approve_asr_review(
     review_id: UUID,
     approve_data: ASRReviewApproveRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Approve an ASR transcript.
@@ -189,7 +189,7 @@ async def correct_asr_review(
     review_id: UUID,
     correct_data: ASRReviewCorrectRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Correct an ASR transcript.
@@ -217,7 +217,7 @@ async def flag_asr_review(
     review_id: UUID,
     flag_data: ASRReviewFlagRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("annotator"))
+    current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Flag an ASR segment for reprocessing.
