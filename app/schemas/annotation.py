@@ -264,12 +264,12 @@ class SubmissionStatusResponse(BaseModel):
 class ReviewStatusResponse(BaseModel):
     """Review status for an annotator's submission."""
     segment_id: UUID
-    review_id: UUID
-    status: str  # PENDING, APPROVED, REJECTED
-    submitted_at: datetime
-    reviewed_at: Optional[datetime]
-    curator_id: Optional[UUID]
-    feedback: Optional[str]
+    review_id: Optional[UUID] = None
+    status: str  # NOT_SUBMITTED, PENDING, APPROVED, REJECTED
+    submitted_at: Optional[datetime] = None
+    reviewed_at: Optional[datetime] = None
+    curator_id: Optional[UUID] = None
+    feedback: Optional[str] = None
     
     class Config:
         from_attributes = True

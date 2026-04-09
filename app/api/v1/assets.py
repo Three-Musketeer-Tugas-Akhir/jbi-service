@@ -10,7 +10,7 @@ import re
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -19,6 +19,7 @@ from app.api.deps import get_current_user
 from app.db.models import User, PipelineJob
 from app.db.session import async_session
 from app.services.minio_service import get_minio_service
+from app.services.streaming_token_service import streaming_token_service
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -120,9 +121,20 @@ def get_content_type(filename: str) -> str:
     return mime_types.get(ext, 'application/octet-stream')
 
 
+def get_current_user_optional(
+    token: str = Depends(get_current_user)
+) -> Optional[User]:
+    """Dependency that allows optional authentication."""
+    try:
+        return token
+    except Exception:
+        return None
+
+
 @router.get("/{path:path}")
 async def get_asset(
     path: str,
+    token: Optional[str] = Query(None, description="Streaming token for video access (alternative to JWT)"),
     request: Request,
     current_user: User = Depends(get_current_user),
 ):
@@ -131,16 +143,16 @@ async def get_asset(
     
     **Path Pattern:** `jobs/{job_id}/...`
     
-    **Authorization:**
-    - Users can only access their own job assets
-    - Admins can access all assets
+    **Authorization (one of):**
+    1. Streaming token via `?token=` query parameter (for video players)
+    2. JWT token via `Authorization: Bearer {token}` header (for API clients)
     
     **Examples:**
-    - `/api/v1/assets/jobs/196d54f7-f2c2-4326-ad0e-c3849b8d3d72/original/video.mp4`
-    - `/api/v1/assets/jobs/196d54f7-f2c2-4326-ad0e-c3849b8d3d72/segments/segment_0000.mp4`
+    - `/api/v1/assets/jobs/196d54f7-f2c2-4326-ad0e-c3849b8d3d72/segments/segment_0000.mp4?token=xyz`
+    - `/api/v1/assets/jobs/196d54f7-f2c2-4326-ad0e-c3849b8d3d72/segments/segment_0000.mp4` (with Authorization header)
     
     **Headers:**
-    - `Authorization: Bearer {token}` (required)
+    - `Authorization: Bearer {jwt_token}` (required if no streaming token)
     - `Range: bytes=0-1023` (optional, for video seeking)
     """
     # Validate path
@@ -152,19 +164,38 @@ async def get_asset(
             detail=str(e)
         )
     
-    # Check authorization
-    async with async_session() as session:
-        is_authorized = await authorize_access(current_user, job_id, session)
-        
-        if not is_authorized:
-            logger.warning(
-                f"Unauthorized access attempt: user={current_user.id}, "
-                f"job={job_id}, path={path}"
-            )
+    # Determine user_id from token or JWT
+    user_id = None
+    is_streaming_token = False
+    
+    if token:
+        # Verify streaming token
+        user_id_from_token = streaming_token_service.verify_token(token, path)
+        if user_id_from_token is None:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this resource"
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired streaming token"
             )
+        user_id = user_id_from_token
+        is_streaming_token = True
+    else:
+        # Use JWT authentication
+        user_id = current_user.id
+    
+    # Check authorization (skip if using valid streaming token)
+    if not is_streaming_token:
+        async with async_session() as session:
+            is_authorized = await authorize_access(current_user, job_id, session)
+            
+            if not is_authorized:
+                logger.warning(
+                    f"Unauthorized access attempt: user={current_user.id}, "
+                    f"job={job_id}, path={path}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Not authorized to access this resource"
+                )
     
     # Stream file from MinIO
     minio_service = get_minio_service()

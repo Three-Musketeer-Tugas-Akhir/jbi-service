@@ -49,6 +49,7 @@ async def get_asr_review_queue(
     """
     service = ASRReviewService(db)
     result = await service.get_review_queue(
+        user_id=current_user.id,
         page=page,
         page_size=page_size,
         low_confidence_only=low_confidence_only

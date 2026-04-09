@@ -9,6 +9,7 @@ from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.repositories.segment_repository import SegmentRepository
 from app.repositories.job_repository import JobRepository
 from app.services.minio_service import get_minio_service
+from app.services.streaming_token_service import streaming_token_service
 from app.core.exceptions import NotFoundError, PermissionError
 from app.core.config import settings
 from app.db.models.annotation import AnnotationQueue
@@ -87,10 +88,13 @@ class AnnotationQueueService:
         # Get job details for metadata
         job = await self.job_repo.get_by_id(segment.job_id)
         
-        # Generate assets endpoint URL (authenticated, supports streaming)
+        # Generate assets endpoint URL with streaming token
         video_url = ""
         if segment.cropped_video_path:
-            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
+            token = streaming_token_service.generate_token(
+                annotator_id, segment.cropped_video_path
+            )
+            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}?token={token}"
         
         # Get edit history
         edit_history = await self._get_edit_history(segment_id)
@@ -140,10 +144,13 @@ class AnnotationQueueService:
         if segment:
             job = await self.job_repo.get_by_id(segment.job_id)
         
-        # Get preview URL via assets endpoint (authenticated)
+        # Get preview URL via assets endpoint with streaming token
         video_preview_url = ""
         if segment and segment.cropped_video_path:
-            video_preview_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
+            token = streaming_token_service.generate_token(
+                entry.annotator_id, segment.cropped_video_path
+            )
+            video_preview_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}?token={token}"
         
         # Get first transcript text if available
         transcript_text = None

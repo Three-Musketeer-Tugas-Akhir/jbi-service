@@ -10,6 +10,7 @@ from app.repositories.job_repository import JobRepository
 from app.repositories.annotation_queue_repository import AnnotationQueueRepository
 from app.repositories.audit_log_repository import AuditLogRepository
 from app.services.minio_service import get_minio_service
+from app.services.streaming_token_service import streaming_token_service
 from app.core.exceptions import NotFoundError, PermissionError
 from app.core.config import settings
 from app.db.models.annotation import ASRReview, AnnotationQueue
@@ -32,6 +33,7 @@ class ASRReviewService:
     
     async def get_review_queue(
         self,
+        user_id: UUID,
         page: int = 1,
         page_size: int = 20,
         low_confidence_only: bool = False
@@ -68,7 +70,7 @@ class ASRReviewService:
         # Build response items
         items = []
         for review in reviews:
-            item = await self._build_queue_item(review)
+            item = await self._build_queue_item(review, user_id)
             items.append(item)
         
         pages = (total + page_size - 1) // page_size
@@ -104,10 +106,13 @@ class ASRReviewService:
         
         job = await self.job_repo.get_by_id(segment.job_id)
         
-        # Generate video URL via assets endpoint (authenticated)
+        # Generate video URL via assets endpoint with streaming token
         video_url = ""
         if segment.cropped_video_path:
-            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
+            token = streaming_token_service.generate_token(
+                user_id, segment.cropped_video_path
+            )
+            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}?token={token}"
         
         # Determine if low confidence
         is_low_confidence = (
@@ -158,17 +163,20 @@ class ASRReviewService:
             "is_pending": review.status == ASRReview.STATUS_PENDING
         }
     
-    async def _build_queue_item(self, review: ASRReview) -> dict:
+    async def _build_queue_item(self, review: ASRReview, user_id: UUID) -> dict:
         """Build a queue item response."""
         segment = await self.segment_repo.get_by_id(review.segment_id)
         job = None
         if segment:
             job = await self.job_repo.get_by_id(segment.job_id)
         
-        # Generate video URL via assets endpoint (authenticated)
+        # Generate video URL via assets endpoint with streaming token
         video_url = ""
         if segment and segment.cropped_video_path:
-            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
+            token = streaming_token_service.generate_token(
+                user_id, segment.cropped_video_path
+            )
+            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}?token={token}"
         
         # Determine flags
         is_low_confidence = (

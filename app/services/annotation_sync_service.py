@@ -16,6 +16,7 @@ from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.repositories.segment_repository import SegmentRepository
 from app.repositories.transcript_repository import TranscriptRepository
 from app.services.minio_service import get_minio_service
+from app.services.streaming_token_service import streaming_token_service
 from app.core.exceptions import NotFoundError, PermissionError, ValidationError
 from app.core.config import settings
 
@@ -378,7 +379,7 @@ class AnnotationSyncService:
         sync = await self.sync_repo.get_by_edit_id(edit_id)
         if not sync:
             # Return default preview from edit
-            video_url = await self._get_video_url_for_edit(edit)
+            video_url = await self._get_video_url_for_edit(edit, user_id)
             return {
                 "edit_id": edit_id,
                 "segment_id": edit.segment_id,
@@ -399,7 +400,7 @@ class AnnotationSyncService:
         video_end = sync.get_effective_video_end()
         
         # Get video URL
-        video_url = await self._get_video_url_for_edit(edit)
+        video_url = await self._get_video_url_for_edit(edit, user_id)
         
         # Check if stitching is needed
         requires_stitching = (
@@ -422,11 +423,14 @@ class AnnotationSyncService:
             "extension_seconds": sync.get_extension_seconds()
         }
     
-    async def _get_video_url_for_edit(self, edit: AnnotationEdit) -> str:
-        """Get video URL for an edit via assets endpoint (authenticated)."""
+    async def _get_video_url_for_edit(self, edit: AnnotationEdit, user_id: UUID) -> str:
+        """Get video URL for an edit via assets endpoint with streaming token."""
         segment = await self.segment_repo.get_by_id(edit.segment_id)
         if segment and segment.cropped_video_path:
-            return f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
+            token = streaming_token_service.generate_token(
+                user_id, segment.cropped_video_path
+            )
+            return f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}?token={token}"
         return ""
     
     def _format_sync_response(self, sync: AnnotationSync) -> dict:

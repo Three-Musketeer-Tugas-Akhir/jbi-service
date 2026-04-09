@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     rate_limit_login_attempts: int = 5  # Max failed attempts
     rate_limit_window_seconds: int = 900  # 15 minutes
 
+    # --- Streaming Token Configuration ---
+    streaming_token_expire_days: int = 60  # Token expiry for video streaming
+
     # --- Email Configuration ---
     smtp_host: str = "localhost"
     smtp_port: int = 587

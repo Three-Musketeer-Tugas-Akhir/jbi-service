@@ -10,6 +10,7 @@ from app.repositories.annotation_queue_repository import AnnotationQueueReposito
 from app.repositories.segment_repository import SegmentRepository
 from app.core.exceptions import NotFoundError, PermissionError, ValidationError
 from app.core.config import settings
+from app.services.streaming_token_service import streaming_token_service
 from app.db.models.annotation import AnnotationEdit, AnnotationQueue
 
 
@@ -245,8 +246,11 @@ class AnnotationEditService:
         if not segment or not segment.cropped_video_path:
             raise NotFoundError("Video not available for preview")
         
-        # Generate assets endpoint URL (authenticated, supports streaming)
-        video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
+        # Generate assets endpoint URL with streaming token
+        token = streaming_token_service.generate_token(
+            user_id, segment.cropped_video_path
+        )
+        video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}?token={token}"
         
         return {
             "segment_id": segment_id,
