@@ -10,6 +10,7 @@ from app.repositories.segment_repository import SegmentRepository
 from app.repositories.job_repository import JobRepository
 from app.services.minio_service import get_minio_service
 from app.core.exceptions import NotFoundError, PermissionError
+from app.core.config import settings
 from app.db.models.annotation import AnnotationQueue
 
 
@@ -86,13 +87,10 @@ class AnnotationQueueService:
         # Get job details for metadata
         job = await self.job_repo.get_by_id(segment.job_id)
         
-        # Generate pre-signed URL
+        # Generate assets endpoint URL (authenticated, supports streaming)
         video_url = ""
         if segment.cropped_video_path:
-            video_url = await self.minio_service.generate_presigned_url(
-                object_name=segment.cropped_video_path,
-                expiry=3600  # 1 hour
-            )
+            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
         
         # Get edit history
         edit_history = await self._get_edit_history(segment_id)
@@ -142,13 +140,10 @@ class AnnotationQueueService:
         if segment:
             job = await self.job_repo.get_by_id(segment.job_id)
         
-        # Get preview URL (thumbnail or first frame)
+        # Get preview URL via assets endpoint (authenticated)
         video_preview_url = ""
         if segment and segment.cropped_video_path:
-            video_preview_url = await self.minio_service.generate_presigned_url(
-                object_name=segment.cropped_video_path,
-                expiry=3600
-            )
+            video_preview_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
         
         # Get first transcript text if available
         transcript_text = None

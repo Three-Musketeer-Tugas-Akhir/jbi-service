@@ -17,6 +17,7 @@ from app.repositories.segment_repository import SegmentRepository
 from app.repositories.transcript_repository import TranscriptRepository
 from app.services.minio_service import get_minio_service
 from app.core.exceptions import NotFoundError, PermissionError, ValidationError
+from app.core.config import settings
 
 
 class AnnotationSyncService:
@@ -422,13 +423,10 @@ class AnnotationSyncService:
         }
     
     async def _get_video_url_for_edit(self, edit: AnnotationEdit) -> str:
-        """Get pre-signed video URL for an edit."""
+        """Get video URL for an edit via assets endpoint (authenticated)."""
         segment = await self.segment_repo.get_by_id(edit.segment_id)
         if segment and segment.cropped_video_path:
-            return await self.minio_service.generate_presigned_url(
-                object_name=segment.cropped_video_path,
-                expiry=3600
-            )
+            return f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
         return ""
     
     def _format_sync_response(self, sync: AnnotationSync) -> dict:

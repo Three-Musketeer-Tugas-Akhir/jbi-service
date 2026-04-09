@@ -11,6 +11,7 @@ from app.repositories.annotation_queue_repository import AnnotationQueueReposito
 from app.repositories.audit_log_repository import AuditLogRepository
 from app.services.minio_service import get_minio_service
 from app.core.exceptions import NotFoundError, PermissionError
+from app.core.config import settings
 from app.db.models.annotation import ASRReview, AnnotationQueue
 from app.db.models.audit import AuditAction
 
@@ -103,13 +104,10 @@ class ASRReviewService:
         
         job = await self.job_repo.get_by_id(segment.job_id)
         
-        # Generate video URL
+        # Generate video URL via assets endpoint (authenticated)
         video_url = ""
         if segment.cropped_video_path:
-            video_url = await self.minio_service.generate_presigned_url(
-                object_name=segment.cropped_video_path,
-                expiry=3600
-            )
+            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
         
         # Determine if low confidence
         is_low_confidence = (
@@ -167,13 +165,10 @@ class ASRReviewService:
         if segment:
             job = await self.job_repo.get_by_id(segment.job_id)
         
-        # Generate video URL
+        # Generate video URL via assets endpoint (authenticated)
         video_url = ""
         if segment and segment.cropped_video_path:
-            video_url = await self.minio_service.generate_presigned_url(
-                object_name=segment.cropped_video_path,
-                expiry=3600
-            )
+            video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
         
         # Determine flags
         is_low_confidence = (

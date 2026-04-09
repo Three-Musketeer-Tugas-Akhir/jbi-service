@@ -9,6 +9,7 @@ from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.repositories.annotation_queue_repository import AnnotationQueueRepository
 from app.repositories.segment_repository import SegmentRepository
 from app.core.exceptions import NotFoundError, PermissionError, ValidationError
+from app.core.config import settings
 from app.db.models.annotation import AnnotationEdit, AnnotationQueue
 
 
@@ -244,13 +245,8 @@ class AnnotationEditService:
         if not segment or not segment.cropped_video_path:
             raise NotFoundError("Video not available for preview")
         
-        # Generate pre-signed URL
-        from app.services.minio_service import get_minio_service
-        minio_service = get_minio_service()
-        video_url = await minio_service.generate_presigned_url(
-            object_name=segment.cropped_video_path,
-            expiry=3600  # 1 hour
-        )
+        # Generate assets endpoint URL (authenticated, supports streaming)
+        video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}"
         
         return {
             "segment_id": segment_id,
