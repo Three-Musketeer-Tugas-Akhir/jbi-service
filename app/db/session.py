@@ -21,6 +21,9 @@ async_session = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False,
 )
 
+# Alias for compatibility with audit middleware
+async_session_maker = async_session
+
 
 async def get_db():
     """FastAPI dependency that yields a database session."""

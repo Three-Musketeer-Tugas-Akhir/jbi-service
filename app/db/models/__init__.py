@@ -21,6 +21,10 @@ from app.db.models.annotation import (
     ASRReview,
     AnnotationQueue,
 )
+from app.db.models.annotation_sync import (
+    AnnotationSync,
+    AnnotationSyncHistory,
+)
 
 __all__ = [
     "User",
@@ -43,4 +47,6 @@ __all__ = [
     "AnnotationComment",
     "ASRReview",
     "AnnotationQueue",
+    "AnnotationSync",
+    "AnnotationSyncHistory",
 ]
