@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db.models.pipeline import PipelineSegment
 
@@ -34,6 +35,15 @@ class SegmentRepository:
         """Get segment by ID."""
         result = await self.db.execute(
             select(PipelineSegment).where(PipelineSegment.id == segment_id)
+        )
+        return result.scalar_one_or_none()
+    
+    async def get_by_id_with_transcripts(self, segment_id: UUID) -> Optional[PipelineSegment]:
+        """Get segment by ID with transcripts eagerly loaded."""
+        result = await self.db.execute(
+            select(PipelineSegment)
+            .options(selectinload(PipelineSegment.transcripts))
+            .where(PipelineSegment.id == segment_id)
         )
         return result.scalar_one_or_none()
 

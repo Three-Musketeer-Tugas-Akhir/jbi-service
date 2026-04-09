@@ -78,8 +78,8 @@ class AnnotationQueueService:
         if queue_entry.annotator_id != annotator_id:
             raise PermissionError("This segment is not assigned to you")
         
-        # Get segment details
-        segment = await self.segment_repo.get_by_id(segment_id)
+        # Get segment details with transcripts
+        segment = await self.segment_repo.get_by_id_with_transcripts(segment_id)
         if not segment:
             raise NotFoundError(f"Segment {segment_id} not found")
         
@@ -115,12 +115,7 @@ class AnnotationQueueService:
             "original_filename": job.original_filename if job else "Unknown",
             "video_url": video_url,
             "video_duration": None,  # TODO: Calculate from video metadata
-            "asr_text": segment.asr_text,
-            "asr_start": segment.asr_start,
-            "asr_end": segment.asr_end,
-            "asr_confidence": segment.asr_confidence,
-            "jbi_start": segment.jbi_start,
-            "jbi_end": segment.jbi_end,
+            "transcript_count": len(segment.transcripts) if segment.transcripts else 0,
             "current_text": current_text,
             "current_start": current_start,
             "current_end": current_end,
@@ -131,7 +126,7 @@ class AnnotationQueueService:
     
     async def _build_queue_item(self, entry) -> dict:
         """Build a queue item response with metadata and active edit information."""
-        segment = await self.segment_repo.get_by_id(entry.segment_id)
+        segment = await self.segment_repo.get_by_id_with_transcripts(entry.segment_id)
         job = None
         if segment:
             job = await self.job_repo.get_by_id(segment.job_id)
@@ -144,8 +139,11 @@ class AnnotationQueueService:
                 expiry=3600
             )
         
-        # Get current transcript
-        transcript_text = segment.asr_text if segment else None
+        # Get first transcript text if available
+        transcript_text = None
+        if segment and segment.transcripts:
+            first_transcript = segment.transcripts[0]
+            transcript_text = first_transcript.text if first_transcript else None
         
         # Get latest ACTIVE edit (DRAFT, PENDING, SUBMITTED) - Option B
         latest_edit = await self.edit_repo.get_latest_active_by_segment(
@@ -163,7 +161,7 @@ class AnnotationQueueService:
             "priority": entry.priority,
             "assigned_at": entry.assigned_at,
             "transcript_text": transcript_text,
-            "asr_confidence": segment.asr_confidence if segment else None,
+            "asr_confidence": segment.transcripts[0].confidence if (segment and segment.transcripts and segment.transcripts[0]) else None,
             # Active edit information (Option B)
             "edit_id": latest_edit.id if latest_edit else None,
             "edit_status": latest_edit.status if latest_edit else None,
@@ -205,9 +203,12 @@ class AnnotationQueueService:
                 latest_edit.new_end
             )
         
-        # Otherwise use ASR values
-        return (
-            segment.asr_text or "",
-            segment.asr_start or 0.0,
-            segment.asr_end or 0.0
-        )
+        # Otherwise use first transcript values if available
+        if segment.transcripts and len(segment.transcripts) > 0:
+            first = segment.transcripts[0]
+            return (
+                first.text or "",
+                first.start or 0.0,
+                first.end or 0.0
+            )
+        return ("", 0.0, 0.0)
