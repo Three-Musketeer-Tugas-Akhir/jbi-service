@@ -20,13 +20,19 @@ class QueueItemBase(BaseModel):
 
 
 class QueueItemResponse(QueueItemBase):
-    """Queue item response with metadata."""
+    """Queue item response with metadata and active edit information."""
     id: UUID
     job_id: UUID
     original_filename: str
     video_preview_url: str
     transcript_text: Optional[str] = None
     asr_confidence: Optional[float] = None
+    
+    # Active edit information (Option B: latest DRAFT/PENDING/SUBMITTED)
+    edit_id: Optional[UUID] = Field(None, description="Latest active edit ID (DRAFT, PENDING, or SUBMITTED)")
+    edit_status: Optional[str] = Field(None, description="Status of the active edit")
+    has_active_work: bool = Field(False, description="True if has active edit (DRAFT/PENDING/SUBMITTED)")
+    last_edited_at: Optional[datetime] = Field(None, description="When the active edit was last modified")
     
     class Config:
         from_attributes = True

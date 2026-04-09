@@ -61,6 +61,31 @@ class AnnotationEditRepository:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
     
+    async def get_latest_active_by_segment(
+        self,
+        segment_id: UUID,
+        editor_id: UUID
+    ) -> Optional[AnnotationEdit]:
+        """
+        Get latest active edit (DRAFT, PENDING, or SUBMITTED) for a segment by editor.
+        
+        Excludes APPROVED and REJECTED edits as they are considered complete.
+        This is useful for the annotation queue to show work in progress.
+        """
+        query = select(AnnotationEdit).where(
+            AnnotationEdit.segment_id == segment_id,
+            AnnotationEdit.editor_id == editor_id,
+            AnnotationEdit.status.in_([
+                AnnotationEdit.STATUS_DRAFT,
+                AnnotationEdit.STATUS_PENDING,
+                AnnotationEdit.STATUS_SUBMITTED
+            ]),
+            AnnotationEdit.is_deleted == False
+        ).order_by(desc(AnnotationEdit.edited_at)).limit(1)
+        
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()
+    
     async def soft_delete(self, edit_id: UUID) -> bool:
         """Soft delete an edit (preserves history)."""
         edit = await self.get_by_id(edit_id)

@@ -130,7 +130,7 @@ class AnnotationQueueService:
         }
     
     async def _build_queue_item(self, entry) -> dict:
-        """Build a queue item response with metadata."""
+        """Build a queue item response with metadata and active edit information."""
         segment = await self.segment_repo.get_by_id(entry.segment_id)
         job = None
         if segment:
@@ -147,6 +147,12 @@ class AnnotationQueueService:
         # Get current transcript
         transcript_text = segment.asr_text if segment else None
         
+        # Get latest ACTIVE edit (DRAFT, PENDING, SUBMITTED) - Option B
+        latest_edit = await self.edit_repo.get_latest_active_by_segment(
+            segment_id=entry.segment_id,
+            editor_id=entry.annotator_id
+        )
+        
         return {
             "id": entry.id,
             "segment_id": entry.segment_id,
@@ -157,7 +163,12 @@ class AnnotationQueueService:
             "priority": entry.priority,
             "assigned_at": entry.assigned_at,
             "transcript_text": transcript_text,
-            "asr_confidence": segment.asr_confidence if segment else None
+            "asr_confidence": segment.asr_confidence if segment else None,
+            # Active edit information (Option B)
+            "edit_id": latest_edit.id if latest_edit else None,
+            "edit_status": latest_edit.status if latest_edit else None,
+            "has_active_work": latest_edit is not None,
+            "last_edited_at": latest_edit.edited_at if latest_edit else None
         }
     
     async def _get_edit_history(self, segment_id: UUID) -> List[dict]:
