@@ -109,13 +109,24 @@ class AnnotationQueueService:
                 AnnotationQueue.STATUS_IN_PROGRESS
             )
         
+        # Get first transcript for ASR data (if available)
+        first_transcript = segment.transcripts[0] if segment.transcripts else None
+        
         return {
             "segment_id": segment.id,
             "job_id": segment.job_id,
             "original_filename": job.original_filename if job else "Unknown",
             "video_url": video_url,
             "video_duration": None,  # TODO: Calculate from video metadata
-            "transcript_count": len(segment.transcripts) if segment.transcripts else 0,
+            # ASR Data from first transcript
+            "asr_text": first_transcript.text if first_transcript else None,
+            "asr_start": first_transcript.start if first_transcript else None,
+            "asr_end": first_transcript.end if first_transcript else None,
+            "asr_confidence": first_transcript.confidence if first_transcript else None,
+            # JBI Timestamps - use first transcript times or None
+            "jbi_start": first_transcript.start if first_transcript else None,
+            "jbi_end": first_transcript.end if first_transcript else None,
+            # Current State
             "current_text": current_text,
             "current_start": current_start,
             "current_end": current_end,
