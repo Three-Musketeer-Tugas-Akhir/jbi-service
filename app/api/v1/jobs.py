@@ -1134,7 +1134,7 @@ async def get_stage1_results(
     try:
         # Validate job_id format
         try:
-            job_uuid = UUID(job_id)
+            job_uuid = uuid.UUID(job_id)
         except ValueError:
             raise NotFoundError(f"Job {job_id} not found")
         
@@ -1287,7 +1287,7 @@ async def get_stage2_results(
     try:
         # Validate job_id format
         try:
-            job_uuid = UUID(job_id)
+            job_uuid = uuid.UUID(job_id)
         except ValueError:
             raise NotFoundError(f"Job {job_id} not found")
         
@@ -1476,7 +1476,7 @@ async def get_stage3_results(
     try:
         # Validate job_id format
         try:
-            job_uuid = UUID(job_id)
+            job_uuid = uuid.UUID(job_id)
         except ValueError:
             raise NotFoundError(f"Job {job_id} not found")
         
@@ -1517,10 +1517,10 @@ async def get_stage3_results(
                 total_utterances += 1
                 
                 # Count by status
-                status = transcript.status or "pending"
-                if status == "cropped":
+                cropping_status = transcript.status or "pending"
+                if cropping_status == "cropped":
                     cropped_count += 1
-                elif status == "failed":
+                elif cropping_status == "failed":
                     failed_count += 1
                 else:
                     pending_count += 1
@@ -1544,7 +1544,7 @@ async def get_stage3_results(
                         end=transcript.end,
                         confidence=transcript.confidence,
                         url=url,
-                        status=status,
+                        status=cropping_status,
                     )
                 )
             
