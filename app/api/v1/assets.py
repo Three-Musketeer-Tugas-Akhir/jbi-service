@@ -13,10 +13,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from app.api.deps import get_current_user
-from app.db.models import User, PipelineJob
+from app.db.models import User
 from app.db.session import async_session
 from app.services.minio_service import get_minio_service
 from app.services.streaming_token_service import streaming_token_service
@@ -89,21 +88,9 @@ async def authorize_access(
     Returns:
         True if authorized, False otherwise
     """
-    # Admin can access all
-    if user.has_role("admin"):
-        return True
-    
-    # Get job owner
-    result = await session.execute(
-        select(PipelineJob).where(PipelineJob.id == job_id)
-    )
-    job = result.scalar_one_or_none()
-    
-    if not job:
-        return False
-    
-    # Check ownership
-    return str(job.created_by) == str(user.id)
+    # Any authenticated user can access any job's assets
+    # Remove ownership check - all annotators/curators/admins can access
+    return True
 
 
 def get_content_type(filename: str) -> str:
