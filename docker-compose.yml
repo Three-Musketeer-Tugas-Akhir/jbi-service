@@ -37,6 +37,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
+      USE_AUTH_FOR_ASSET: "false"
     depends_on:
       db:
         condition: service_healthy
@@ -60,6 +61,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
+      USE_AUTH_FOR_ASSET: "false"
     depends_on:
       db:
         condition: service_healthy
