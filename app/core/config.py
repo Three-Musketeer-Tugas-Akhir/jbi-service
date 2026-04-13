@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     # --- Streaming Token Configuration ---
     streaming_token_expire_days: int = 60  # Token expiry for video streaming
 
+    # --- Asset Access Configuration ---
+    use_auth_for_asset: bool = False  # If False, assets can be accessed without authentication
+
     # --- Email Configuration ---
     smtp_host: str = "localhost"
     smtp_port: int = 587
