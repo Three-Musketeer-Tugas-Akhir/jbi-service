@@ -108,12 +108,35 @@ def get_content_type(filename: str) -> str:
     return mime_types.get(ext, 'application/octet-stream')
 
 
+async def optional_current_user(
+    token: Optional[str] = Query(None, description="Streaming token for video access (alternative to JWT)"),
+) -> Optional[User]:
+    """
+    Dependency that conditionally requires authentication based on settings.
+    
+    - If USE_AUTH_FOR_ASSET=False: Returns None (no auth required)
+    - If USE_AUTH_FOR_ASSET=True and token provided: Validates streaming token
+    - If USE_AUTH_FOR_ASSET=True and no token: Requires JWT via get_current_user
+    """
+    if not settings.use_auth_for_asset:
+        # Authentication disabled, return None
+        return None
+    
+    # Authentication is required
+    if token:
+        # Will be validated in the endpoint
+        return None
+    
+    # Require JWT authentication
+    return await get_current_user()
+
+
 @router.get("/{path:path}")
 async def get_asset(
     path: str,
     request: Request,
     token: Optional[str] = Query(None, description="Streaming token for video access (alternative to JWT)"),
-    current_user: User = Depends(get_current_user),
+    current_user: Optional[User] = Depends(optional_current_user),
 ):
     """
     Stream an asset file from MinIO S3 storage.
@@ -162,6 +185,12 @@ async def get_asset(
             is_streaming_token = True
         else:
             # Use JWT authentication and check authorization
+            if current_user is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required"
+                )
+            
             async with async_session() as session:
                 is_authorized = await authorize_access(current_user, job_id, session)
                 
