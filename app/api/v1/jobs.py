@@ -96,6 +96,13 @@ def _record_to_status_response(record) -> JobStatusResponse:
                 percent=progress_percent,
             )
     
+    # Build original video URL from video_path
+    original_video_url = None
+    if record.video_path:
+        # video_path is like "jobs/{job_id}/original/{filename}"
+        # Construct the assets URL
+        original_video_url = f"{settings.api_v1_prefix}/assets/{record.video_path}"
+    
     return JobStatusResponse(
         job_id=str(record.id),
         status=record.status,
@@ -105,6 +112,7 @@ def _record_to_status_response(record) -> JobStatusResponse:
         error=record.error_message,
         created_at=record.created_at,
         updated_at=record.updated_at,
+        original_video_url=original_video_url,
     )
 
 

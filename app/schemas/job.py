@@ -80,6 +80,7 @@ class JobStatusResponse(BaseModel):
     error: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    original_video_url: Optional[str] = None
 
 
 class JobCancelResponse(BaseModel):
