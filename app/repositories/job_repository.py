@@ -91,6 +91,28 @@ class JobRepository:
             return True
         return False
     
+    async def update_curation_status(
+        self,
+        job_id: UUID,
+        curation_status: str
+    ) -> bool:
+        """
+        Update job curation status.
+        
+        Args:
+            job_id: Job UUID
+            curation_status: New curation status
+            
+        Returns:
+            True if job was found and updated, False otherwise
+        """
+        job = await self.get_by_id(job_id)
+        if job:
+            job.curation_status = curation_status
+            await self.db.flush()
+            return True
+        return False
+    
     async def update_category(
         self,
         job_id: UUID,

@@ -237,6 +237,14 @@ class SubmitForReviewRequest(BaseModel):
     )
 
 
+class ReviewActionRequest(BaseModel):
+    """Request for curator to approve or reject an annotation review."""
+    feedback: Optional[str] = Field(
+        default=None,
+        description="Optional feedback to the annotator (especially for rejections)"
+    )
+
+
 class SubmitForReviewResponse(BaseModel):
     """Response after submitting for review."""
     segment_id: UUID

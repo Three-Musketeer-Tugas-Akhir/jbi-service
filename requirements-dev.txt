@@ -16,3 +16,6 @@ mypy>=1.5.0
 # Type checking
 types-python-jose
 types-passlib
+
+# Curation / text normalization
+num2words==0.5.14

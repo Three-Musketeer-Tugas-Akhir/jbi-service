@@ -74,6 +74,14 @@ class PipelineJob(Base):
         nullable=True
     )
     
+    # Curation status (Curation module)
+    curation_status: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        index=True,
+        comment="Curation workflow status: PENDING, ANNOTATED, NORMALIZING, NORMALIZED, READY_TO_EXPORT"
+    )
+    
     # Cancellation fields (Story 2.9)
     is_cancelled: Mapped[bool] = mapped_column(
         default=False,

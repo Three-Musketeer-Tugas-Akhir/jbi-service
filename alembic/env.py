@@ -6,7 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 # Import the ORM Base so autogenerate can detect models
-from app.models.job_model import Base  # noqa: F401
+from app.db.base import Base  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

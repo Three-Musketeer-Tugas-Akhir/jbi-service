@@ -49,6 +49,18 @@ class AnnotationEdit(Base):
     edited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     
+    # Curation fields
+    normalized_text: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Auto-normalized or curator-edited final text for export"
+    )
+    curation_edited_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Timestamp of last manual curation edit"
+    )
+    
     # Relationships
     segment: Mapped["PipelineSegment"] = relationship("PipelineSegment", back_populates="annotation_edits")
     editor: Mapped[Optional["User"]] = relationship("User", back_populates="annotation_edits")

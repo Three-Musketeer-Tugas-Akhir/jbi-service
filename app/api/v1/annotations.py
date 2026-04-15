@@ -26,9 +26,13 @@ from app.schemas.annotation import (
     SubmitForReviewResponse,
     SubmissionStatusResponse,
     ReviewStatusResponse,
-    ReviewStatusListResponse
+    ReviewStatusListResponse,
+    ReviewActionRequest,
 )
 from app.services.annotation_submission_service import AnnotationSubmissionService
+from app.repositories.annotation_review_repository import AnnotationReviewRepository
+from app.repositories.job_repository import JobRepository
+from app.core.exceptions import NotFoundError
 
 
 router = APIRouter()
@@ -396,3 +400,92 @@ async def list_my_submissions(
         page_size=page_size
     )
     return result
+
+
+@router.post(
+    "/reviews/{review_id}/approve",
+    response_model=dict,
+    summary="Approve annotation review",
+    description="Curator approves an annotation review. If all reviews for the job are approved, the job becomes ready for curation."
+)
+async def approve_annotation_review(
+    review_id: UUID,
+    action_data: ReviewActionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "curator"))
+):
+    """
+    Approve an annotation review.
+    
+    After approval, the system checks whether all annotation reviews for the
+    associated pipeline job are approved. If so, the job's curation_status
+    is automatically updated to ANNOTATED.
+    """
+    review_repo = AnnotationReviewRepository(db)
+    job_repo = JobRepository(db)
+    
+    review = await review_repo.get_by_id(review_id)
+    if not review:
+        raise NotFoundError(f"Review '{review_id}' not found")
+    
+    await review_repo.update_status(
+        review_id=review_id,
+        status="APPROVED",
+        curator_id=current_user.id,
+        feedback=action_data.feedback
+    )
+    
+    # Trigger curation readiness check
+    job_id = await review_repo.get_job_id_by_review_id(review_id)
+    if job_id:
+        has_pending = await review_repo.has_pending_reviews_for_job(job_id)
+        if not has_pending:
+            await job_repo.update_curation_status(job_id, "ANNOTATED")
+    
+    await db.commit()
+    
+    return {
+        "review_id": review_id,
+        "status": "APPROVED",
+        "curator_id": current_user.id,
+        "message": "Review approved successfully"
+    }
+
+
+@router.post(
+    "/reviews/{review_id}/reject",
+    response_model=dict,
+    summary="Reject annotation review",
+    description="Curator rejects an annotation review with optional feedback."
+)
+async def reject_annotation_review(
+    review_id: UUID,
+    action_data: ReviewActionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "curator"))
+):
+    """
+    Reject an annotation review.
+    
+    The annotator can revise and resubmit after receiving feedback.
+    """
+    review_repo = AnnotationReviewRepository(db)
+    
+    review = await review_repo.get_by_id(review_id)
+    if not review:
+        raise NotFoundError(f"Review '{review_id}' not found")
+    
+    await review_repo.update_status(
+        review_id=review_id,
+        status="REJECTED",
+        curator_id=current_user.id,
+        feedback=action_data.feedback
+    )
+    await db.commit()
+    
+    return {
+        "review_id": review_id,
+        "status": "REJECTED",
+        "curator_id": current_user.id,
+        "message": "Review rejected successfully"
+    }
