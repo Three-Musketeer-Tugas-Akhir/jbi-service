@@ -40,6 +40,7 @@ class ASRResult:
     confidence: float
     review_flag: bool
     utterances: List[ASRUtterance]  # Individual utterances
+    audio_path: Optional[Path] = None  # Local path to extracted WAV (before cleanup)
 
 
 @dataclass
@@ -119,6 +120,7 @@ async def _process_single_segment(
     segment_index = segment_input.segment_index
     temp_files = []
     
+    audio_path = None
     try:
         # 1. Get video (download if needed)
         if segment_input.is_local:
@@ -131,7 +133,6 @@ async def _process_single_segment(
         
         # 2. Extract audio
         audio_path = await extract_audio(str(video_path))
-        temp_files.append(Path(audio_path))
         
         # 3. Run transcription (with timeout)
         result = await asyncio.wait_for(
@@ -149,7 +150,8 @@ async def _process_single_segment(
                 end=0.0,
                 confidence=0.0,
                 review_flag=True,  # Flag for review
-                utterances=[]  # Empty utterances
+                utterances=[],  # Empty utterances
+                audio_path=Path(audio_path)
             )
         
         # 5. Check confidence
@@ -185,25 +187,36 @@ async def _process_single_segment(
             end=result.end,
             confidence=result.average_confidence,
             review_flag=review_flag,
-            utterances=utterances
+            utterances=utterances,
+            audio_path=Path(audio_path)
         )
         
     except asyncio.TimeoutError:
+        if audio_path:
+            _safe_unlink(Path(audio_path))
         logger.error(f"ASR timeout for segment {segment_index}")
         raise ProcessingError(f"ASR timeout for segment {segment_index}")
         
     except Exception as e:
+        if audio_path:
+            _safe_unlink(Path(audio_path))
         logger.error(f"ASR failed for segment {segment_index}: {e}")
         raise ProcessingError(f"ASR failed for segment {segment_index}: {e}")
         
     finally:
-        # Cleanup temp files
+        # Cleanup temp video files only
+        # Audio file is returned in result and cleaned up by caller
         for temp_file in temp_files:
             if temp_file and temp_file.exists():
-                try:
-                    temp_file.unlink()
-                except OSError as e:
-                    logger.warning(f"Failed to cleanup temp file {temp_file}: {e}")
+                _safe_unlink(temp_file)
+
+
+def _safe_unlink(path: Path) -> None:
+    """Safely delete a file, logging warnings on failure."""
+    try:
+        path.unlink()
+    except OSError as e:
+        logger.warning(f"Failed to cleanup temp file {path}: {e}")
 
 
 async def _save_temp_video(video_data: bytes, segment_index: int) -> Path:

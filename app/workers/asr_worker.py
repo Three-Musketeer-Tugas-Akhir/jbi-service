@@ -16,6 +16,7 @@ from app.repositories.segment_repository import SegmentRepository
 from app.services.queue_service import queue_service
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus, PipelineTranscript
+from app.services.minio_service import get_minio_service
 from app.core.exceptions import ProcessingError
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,25 @@ class ASRWorker(BaseWorker):
                         # Update only the review flag in pipeline_segments
                         seg.asr_review_flag = result.review_flag
                         
+                        # Upload WAV audio to MinIO if available
+                        # One audio file per segment (contains all utterances)
+                        minio_service = get_minio_service()
+                        segment_audio_path = None
+                        if result.audio_path and result.audio_path.exists():
+                            try:
+                                wav_key = f"jobs/{job_id}/audio/{seg.id}.wav"
+                                with open(result.audio_path, "rb") as f:
+                                    wav_bytes = f.read()
+                                await minio_service.upload_file(
+                                    file_data=wav_bytes,
+                                    object_name=wav_key,
+                                    content_type="audio/wav"
+                                )
+                                segment_audio_path = wav_key
+                                logger.info("Uploaded WAV audio for segment %s", seg.id)
+                            except Exception as e:
+                                logger.warning("Failed to upload WAV audio for segment %s: %s", seg.id, e)
+                        
                         # Store individual utterances in pipeline_transcripts
                         for utt in result.utterances:
                             transcript = PipelineTranscript(
@@ -118,7 +138,8 @@ class ASRWorker(BaseWorker):
                                 text=utt.text,
                                 start=utt.start,
                                 end=utt.end,
-                                confidence=utt.confidence
+                                confidence=utt.confidence,
+                                audio_path=segment_audio_path
                             )
                             session.add(transcript)
                         
@@ -130,6 +151,14 @@ class ASRWorker(BaseWorker):
                         break
             
             await session.commit()
+        
+        # Cleanup temp audio files
+        for result in results:
+            if result.audio_path and result.audio_path.exists():
+                try:
+                    result.audio_path.unlink()
+                except OSError as e:
+                    logger.warning("Failed to cleanup temp audio file %s: %s", result.audio_path, e)
         
         # Populate ASR Review queue if enabled
         await self._populate_asr_review_queue(job_id, results)

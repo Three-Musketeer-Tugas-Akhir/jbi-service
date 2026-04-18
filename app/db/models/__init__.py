@@ -30,6 +30,9 @@ from app.db.models.chat import (
     ChatParticipant,
     ChatMessage,
 )
+from app.db.models.notification import (
+    Notification,
+)
 
 __all__ = [
     "User",
@@ -57,4 +60,5 @@ __all__ = [
     "ChatRoom",
     "ChatParticipant",
     "ChatMessage",
+    "Notification",
 ]

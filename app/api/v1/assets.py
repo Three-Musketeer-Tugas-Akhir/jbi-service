@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["assets"])
 
 # Allowed file extensions for security
-ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.webm', '.json', '.txt'}
+ALLOWED_EXTENSIONS = {'.mp4', '.avi', '.mkv', '.mov', '.webm', '.json', '.txt', '.wav'}
 
 # Path pattern: jobs/{uuid}/...
 JOB_PATH_PATTERN = re.compile(

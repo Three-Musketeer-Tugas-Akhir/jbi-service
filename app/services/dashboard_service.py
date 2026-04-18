@@ -121,7 +121,7 @@ class DashboardService:
                     and_(
                         PipelineJob.category == "SIBI",
                         PipelineJob.curation_status.in_(
-                            ["READY_TO_EXPORT", "NORMALIZED"]
+                            ["READY_TO_EXPORT", "NORMALIZED", "READY_TO_BE_NORMALIZED"]
                         ),
                     )
                 )
@@ -259,7 +259,9 @@ class DashboardService:
                 select(func.count(PipelineJob.id)).where(
                     and_(
                         PipelineJob.category == "SIBI",
-                        PipelineJob.curation_status == "READY_TO_EXPORT",
+                        PipelineJob.curation_status.in_(
+                            ["READY_TO_EXPORT", "NORMALIZED", "READY_TO_BE_NORMALIZED"]
+                        ),
                     )
                 )
             )

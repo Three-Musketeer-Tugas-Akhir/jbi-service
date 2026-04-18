@@ -32,6 +32,7 @@ from app.schemas.annotation import (
 from app.services.annotation_submission_service import AnnotationSubmissionService
 from app.repositories.annotation_review_repository import AnnotationReviewRepository
 from app.repositories.job_repository import JobRepository
+from app.services.notification_service import NotificationService
 from app.core.exceptions import NotFoundError
 
 
@@ -440,7 +441,16 @@ async def approve_annotation_review(
     if job_id:
         has_pending = await review_repo.has_pending_reviews_for_job(job_id)
         if not has_pending:
-            await job_repo.update_curation_status(job_id, "ANNOTATED")
+            await job_repo.update_curation_status(job_id, "READY_TO_BE_NORMALIZED")
+            # Notify job creator that annotations are ready
+            job = await job_repo.get_by_id(job_id)
+            if job and job.created_by:
+                notif_service = NotificationService(db)
+                await notif_service.notify_annotation_ready(
+                    user_id=job.created_by,
+                    job_id=job_id,
+                    job_name=job.original_filename
+                )
     
     await db.commit()
     

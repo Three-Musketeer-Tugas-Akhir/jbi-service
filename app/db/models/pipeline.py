@@ -79,7 +79,7 @@ class PipelineJob(Base):
         String(50),
         nullable=True,
         index=True,
-        comment="Curation workflow status: PENDING, ANNOTATED, NORMALIZING, NORMALIZED, READY_TO_EXPORT"
+        comment="Curation workflow status: PENDING, ANNOTATED, READY_TO_BE_NORMALIZED, NORMALIZING, NORMALIZED, READY_TO_EXPORT"
     )
     
     # Cancellation fields (Story 2.9)
@@ -335,6 +335,11 @@ class PipelineTranscript(Base):
         String(500),
         nullable=True,
         comment="MinIO key to cropped video for this utterance"
+    )
+    audio_path: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="MinIO key to WAV audio for this utterance"
     )
     status: Mapped[Optional[str]] = mapped_column(
         String(50),

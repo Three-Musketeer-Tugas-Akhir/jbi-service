@@ -40,3 +40,9 @@ class CurationApproveRequest(BaseModel):
     """Request body for /curation/approve endpoint."""
 
     video_id: UUID = Field(..., description="Pipeline job ID to approve for export")
+
+
+class CurationStatusUpdateRequest(BaseModel):
+    """Request body for updating curation status to NORMALIZED."""
+
+    video_id: UUID = Field(..., description="Pipeline job ID to mark as normalized")

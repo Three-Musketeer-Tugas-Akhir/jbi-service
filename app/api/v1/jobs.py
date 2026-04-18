@@ -2,6 +2,8 @@ import uuid
 import logging
 from pathlib import Path
 from typing import Optional, Annotated
+import io
+import zipfile
 
 import asyncio
 from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException, Query, Depends, status
@@ -26,7 +28,8 @@ from app.schemas import (
     CategoryUpdateResponse,
     SignLanguageCategory,
 )
-from app.db.models.pipeline import JobStatus
+from app.db.models.pipeline import JobStatus, PipelineSegment, PipelineTranscript
+from app.db.models.annotation import AnnotationEdit
 from app.repositories.job_repository import JobRepository, get_job_repository
 from app.pipeline.utils.result_serializer import deserialize_pipeline_result
 from app.services.validator import (
@@ -1609,6 +1612,251 @@ async def get_stage3_results(
                 "error": {
                     "code": "INTERNAL_ERROR",
                     "message": f"Failed to get stage 3 results: {str(e)}"
+                }
+            }
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DATASET DOWNLOAD API
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/pipeline/jobs/{job_id}/dataset/download",
+    summary="Download dataset as ZIP",
+    tags=["Pipeline Jobs"],
+    responses={
+        200: {"content": {"application/zip": {}}, "description": "Dataset ZIP file"},
+        404: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+    },
+)
+async def download_dataset_zip(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository),
+):
+    """
+    Download the complete dataset for a job as a ZIP file.
+
+    Includes:
+    - Original video
+    - Segment videos (stage 1)
+    - Utterance videos (stage 3)
+    - Audio WAV files
+    - ASR transcripts (JSON)
+    - Annotated transcripts (JSON)
+    - Normalized transcripts (JSON, if available)
+
+    Only available when job curation_status is READY_TO_BE_NORMALIZED or NORMALIZED.
+    """
+    try:
+        try:
+            job_uuid = uuid.UUID(job_id)
+        except ValueError:
+            raise NotFoundError(f"Job {job_id} not found")
+
+        job = await job_repo.get_by_id(job_uuid)
+        if not job:
+            raise NotFoundError(f"Job {job_id} not found")
+
+        # Authorization check
+        if not current_user.is_admin and str(job.created_by) != str(current_user.id):
+            raise PermissionError("Not authorized to access this job")
+
+        # Check curation status
+        allowed_statuses = {"READY_TO_BE_NORMALIZED", "NORMALIZED"}
+        if job.curation_status not in allowed_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": {
+                        "code": "BAD_REQUEST",
+                        "message": (
+                            f"Dataset download is only available when curation_status "
+                            f"is one of: {allowed_statuses}. Current status: {job.curation_status}"
+                        )
+                    }
+                }
+            )
+
+        # Get segments with transcripts and annotation edits
+        from sqlalchemy.orm import selectinload
+        from sqlalchemy import select
+
+        result = await db.execute(
+            select(PipelineSegment)
+            .where(PipelineSegment.job_id == job_uuid)
+            .options(
+                selectinload(PipelineSegment.transcripts),
+                selectinload(PipelineSegment.annotation_edits)
+            )
+            .order_by(PipelineSegment.segment_index)
+        )
+        segments = result.scalars().all()
+
+        minio_service = get_minio_service()
+
+        # Prepare ZIP in memory
+        zip_buffer = io.BytesIO()
+
+        # Track transcript data for JSON files
+        asr_transcripts = []
+        annotated_transcripts = []
+        normalized_transcripts = []
+
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            # 1. Original video
+            if job.video_path:
+                try:
+                    video_data = await minio_service.download_file(job.video_path)
+                    original_name = job.original_filename or "original_video.mp4"
+                    zf.writestr(f"original/{original_name}", video_data)
+                except Exception as e:
+                    logger.warning("Failed to add original video to ZIP: %s", e)
+
+            for segment in segments:
+                seg_idx = segment.segment_index
+
+                # 2. Segment videos (stage 1)
+                if segment.cropped_video_path:
+                    try:
+                        seg_data = await minio_service.download_file(segment.cropped_video_path)
+                        zf.writestr(f"segments/segment_{seg_idx:04d}.mp4", seg_data)
+                    except Exception as e:
+                        logger.warning("Failed to add segment %s to ZIP: %s", seg_idx, e)
+
+                # Get latest submitted annotation edit for this segment
+                latest_edit = None
+                for edit in segment.annotation_edits:
+                    if edit.status == AnnotationEdit.STATUS_SUBMITTED:
+                        latest_edit = edit
+                        break
+
+                for transcript in segment.transcripts:
+                    utt_idx = transcript.utterance_index
+
+                    # 3. Utterance videos (stage 3)
+                    if transcript.video_path:
+                        try:
+                            utt_data = await minio_service.download_file(transcript.video_path)
+                            zf.writestr(
+                                f"utterances/{segment.id}_utt_{utt_idx}.mp4",
+                                utt_data
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to add utterance video to ZIP: segment=%s utt=%s error=%s",
+                                segment.id, utt_idx, e
+                            )
+
+                    # 4. Audio WAV files
+                    if transcript.audio_path:
+                        try:
+                            audio_data = await minio_service.download_file(transcript.audio_path)
+                            zf.writestr(
+                                f"audio/{segment.id}.wav",
+                                audio_data
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to add audio to ZIP: segment=%s error=%s",
+                                segment.id, e
+                            )
+
+                    # Collect transcript data
+                    asr_transcripts.append({
+                        "segment_index": seg_idx,
+                        "utterance_index": utt_idx,
+                        "text": transcript.text,
+                        "start": transcript.start,
+                        "end": transcript.end,
+                        "confidence": transcript.confidence,
+                    })
+
+                    if latest_edit:
+                        annotated_transcripts.append({
+                            "segment_index": seg_idx,
+                            "utterance_index": utt_idx,
+                            "text": latest_edit.new_text,
+                            "start": latest_edit.new_start,
+                            "end": latest_edit.new_end,
+                        })
+
+                        if latest_edit.normalized_text:
+                            normalized_transcripts.append({
+                                "segment_index": seg_idx,
+                                "utterance_index": utt_idx,
+                                "text": latest_edit.normalized_text,
+                                "start": latest_edit.new_start,
+                                "end": latest_edit.new_end,
+                            })
+
+            # 5. Transcript JSON files
+            import json
+
+            zf.writestr(
+                "transcripts/asr.json",
+                json.dumps(asr_transcripts, indent=2, ensure_ascii=False).encode("utf-8")
+            )
+
+            if annotated_transcripts:
+                zf.writestr(
+                    "transcripts/annotated.json",
+                    json.dumps(annotated_transcripts, indent=2, ensure_ascii=False).encode("utf-8")
+                )
+
+            if normalized_transcripts:
+                zf.writestr(
+                    "transcripts/normalized.json",
+                    json.dumps(normalized_transcripts, indent=2, ensure_ascii=False).encode("utf-8")
+                )
+
+        # Prepare response
+        zip_buffer.seek(0)
+        safe_name = (job.original_filename or "dataset").rsplit(".", 1)[0]
+        zip_filename = f"{safe_name}_dataset.zip"
+
+        return StreamingResponse(
+            iter([zip_buffer.read()]),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{zip_filename}"'
+            }
+        )
+
+    except NotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": str(e)
+                }
+            }
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": str(e)
+                }
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to generate dataset ZIP for job %s", job_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Failed to generate dataset ZIP: {str(e)}"
                 }
             }
         )
