@@ -173,6 +173,63 @@ class PipelineSegment(Base):
         order_by="PipelineTranscript.utterance_index"
     )
     
+    # Backward-compatible properties for migrated ASR fields
+    # ASR data moved to pipeline_transcripts (utterance-level) in migration 011
+    @property
+    def asr_text(self) -> Optional[str]:
+        """Concatenated ASR text from all transcripts."""
+        from sqlalchemy.orm import inspect
+        state = inspect(self)
+        if 'transcripts' in state.unloaded:
+            return None
+        if self.transcripts:
+            sorted_transcripts = sorted(self.transcripts, key=lambda x: x.utterance_index)
+            return " ".join(t.text for t in sorted_transcripts)
+        return None
+
+    @property
+    def asr_start(self) -> Optional[float]:
+        """ASR start time (minimum of all transcript starts)."""
+        from sqlalchemy.orm import inspect
+        state = inspect(self)
+        if 'transcripts' in state.unloaded:
+            return None
+        if self.transcripts:
+            return min(t.start for t in self.transcripts)
+        return None
+
+    @property
+    def asr_end(self) -> Optional[float]:
+        """ASR end time (maximum of all transcript ends)."""
+        from sqlalchemy.orm import inspect
+        state = inspect(self)
+        if 'transcripts' in state.unloaded:
+            return None
+        if self.transcripts:
+            return max(t.end for t in self.transcripts)
+        return None
+
+    @property
+    def jbi_start(self) -> Optional[float]:
+        """Backward-compatible JBI start (alias for ASR start)."""
+        return self.asr_start
+
+    @property
+    def jbi_end(self) -> Optional[float]:
+        """Backward-compatible JBI end (alias for ASR end)."""
+        return self.asr_end
+
+    @property
+    def asr_confidence(self) -> Optional[float]:
+        """Average ASR confidence across all transcripts."""
+        from sqlalchemy.orm import inspect
+        state = inspect(self)
+        if 'transcripts' in state.unloaded:
+            return None
+        if self.transcripts:
+            return sum(t.confidence for t in self.transcripts) / len(self.transcripts)
+        return None
+
     def __repr__(self) -> str:
         return f"<PipelineSegment(id={self.id}, job_id={self.job_id}, index={self.segment_index})>"
 

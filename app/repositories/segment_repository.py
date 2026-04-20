@@ -23,18 +23,21 @@ class SegmentRepository:
         await self.db.flush()
     
     async def get_by_job_id(self, job_id: UUID) -> List[PipelineSegment]:
-        """Get all segments for a job."""
+        """Get all segments for a job with transcripts eagerly loaded."""
         result = await self.db.execute(
             select(PipelineSegment)
+            .options(selectinload(PipelineSegment.transcripts))
             .where(PipelineSegment.job_id == job_id)
             .order_by(PipelineSegment.segment_index)
         )
         return result.scalars().all()
     
     async def get_by_id(self, segment_id: UUID) -> Optional[PipelineSegment]:
-        """Get segment by ID."""
+        """Get segment by ID with transcripts eagerly loaded."""
         result = await self.db.execute(
-            select(PipelineSegment).where(PipelineSegment.id == segment_id)
+            select(PipelineSegment)
+            .options(selectinload(PipelineSegment.transcripts))
+            .where(PipelineSegment.id == segment_id)
         )
         return result.scalar_one_or_none()
     

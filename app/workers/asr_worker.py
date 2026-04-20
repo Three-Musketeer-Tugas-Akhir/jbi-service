@@ -171,7 +171,7 @@ class ASRWorker(BaseWorker):
     async def _populate_asr_review_queue(
         self,
         job_id: UUID,
-        segments: list
+        asr_results: list
     ) -> None:
         """
         Populate ASR Review queue if enabled for this job.
@@ -182,6 +182,7 @@ class ASRWorker(BaseWorker):
         from app.db.models.pipeline import PipelineSegment
         from app.db.models.annotation import ASRReview
         from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
         
         async with async_session() as session:
             # Check if ASR Review is enabled via config
@@ -196,21 +197,30 @@ class ASRWorker(BaseWorker):
                 logger.info(f"ASR Review disabled for job {job_id}")
                 return
             
-            # Get segments for this job
-            segment_query = select(PipelineSegment).where(
-                PipelineSegment.job_id == job_id
+            # Get segments for this job with transcripts loaded
+            segment_query = (
+                select(PipelineSegment)
+                .options(selectinload(PipelineSegment.transcripts))
+                .where(PipelineSegment.job_id == job_id)
             )
             result = await session.execute(segment_query)
             db_segments = result.scalars().all()
             
-            # Create ASR review records for each segment
+            # Create ASR review records for each segment using ASR results
             for segment in db_segments:
+                # Find matching ASR result by segment_index
+                asr_result = None
+                for r in asr_results:
+                    if r.segment_index == segment.segment_index:
+                        asr_result = r
+                        break
+                
                 review_record = ASRReview(
                     segment_id=segment.id,
                     reviewer_id=None,  # Unassigned
-                    original_text=segment.asr_text or "",
+                    original_text=asr_result.text if asr_result else (segment.asr_text or ""),
                     corrected_text=None,
-                    confidence_score=segment.asr_confidence,
+                    confidence_score=asr_result.confidence if asr_result else segment.asr_confidence,
                     status=ASRReview.STATUS_PENDING,
                     flag_reason=None,
                     reviewed_at=None

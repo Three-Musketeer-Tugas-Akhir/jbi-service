@@ -290,10 +290,30 @@ class ASRReviewService:
             reviewer_id=reviewer_id
         )
         
-        # Update segment's ASR text to corrected version
+        # Update segment transcripts with corrected text
+        from app.db.models.pipeline import PipelineTranscript
         segment = await self.segment_repo.get_by_id(review.segment_id)
         if segment:
-            segment.asr_text = corrected_text
+            if segment.transcripts:
+                # Preserve time bounds from existing transcripts
+                old_transcripts = list(segment.transcripts)
+                old_start = min(t.start for t in old_transcripts) if old_transcripts else 0.0
+                old_end = max(t.end for t in old_transcripts) if old_transcripts else 0.0
+                # Clear existing transcripts (cascade delete)
+                segment.transcripts.clear()
+            else:
+                old_start, old_end = 0.0, 0.0
+            
+            # Create single corrected transcript
+            new_transcript = PipelineTranscript(
+                segment_id=segment.id,
+                utterance_index=0,
+                text=corrected_text,
+                start=old_start,
+                end=old_end,
+                confidence=1.0
+            )
+            self.db.add(new_transcript)
             await self.db.flush()
         
         # Log ASR review correction
@@ -478,19 +498,17 @@ class ASRReviewService:
         """
         Get ASR confidence statistics for admin dashboard.
         
-        Returns average, min, max confidence across all segments.
+        Returns average, min, max confidence across all transcripts.
         """
         from sqlalchemy import func
-        from app.db.models.pipeline import PipelineSegment
+        from app.db.models.pipeline import PipelineTranscript
         
         result = await self.db.execute(
             select(
-                func.avg(PipelineSegment.asr_confidence).label("avg"),
-                func.min(PipelineSegment.asr_confidence).label("min"),
-                func.max(PipelineSegment.asr_confidence).label("max"),
-                func.count(PipelineSegment.id).label("count")
-            ).where(
-                PipelineSegment.asr_confidence.isnot(None)
+                func.avg(PipelineTranscript.confidence).label("avg"),
+                func.min(PipelineTranscript.confidence).label("min"),
+                func.max(PipelineTranscript.confidence).label("max"),
+                func.count(PipelineTranscript.id).label("count")
             )
         )
         
@@ -500,22 +518,20 @@ class ASRReviewService:
             "average_confidence": round(row.avg, 4) if row.avg else None,
             "min_confidence": round(row.min, 4) if row.min else None,
             "max_confidence": round(row.max, 4) if row.max else None,
-            "total_segments": row.count,
+            "total_transcripts": row.count,
             "confidence_distribution": await self._get_confidence_distribution()
         }
     
     async def _get_confidence_distribution(self) -> dict:
         """Get distribution of confidence scores."""
         from sqlalchemy import func, case
-        from app.db.models.pipeline import PipelineSegment
+        from app.db.models.pipeline import PipelineTranscript
         
         result = await self.db.execute(
             select(
-                func.sum(case((PipelineSegment.asr_confidence < 0.5, 1), else_=0)).label("low"),
-                func.sum(case((PipelineSegment.asr_confidence.between(0.5, 0.8), 1), else_=0)).label("medium"),
-                func.sum(case((PipelineSegment.asr_confidence > 0.8, 1), else_=0)).label("high")
-            ).where(
-                PipelineSegment.asr_confidence.isnot(None)
+                func.sum(case((PipelineTranscript.confidence < 0.5, 1), else_=0)).label("low"),
+                func.sum(case((PipelineTranscript.confidence.between(0.5, 0.8), 1), else_=0)).label("medium"),
+                func.sum(case((PipelineTranscript.confidence > 0.8, 1), else_=0)).label("high")
             )
         )
         
