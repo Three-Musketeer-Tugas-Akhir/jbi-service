@@ -206,6 +206,15 @@ class JobRepository:
             return False
         return job.is_cancelled
     
+    async def list_all(self) -> List[PipelineJob]:
+        """List all jobs without filtering.
+        
+        Returns:
+            List of all PipelineJob instances
+        """
+        result = await self.db.execute(select(PipelineJob))
+        return list(result.scalars().all())
+    
     async def list_filtered(
         self,
         status: Optional[str] = None,

@@ -178,7 +178,7 @@ class PipelineSegment(Base):
     @property
     def asr_text(self) -> Optional[str]:
         """Concatenated ASR text from all transcripts."""
-        from sqlalchemy.orm import inspect
+        from sqlalchemy import inspect
         state = inspect(self)
         if 'transcripts' in state.unloaded:
             return None
@@ -190,7 +190,7 @@ class PipelineSegment(Base):
     @property
     def asr_start(self) -> Optional[float]:
         """ASR start time (minimum of all transcript starts)."""
-        from sqlalchemy.orm import inspect
+        from sqlalchemy import inspect
         state = inspect(self)
         if 'transcripts' in state.unloaded:
             return None
@@ -201,7 +201,7 @@ class PipelineSegment(Base):
     @property
     def asr_end(self) -> Optional[float]:
         """ASR end time (maximum of all transcript ends)."""
-        from sqlalchemy.orm import inspect
+        from sqlalchemy import inspect
         state = inspect(self)
         if 'transcripts' in state.unloaded:
             return None
@@ -222,7 +222,7 @@ class PipelineSegment(Base):
     @property
     def asr_confidence(self) -> Optional[float]:
         """Average ASR confidence across all transcripts."""
-        from sqlalchemy.orm import inspect
+        from sqlalchemy import inspect
         state = inspect(self)
         if 'transcripts' in state.unloaded:
             return None
