@@ -1,9 +1,33 @@
 """Annotation domain Pydantic schemas."""
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
+
+from app.schemas.segment import TranscriptUtterance
+
+
+# ============================================================================
+# Queue Item Schemas
+# ============================================================================
+
+# ============================================================================
+# Utterance-Level Schemas (NEW)
+# ============================================================================
+
+class UtteranceCorrection(BaseModel):
+    """Annotator correction for a single utterance."""
+    utterance_index: int = Field(..., ge=0)
+    text: str = Field(..., min_length=1)
+    start: float = Field(..., ge=0)
+    end: float = Field(..., gt=0)
+    
+    @model_validator(mode='after')
+    def validate_timestamps(self):
+        if self.start >= self.end:
+            raise ValueError("Start must be less than end")
+        return self
 
 
 # ============================================================================
@@ -26,6 +50,7 @@ class QueueItemResponse(QueueItemBase):
     original_filename: str
     video_preview_url: str
     transcript_text: Optional[str] = None
+    utterance_count: int = Field(0, description="Number of ASR utterances in this segment")
     asr_confidence: Optional[float] = None
     
     # Active edit information (Option B: latest DRAFT/PENDING/SUBMITTED)
@@ -74,17 +99,28 @@ class SegmentDetailResponse(BaseModel):
     video_url: str
     video_duration: Optional[float] = None
     
-    # ASR Data
-    asr_text: Optional[str]
-    asr_start: Optional[float]
-    asr_end: Optional[float]
-    asr_confidence: Optional[float]
+    # ASR Data — now full list of utterances
+    transcripts: List[TranscriptUtterance] = Field(
+        default_factory=list,
+        description="All ASR utterances for this segment"
+    )
+    avg_confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     
-    # JBI Timestamps (final)
-    jbi_start: Optional[float]
-    jbi_end: Optional[float]
+    # Current Edit State (if any edit exists)
+    current_utterances: Optional[List[UtteranceCorrection]] = Field(
+        None,
+        description="Annotator's corrected utterances (if any edit exists)"
+    )
     
-    # Current State
+    # Backward-compatible aggregated fields (deprecated but kept for compat)
+    asr_text: Optional[str] = Field(None, deprecated=True)
+    asr_start: Optional[float] = Field(None, deprecated=True)
+    asr_end: Optional[float] = Field(None, deprecated=True)
+    asr_confidence: Optional[float] = Field(None, deprecated=True)
+    jbi_start: Optional[float] = Field(None, deprecated=True)
+    jbi_end: Optional[float] = Field(None, deprecated=True)
+    
+    # Current State (aggregated from current_utterances or ASR)
     current_text: str
     current_start: float
     current_end: float
@@ -116,17 +152,12 @@ class QueueFilterParams(BaseModel):
 # ============================================================================
 
 class AnnotationEditCreate(BaseModel):
-    """Schema for creating a new annotation edit."""
-    new_text: str = Field(..., min_length=1, description="Corrected transcript text")
-    new_start: float = Field(..., ge=0, description="New start time in seconds")
-    new_end: float = Field(..., gt=0, description="New end time in seconds")
-    
-    @model_validator(mode='after')
-    def validate_timestamps(self):
-        """Validate that start < end."""
-        if self.new_start >= self.new_end:
-            raise ValueError("Start time must be less than end time")
-        return self
+    """Schema for creating a new annotation edit with utterance-level corrections."""
+    utterances: List[UtteranceCorrection] = Field(
+        ...,
+        min_length=1,
+        description="List of corrected utterances"
+    )
 
 
 class AnnotationEditResponse(BaseModel):
@@ -140,10 +171,16 @@ class AnnotationEditResponse(BaseModel):
     old_start: Optional[float]
     old_end: Optional[float]
     
-    # New values
+    # New values (aggregated)
     new_text: str
     new_start: float
     new_end: float
+    
+    # Per-utterance corrections
+    utterance_corrections: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="List of per-utterance corrections if available"
+    )
     
     # Metadata
     status: str
@@ -194,17 +231,12 @@ class AnnotationPreviewResponse(BaseModel):
 
 
 class SaveDraftRequest(BaseModel):
-    """Request to save annotation as draft."""
-    new_text: str = Field(..., min_length=1, description="Corrected transcript text")
-    new_start: float = Field(..., ge=0, description="New start time in seconds")
-    new_end: float = Field(..., gt=0, description="New end time in seconds")
-    
-    @model_validator(mode='after')
-    def validate_timestamps(self):
-        """Validate that start < end."""
-        if self.new_start >= self.new_end:
-            raise ValueError("Start time must be less than end time")
-        return self
+    """Request to save annotation as draft with utterance-level corrections."""
+    utterances: List[UtteranceCorrection] = Field(
+        ...,
+        min_length=1,
+        description="List of corrected utterances"
+    )
 
 
 class SaveDraftResponse(BaseModel):

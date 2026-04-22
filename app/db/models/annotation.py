@@ -4,10 +4,11 @@ This module defines the database models for the annotation workflow,
 including edits, reviews, comments, ASR validation, and queue management.
 """
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, List
+from typing import TYPE_CHECKING, Optional, List, Any, Dict
 from uuid import UUID
 
 from sqlalchemy import ForeignKey, String, Float, Text, Boolean, DateTime, Integer, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -48,6 +49,13 @@ class AnnotationEdit(Base):
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     edited_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    
+    # Per-utterance corrections (full utterance-level edit data)
+    utterance_corrections: Mapped[Optional[List[Dict[str, Any]]]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="List of corrected utterances: [{utterance_index, text, start, end}]"
+    )
     
     # Curation fields
     normalized_text: Mapped[Optional[str]] = mapped_column(

@@ -128,9 +128,7 @@ async def create_annotation_edit(
     edit = await service.create_edit(
         segment_id=segment_id,
         editor_id=current_user.id,
-        new_text=edit_data.new_text,
-        new_start=edit_data.new_start,
-        new_end=edit_data.new_end
+        utterances=edit_data.utterances,
     )
     return edit
 
@@ -221,9 +219,7 @@ async def save_annotation_draft(
     draft = await service.create_draft(
         segment_id=segment_id,
         editor_id=current_user.id,
-        new_text=draft_data.new_text,
-        new_start=draft_data.new_start,
-        new_end=draft_data.new_end
+        utterances=draft_data.utterances,
     )
     
     return {

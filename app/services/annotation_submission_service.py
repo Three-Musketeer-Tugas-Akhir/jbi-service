@@ -138,6 +138,15 @@ class AnnotationSubmissionService:
                 new_text=segment.asr_text or "",
                 new_start=segment.asr_start or 0.0,
                 new_end=segment.asr_end or 0.0,
+                utterance_corrections=[
+                    {
+                        "utterance_index": t.utterance_index,
+                        "text": t.text,
+                        "start": t.start,
+                        "end": t.end
+                    }
+                    for t in sorted(segment.transcripts, key=lambda x: x.utterance_index)
+                ] if segment.transcripts else [],
                 status=AnnotationEdit.STATUS_SUBMITTED,
                 is_deleted=False,
                 edited_at=datetime.utcnow(),

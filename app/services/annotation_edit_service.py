@@ -1,5 +1,5 @@
 """Annotation edit service."""
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Any, Dict
 from uuid import UUID
 from datetime import datetime
 
@@ -27,19 +27,21 @@ class AnnotationEditService:
         self,
         segment_id: UUID,
         editor_id: UUID,
-        new_text: str,
-        new_start: float,
-        new_end: float
+        utterances: List[Any],
+        new_text: Optional[str] = None,
+        new_start: Optional[float] = None,
+        new_end: Optional[float] = None
     ) -> AnnotationEdit:
         """
-        Create a new annotation edit for a segment.
+        Create a new annotation edit for a segment with utterance-level corrections.
         
         Args:
             segment_id: The segment being edited
             editor_id: The user making the edit
-            new_text: Corrected transcript text
-            new_start: New start timestamp
-            new_end: New end timestamp
+            utterances: List of corrected utterances (dicts or UtteranceCorrection objects)
+            new_text: Optional aggregated corrected transcript text (auto-computed if not provided)
+            new_start: Optional aggregated start timestamp (auto-computed if not provided)
+            new_end: Optional aggregated end timestamp (auto-computed if not provided)
             
         Returns:
             The created AnnotationEdit
@@ -66,22 +68,38 @@ class AnnotationEditService:
         if not segment:
             raise NotFoundError(f"Segment {segment_id} not found")
         
+        # Convert utterances to dicts and auto-compute aggregated values if needed
+        utterance_dicts = []
+        for u in utterances:
+            if hasattr(u, 'model_dump'):
+                utterance_dicts.append(u.model_dump())
+            elif hasattr(u, 'dict'):
+                utterance_dicts.append(u.dict())
+            else:
+                utterance_dicts.append(dict(u))
+        
+        # Auto-compute aggregated values from utterances if not provided
+        if not new_text and utterance_dicts:
+            sorted_u = sorted(utterance_dicts, key=lambda x: x['utterance_index'])
+            new_text = " ".join(u['text'] for u in sorted_u)
+            new_start = min(u['start'] for u in utterance_dicts)
+            new_end = max(u['end'] for u in utterance_dicts)
+        
         # Validate timestamps against video bounds
-        # Use JBI timestamps as bounds if available, otherwise use ASR
         min_time = 0.0
         max_time = segment.jbi_end if segment.jbi_end is not None else (segment.asr_end if segment.asr_end is not None else new_end)
         
-        if new_start < min_time:
+        if new_start is not None and new_start < min_time:
             raise ValidationError(
                 f"Start time ({new_start}) must be at least {min_time}"
             )
         
-        if new_end > max_time:
+        if new_end is not None and max_time is not None and new_end > max_time:
             raise ValidationError(
                 f"End time ({new_end}) must not exceed video duration ({max_time})"
             )
         
-        if new_start >= new_end:
+        if new_start is not None and new_end is not None and new_start >= new_end:
             raise ValidationError("Start time must be less than end time")
         
         # Determine old values (from ASR or previous edit)
@@ -94,9 +112,10 @@ class AnnotationEditService:
             old_text=old_text,
             old_start=old_start,
             old_end=old_end,
-            new_text=new_text,
-            new_start=new_start,
-            new_end=new_end,
+            new_text=new_text or "",
+            new_start=new_start or 0.0,
+            new_end=new_end or 0.0,
+            utterance_corrections=utterance_dicts,
             status=AnnotationEdit.STATUS_PENDING,
             is_deleted=False,
             edited_at=datetime.utcnow()
@@ -167,12 +186,13 @@ class AnnotationEditService:
         self,
         segment_id: UUID,
         editor_id: UUID,
-        new_text: str,
-        new_start: float,
-        new_end: float
+        utterances: List[Any],
+        new_text: Optional[str] = None,
+        new_start: Optional[float] = None,
+        new_end: Optional[float] = None
     ) -> AnnotationEdit:
         """
-        Save an annotation edit as draft.
+        Save an annotation edit as draft with utterance-level corrections.
         
         Draft edits:
         - Can be overwritten by subsequent drafts
@@ -191,14 +211,31 @@ class AnnotationEditService:
         if not segment:
             raise NotFoundError(f"Segment {segment_id} not found")
         
+        # Convert utterances to dicts and auto-compute aggregated values if needed
+        utterance_dicts = []
+        for u in utterances:
+            if hasattr(u, 'model_dump'):
+                utterance_dicts.append(u.model_dump())
+            elif hasattr(u, 'dict'):
+                utterance_dicts.append(u.dict())
+            else:
+                utterance_dicts.append(dict(u))
+        
+        # Auto-compute aggregated values from utterances if not provided
+        if not new_text and utterance_dicts:
+            sorted_u = sorted(utterance_dicts, key=lambda x: x['utterance_index'])
+            new_text = " ".join(u['text'] for u in sorted_u)
+            new_start = min(u['start'] for u in utterance_dicts)
+            new_end = max(u['end'] for u in utterance_dicts)
+        
         # Validate timestamps
         min_time = 0.0
         max_time = segment.jbi_end if segment.jbi_end is not None else (segment.asr_end if segment.asr_end is not None else new_end)
         
-        if new_start < min_time:
+        if new_start is not None and new_start < min_time:
             raise ValidationError(f"Start time ({new_start}) must be at least {min_time}")
         
-        if new_end > max_time:
+        if new_end is not None and max_time is not None and new_end > max_time:
             raise ValidationError(f"End time ({new_end}) must not exceed video duration ({max_time})")
         
         # Get current values (excluding previous drafts)
@@ -211,9 +248,10 @@ class AnnotationEditService:
             old_text=old_text,
             old_start=old_start,
             old_end=old_end,
-            new_text=new_text,
-            new_start=new_start,
-            new_end=new_end,
+            new_text=new_text or "",
+            new_start=new_start or 0.0,
+            new_end=new_end or 0.0,
+            utterance_corrections=utterance_dicts,
             status=AnnotationEdit.STATUS_DRAFT,
             is_deleted=False,
             edited_at=datetime.utcnow()
@@ -302,6 +340,7 @@ class AnnotationEditService:
             new_text=segment.asr_text or "",
             new_start=segment.asr_start or 0.0,
             new_end=segment.asr_end or 0.0,
+            utterance_corrections=None,  # Reset clears all utterance corrections
             status=AnnotationEdit.STATUS_PENDING,  # Reset is pending, not draft
             is_deleted=False,
             edited_at=datetime.utcnow()
@@ -383,6 +422,7 @@ class AnnotationEditService:
                 "text": latest_edit.new_text,
                 "start": latest_edit.new_start,
                 "end": latest_edit.new_end,
+                "utterances": latest_edit.utterance_corrections,
                 "edited_at": latest_edit.edited_at
             }
         
@@ -391,5 +431,14 @@ class AnnotationEditService:
             "source": "asr",
             "text": segment.asr_text or "",
             "start": segment.asr_start or 0.0,
-            "end": segment.asr_end or 0.0
+            "end": segment.asr_end or 0.0,
+            "utterances": [
+                {
+                    "utterance_index": t.utterance_index,
+                    "text": t.text,
+                    "start": t.start,
+                    "end": t.end
+                }
+                for t in sorted(segment.transcripts, key=lambda x: x.utterance_index)
+            ] if segment.transcripts else []
         }
