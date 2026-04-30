@@ -76,7 +76,7 @@ class UtteranceCroppingService:
                     return
                 
                 # Get a temporary presigned URL valid for 1 hour to feed into FFmpeg
-                master_url = await minio_service.get_presigned_url(master_video_key)
+                master_url = await minio_service.generate_presigned_url(master_video_key, expiry=3600)
                 
                 # 4. Crop using FFmpeg
                 # Save locally to /tmp first
@@ -102,9 +102,10 @@ class UtteranceCroppingService:
                     await db.commit()
                     return
                 
-                # 5. Upload to MinIO
+                # 5. Upload to MinIO (upload_file accepts a file path or bytes)
                 upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
-                await minio_service.upload_file(tmp_output, upload_key)
+                with open(tmp_output, "rb") as f:
+                    await minio_service.upload_file(f, upload_key)
                 
                 # Cleanup local file
                 if os.path.exists(tmp_output):
