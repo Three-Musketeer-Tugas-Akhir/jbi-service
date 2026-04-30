@@ -422,7 +422,14 @@ class AnnotationEditService:
                 "text": latest_edit.new_text,
                 "start": latest_edit.new_start,
                 "end": latest_edit.new_end,
-                "utterances": latest_edit.utterance_corrections,
+                "utterances": [
+                    {
+                        **u,
+                        "cropped_video_path": f"{settings.api_v1_prefix}/assets/{u['cropped_video_path']}?token={streaming_token_service.generate_token(user_id, u['cropped_video_path'])}"
+                        if u.get("cropped_video_path") else None
+                    }
+                    for u in latest_edit.utterance_corrections
+                ] if latest_edit.utterance_corrections else [],
                 "edited_at": latest_edit.edited_at
             }
         

@@ -130,15 +130,23 @@ class AnnotationQueueService:
         latest_edit = await self.edit_repo.get_latest_by_segment(segment.id)
         current_utterances = None
         if latest_edit and latest_edit.utterance_corrections:
-            current_utterances = [
-                {
+            current_utterances = []
+            for u in latest_edit.utterance_corrections:
+                cv_path = u.get("cropped_video_path")
+                cv_url = None
+                if cv_path:
+                    # Generate streaming URL for the utterance video
+                    token = streaming_token_service.generate_token(annotator_id, cv_path)
+                    cv_url = f"{settings.api_v1_prefix}/assets/{cv_path}?token={token}"
+                
+                current_utterances.append({
                     "utterance_index": u["utterance_index"],
                     "text": u["text"],
                     "start": u["start"],
-                    "end": u["end"]
-                }
-                for u in latest_edit.utterance_corrections
-            ]
+                    "end": u["end"],
+                    "cropped_video_path": cv_url,
+                    "status": u.get("status")
+                })
         
         return {
             "segment_id": segment.id,
