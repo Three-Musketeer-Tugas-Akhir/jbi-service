@@ -58,7 +58,13 @@ from app.schemas.job import (
     Stage3SegmentResponse,
     Stage3UtteranceResponse,
     Stage3Summary,
+    DatasetExplorerResponse,
+    DatasetExplorerSegment,
+    DatasetExplorerUtterance,
 )
+from app.repositories.segment_repository import SegmentRepository
+from app.repositories.annotation_edit_repository import AnnotationEditRepository
+from app.services.streaming_token_service import streaming_token_service
 
 # Terminal states
 TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
@@ -1618,8 +1624,101 @@ async def get_stage3_results(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 # DATASET DOWNLOAD API
 # ═══════════════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/pipeline/jobs/{job_id}/dataset/explorer",
+    response_model=DatasetExplorerResponse,
+    summary="Get hierarchical dataset for explorer UI",
+    tags=["Pipeline Jobs"],
+    responses={
+        404: {"model": ErrorResponse},
+    }
+)
+async def get_dataset_explorer(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository)
+):
+    """
+    Get the complete dataset hierarchy for the explorer UI.
+    Shows segments and their utterances with physical video crop URLs.
+    """
+    import uuid
+    job = await job_repo.get_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    segment_repo = SegmentRepository(db)
+    edit_repo = AnnotationEditRepository(db)
+
+    # Get all segments for job with their transcripts
+    segments = await segment_repo.get_by_job_id(uuid.UUID(job_id))
+    
+    explorer_segments = []
+    for segment in segments:
+        # Get original ASR transcripts
+        asr_transcripts = sorted(segment.transcripts, key=lambda t: t.utterance_index) if segment.transcripts else []
+        
+        # Get the latest active edit (to get glosa and cropped video)
+        latest_edit = await edit_repo.get_latest_by_segment(segment.id)
+        
+        utterances_map = {}
+        if latest_edit and latest_edit.utterance_corrections:
+            for u in latest_edit.utterance_corrections:
+                utterances_map[u["utterance_index"]] = u
+
+        explorer_utterances = []
+        is_segment_completed = True
+        
+        for asr_t in asr_transcripts:
+            u_data = utterances_map.get(asr_t.utterance_index, {})
+            status = u_data.get("status")
+            if status != "OK":
+                is_segment_completed = False
+                
+            cv_path = u_data.get("cropped_video_path")
+            cv_url = None
+            if cv_path:
+                token = streaming_token_service.generate_token(current_user.id, cv_path)
+                cv_url = f"{settings.api_v1_prefix}/assets/{cv_path}?token={token}"
+
+            explorer_utterances.append(DatasetExplorerUtterance(
+                utterance_index=asr_t.utterance_index,
+                status=status,
+                asr_text=asr_t.text,
+                glosa_text=u_data.get("text", ""),
+                cropped_video_url=cv_url,
+                start=u_data.get("start", asr_t.start),
+                end=u_data.get("end", asr_t.end)
+            ))
+
+        # Generate segment master video URL
+        seg_video_url = None
+        if segment.cropped_video_path:
+            token = streaming_token_service.generate_token(current_user.id, segment.cropped_video_path)
+            seg_video_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}?token={token}"
+
+        explorer_segments.append(DatasetExplorerSegment(
+            segment_id=str(segment.id),
+            segment_index=segment.segment_index,
+            video_url=seg_video_url,
+            is_completed=is_segment_completed if len(explorer_utterances) > 0 else False,
+            utterances=explorer_utterances
+        ))
+        
+    explorer_segments.sort(key=lambda s: s.segment_index)
+
+    return DatasetExplorerResponse(
+        job_id=job_id,
+        original_filename=job.original_filename,
+        segments=explorer_segments
+    )
+
+
 
 @router.get(
     "/pipeline/jobs/{job_id}/dataset/download",

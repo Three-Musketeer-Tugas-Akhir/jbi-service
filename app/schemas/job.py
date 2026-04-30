@@ -311,3 +311,29 @@ class Stage3ResultsResponse(BaseModel):
     id: str = Field(..., description="Job UUID")
     summary: Stage3Summary = Field(..., description="Summary of cropping status")
     results: List[Stage3SegmentResponse] = Field(..., description="List of segments with cropped utterances")
+
+
+# ============================================================================
+# Dataset Explorer Schemas
+# ============================================================================
+
+class DatasetExplorerUtterance(BaseModel):
+    utterance_index: int
+    status: Optional[str] = None
+    asr_text: str
+    glosa_text: str
+    cropped_video_url: Optional[str] = None
+    start: float
+    end: float
+
+class DatasetExplorerSegment(BaseModel):
+    segment_id: str
+    segment_index: int
+    video_url: Optional[str] = None
+    is_completed: bool
+    utterances: List[DatasetExplorerUtterance]
+
+class DatasetExplorerResponse(BaseModel):
+    job_id: str
+    original_filename: str
+    segments: List[DatasetExplorerSegment]
