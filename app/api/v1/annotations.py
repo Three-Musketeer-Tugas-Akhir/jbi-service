@@ -2,7 +2,7 @@
 from typing import Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, status, BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_role
@@ -195,6 +195,64 @@ async def preview_annotation(
     return preview
 
 
+@router.post("/{segment_id}/utterances/{utterance_index}/crop")
+async def crop_utterance_physically(
+    segment_id: UUID,
+    utterance_index: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "annotator"))
+):
+    """
+    Triggers physical FFmpeg cropping for a specific utterance that is marked as OK.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm.attributes import flag_modified
+    from app.db.models.annotation import AnnotationEdit
+    
+    result = await db.execute(
+        select(AnnotationEdit).where(
+            AnnotationEdit.segment_id == segment_id,
+            AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+            AnnotationEdit.is_deleted == False
+        ).order_by(AnnotationEdit.edited_at.desc())
+    )
+    edit = result.scalars().first()
+    
+    if not edit or not edit.utterance_corrections:
+        raise HTTPException(status_code=404, detail="Active edit not found")
+        
+    utt_list = list(edit.utterance_corrections)
+    utt_idx_in_array = None
+    target_utt = None
+    for i, utt in enumerate(utt_list):
+        if utt.get("utterance_index") == utterance_index:
+            utt_idx_in_array = i
+            target_utt = utt
+            break
+            
+    if target_utt is None:
+        raise HTTPException(status_code=404, detail="Utterance index not found in active edit")
+        
+    # Mark as 'OK' synchronously so frontend can lock it instantly
+    utt_list[utt_idx_in_array]["status"] = "OK"
+    edit.utterance_corrections = utt_list
+    flag_modified(edit, "utterance_corrections")
+    await db.commit()
+    
+    # Spawn background task
+    from app.services.utterance_cropping_service import UtteranceCroppingService
+    background_tasks.add_task(
+        UtteranceCroppingService.crop_and_upload,
+        segment_id=segment_id,
+        utterance_index=utterance_index,
+        start_time=target_utt["start"],
+        end_time=target_utt["end"]
+    )
+    
+    return {"status": "processing", "message": "Physical cropping started in background"}
+
+
 @router.post(
     "/{segment_id}/draft",
     response_model=SaveDraftResponse,
@@ -215,6 +273,29 @@ async def save_annotation_draft(
     - Can be overwritten by subsequent drafts
     - Allow saving work-in-progress
     """
+    from sqlalchemy import select
+    from app.db.models.annotation import AnnotationEdit
+    
+    result = await db.execute(
+        select(AnnotationEdit).where(
+            AnnotationEdit.segment_id == segment_id,
+            AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+            AnnotationEdit.is_deleted == False
+        ).order_by(AnnotationEdit.edited_at.desc())
+    )
+    existing_edit = result.scalars().first()
+    
+    if existing_edit and existing_edit.utterance_corrections:
+        existing_map = {u.get("utterance_index"): u for u in existing_edit.utterance_corrections}
+        for incoming_utt in draft_data.utterances:
+            ext_utt = existing_map.get(incoming_utt.utterance_index)
+            if ext_utt and ext_utt.get("status") == "OK":
+                if ext_utt.get("start") != incoming_utt.start or ext_utt.get("end") != incoming_utt.end:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Cannot modify utterance {incoming_utt.utterance_index} because it is already locked (OK)."
+                    )
+    
     service = AnnotationEditService(db)
     draft = await service.create_draft(
         segment_id=segment_id,

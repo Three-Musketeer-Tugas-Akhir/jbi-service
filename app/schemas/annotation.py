@@ -22,6 +22,8 @@ class UtteranceCorrection(BaseModel):
     text: str = Field(..., min_length=1)
     start: float = Field(..., ge=0)
     end: float = Field(..., gt=0)
+    cropped_video_path: Optional[str] = Field(None, description="Path to physically cropped video")
+    status: Optional[str] = Field(None, description="Status of the utterance (e.g. OK)")
     
     @model_validator(mode='after')
     def validate_timestamps(self):
