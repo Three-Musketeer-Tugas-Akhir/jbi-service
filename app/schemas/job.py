@@ -147,7 +147,9 @@ class JobStatusDetailResponse(BaseModel):
     Includes progress calculation from segment completion.
     """
     id: str = Field(..., description="Job UUID")
+    original_filename: Optional[str] = Field(None, description="Original video filename")
     status: str = Field(..., description="Current job status")
+    curation_status: Optional[str] = Field(None, description="Current curation status")
     current_stage: Optional[str] = Field(None, description="Current processing stage")
     category: Optional[str] = Field(None, description="Sign language category (SIBI/BISINDO)")
     progress: int = Field(..., ge=0, le=100, description="Completion percentage (0-100)")
@@ -162,7 +164,9 @@ class JobStatusDetailResponse(BaseModel):
 class JobListItemResponse(BaseModel):
     """Job item in paginated list response."""
     id: str = Field(..., description="Job UUID")
+    original_filename: Optional[str] = Field(None, description="Original video filename")
     status: str = Field(..., description="Current job status")
+    curation_status: Optional[str] = Field(None, description="Current curation status")
     current_stage: Optional[str] = Field(None, description="Current processing stage")
     category: Optional[str] = Field(None, description="Sign language category (SIBI/BISINDO)")
     progress: int = Field(..., ge=0, le=100, description="Completion percentage (0-100)")

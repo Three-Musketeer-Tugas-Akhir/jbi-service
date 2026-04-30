@@ -261,7 +261,9 @@ class JobService:
         
         response = {
             "id": str(job.id),
+            "original_filename": job.original_filename,
             "status": job.status,
+            "curation_status": job.curation_status,
             "current_stage": job.current_stage,
             "progress": progress,
             "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -359,7 +361,9 @@ class JobService:
             
             items.append({
                 "id": str(job.id),
+                "original_filename": job.original_filename,
                 "status": job.status,
+                "curation_status": job.curation_status,
                 "current_stage": job.current_stage,
                 "progress": progress,
                 "created_at": job.created_at.isoformat() if job.created_at else None,
