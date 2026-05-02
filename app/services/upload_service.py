@@ -39,7 +39,7 @@ class UploadService:
     DEFAULT_CHUNK_SIZE = 5 * 1024 * 1024  # 5MB
     MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
     TEMP_BUCKET = "temp-uploads"
-    FINAL_BUCKET = "raw-videos"
+    FINAL_BUCKET = settings.minio_bucket_name
     UPLOAD_EXPIRY_HOURS = 24
     
     def __init__(self, db: AsyncSession, minio_client: Optional[Minio] = None):
@@ -350,8 +350,19 @@ class UploadService:
             for i in range(upload.total_chunks)
         ]
         
-        # Generate final key
-        final_key = f"videos/{upload.user_id}/{upload.id}/{upload.filename}"
+        # Generate final key using job_id pattern for assets.py router compatibility
+        if not upload.job_id:
+            upload.job_id = uuid4()
+            
+        # Basic sanitization for filename
+        import os
+        import re
+        basename = os.path.basename(upload.filename)
+        safe_filename = re.sub(r'[^\w\s\-\.]', '_', basename)
+        if not safe_filename:
+            safe_filename = "video.mp4"
+            
+        final_key = f"jobs/{upload.job_id}/original/{safe_filename}"
         
         try:
             # Compose chunks into final file

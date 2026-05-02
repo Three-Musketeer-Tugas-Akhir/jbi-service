@@ -326,7 +326,7 @@ async def _upload_to_storage_and_create_job(
             if not user:
                 raise ValueError(f"User {user_id} not found")
 
-            # Upload file to MinIO directly
+            # Upload file to MinIO directly using standard bucket
             minio_client = Minio(
                 settings.minio_endpoint,
                 access_key=settings.minio_access_key,
@@ -335,12 +335,15 @@ async def _upload_to_storage_and_create_job(
                 region=settings.minio_region,
             )
 
-            bucket = "raw-videos"
+            bucket = settings.minio_bucket_name
             if not minio_client.bucket_exists(bucket):
                 minio_client.make_bucket(bucket)
 
-            # Upload to MinIO with progress
-            minio_key = f"videos/{user_id}/{download_id}/{filename}"
+            # Generate Job ID upfront for path construction
+            job_id = uuid4()
+
+            # Upload to MinIO with standard job path
+            minio_key = f"jobs/{job_id}/original/{filename}"
 
             with open(file_path, "rb") as f:
                 minio_client.put_object(
@@ -370,6 +373,7 @@ async def _upload_to_storage_and_create_job(
                 final_key=minio_key,
                 category=category,
                 user_id=user_id,
+                job_id=job_id,  # Set the pre-generated job_id
                 completed_at=datetime.utcnow(),
                 expires_at=datetime.utcnow() + timedelta(hours=24),
             )
@@ -381,7 +385,7 @@ async def _upload_to_storage_and_create_job(
             _set_progress(progress)
 
             pipeline_service = PipelineJobService(db)
-            job = await pipeline_service.create_pipeline_job(upload_record, user)
+            job = await pipeline_service.create_pipeline_job(upload_record, user, job_id=job_id)
 
             await db.commit()
 

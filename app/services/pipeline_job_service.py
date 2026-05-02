@@ -46,7 +46,7 @@ class PipelineJobService:
         self.db = db
         self.minio = MinIOService()
     
-    async def create_pipeline_job(self, upload: Upload, user: User) -> PipelineJob:
+    async def create_pipeline_job(self, upload: Upload, user: User, job_id: Optional[UUID] = None) -> PipelineJob:
         """
         Create a pipeline job record WITHOUT starting processing.
         
@@ -58,6 +58,7 @@ class PipelineJobService:
         Args:
             upload: Completed upload record
             user: Uploading user
+            job_id: Optional pre-generated job ID
             
         Returns:
             Created PipelineJob (status=UPLOADED, no queue jobs)
@@ -67,10 +68,13 @@ class PipelineJobService:
             f"{upload.filename} ({upload.file_size} bytes)"
         )
         
+        # Use provided job_id, upload's job_id, or generate new
+        target_job_id = job_id or upload.job_id or uuid4()
+        
         # 1. Create main PipelineJob record (NO queue jobs)
         job = PipelineJob(
-            id=uuid4(),
-            video_path=f"{upload.final_bucket}/{upload.final_key}",
+            id=target_job_id,
+            video_path=upload.final_key,  # Just the key, bucket is implicit based on settings
             original_filename=upload.filename,
             status=JobStatus.UPLOADED,  # Stays UPLOADED until user triggers processing
             current_stage=None,
