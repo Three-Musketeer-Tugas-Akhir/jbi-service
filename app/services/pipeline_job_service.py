@@ -200,6 +200,7 @@ class PipelineJobService:
             attempts=0,
             max_attempts=3,
             created_at=datetime.utcnow(),
+            scheduled_at=datetime.utcnow(),
         )
         self.db.add(detection_job)
         queue_jobs.append(detection_job)
@@ -226,6 +227,7 @@ class PipelineJobService:
             attempts=0,
             max_attempts=3,
             created_at=datetime.utcnow(),
+            scheduled_at=datetime.utcnow(),
         )
         self.db.add(asr_job)
         queue_jobs.append(asr_job)
@@ -252,6 +254,7 @@ class PipelineJobService:
             attempts=0,
             max_attempts=3,
             created_at=datetime.utcnow(),
+            scheduled_at=datetime.utcnow(),
         )
         self.db.add(cropping_job)
         queue_jobs.append(cropping_job)
