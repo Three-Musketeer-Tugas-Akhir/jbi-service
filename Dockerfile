@@ -38,8 +38,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy application code and entry point
+# Copy application code and entry points
 COPY app/ ./app/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
 COPY scripts/ ./scripts/
 COPY run.py .
 

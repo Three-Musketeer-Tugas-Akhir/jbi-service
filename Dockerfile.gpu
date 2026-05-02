@@ -64,6 +64,8 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 # Copy application code and entry points
 COPY app/ ./app/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
 COPY scripts/ ./scripts/
 COPY run.py .
 COPY run_detection_worker.py .
