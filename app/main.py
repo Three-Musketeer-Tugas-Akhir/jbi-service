@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.core.swagger_config import TAGS_METADATA, SECURITY_SCHEMES, SWAGGER_UI_CONFIG, REDOC_CONFIG
 from app.db.session import engine
 from app.db.base import Base
-from app.api.v1 import admin, admin_audit, admin_annotations, annotations, annotation_sync, asr_review, assets, auth, chat, chat_ws, curation, dashboard, health, jobs, notifications, users, upload
+from app.api.v1 import admin, admin_audit, admin_annotations, annotations, annotation_sync, asr_review, assets, auth, chat, chat_ws, curation, dashboard, health, jobs, notifications, users, upload, voice_annotation
 from app.services.scheduler import start_cleanup_scheduler, stop_cleanup_scheduler
 from app.core.exceptions import register_exception_handlers
 from app.logging_config import setup_logging
@@ -244,6 +244,11 @@ app.include_router(
     notifications.router,
     prefix=settings.api_v1_prefix,
     tags=["notifications"]
+)
+app.include_router(
+    voice_annotation.router,
+    prefix=f"{settings.api_v1_prefix}/voice-annotation",
+    tags=["voice-annotation"]
 )
 
 

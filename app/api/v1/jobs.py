@@ -67,7 +67,7 @@ from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.services.streaming_token_service import streaming_token_service
 
 # Terminal states
-TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
+TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.NEEDS_VOICE_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
 
 def is_terminal(status: str) -> bool:
     return status in TERMINAL_STATES
@@ -134,6 +134,8 @@ VALID_STATUSES = {
     "DETECTING",
     "TRANSCRIBING",
     "CROPPING",
+    "NEEDS_VOICE_ANNOTATION",
+    "VOICE_ANNOTATION_IN_PROGRESS",
     "READY_FOR_ANNOTATION",
     "FAILED",
     "CANCELLED"
@@ -500,11 +502,16 @@ async def get_job_results(job_id: str, session: AsyncSession = Depends(get_db)):
     if not record:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    # Results are only available when job is in READY_FOR_ANNOTATION state
-    if record.status != JobStatus.READY_FOR_ANNOTATION:
+    # Results are available when job has completed cropping (including voice annotation states)
+    allowed_for_results = {
+        JobStatus.READY_FOR_ANNOTATION,
+        JobStatus.NEEDS_VOICE_ANNOTATION,
+        JobStatus.VOICE_ANNOTATION_IN_PROGRESS,
+    }
+    if record.status not in allowed_for_results:
         raise HTTPException(
             status_code=409,
-            detail=f"Job '{job_id}' is '{record.status}' — results are only available when job is completed (READY_FOR_ANNOTATION)",
+            detail=f"Job '{job_id}' is '{record.status}' — results are only available when job has completed processing",
         )
 
     if not record.result_data:

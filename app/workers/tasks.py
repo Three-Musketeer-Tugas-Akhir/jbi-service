@@ -9,7 +9,7 @@ from app.pipeline.utils.result_serializer import serialize_pipeline_result
 from app.services.pipeline import run_pipeline, PipelineError
 
 # Terminal states - no further transitions allowed
-TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
+TERMINAL_STATES = {JobStatus.READY_FOR_ANNOTATION, JobStatus.NEEDS_VOICE_ANNOTATION, JobStatus.FAILED, JobStatus.CANCELLED}
 
 def is_terminal(status: str) -> bool:
     """Check if a status is a terminal state."""

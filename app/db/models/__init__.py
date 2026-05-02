@@ -25,6 +25,9 @@ from app.db.models.annotation_sync import (
     AnnotationSync,
     AnnotationSyncHistory,
 )
+from app.db.models.voice_annotation import (
+    VoiceAnnotation,
+)
 from app.db.models.chat import (
     ChatRoom,
     ChatParticipant,
@@ -57,8 +60,10 @@ __all__ = [
     "AnnotationQueue",
     "AnnotationSync",
     "AnnotationSyncHistory",
+    "VoiceAnnotation",
     "ChatRoom",
     "ChatParticipant",
     "ChatMessage",
     "Notification",
 ]
+

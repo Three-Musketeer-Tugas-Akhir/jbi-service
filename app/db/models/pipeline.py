@@ -74,6 +74,16 @@ class PipelineJob(Base):
         nullable=True
     )
     
+    # Voice annotation counters (populated by VoiceAnnotationService)
+    clean_utterance_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Number of utterances that passed Sastrawi validation"
+    )
+    flagged_utterance_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Number of utterances with OOV flagged words"
+    )
+
     # Curation status (Curation module)
     curation_status: Mapped[Optional[str]] = mapped_column(
         String(50),
@@ -431,6 +441,9 @@ class JobStatus:
     CROPPING = "CROPPING"
     CROPPING_IN_PROGRESS = "CROPPING_IN_PROGRESS"
     CROPPING_FAILED = "CROPPING_FAILED"
+    # Voice annotation quality gate
+    NEEDS_VOICE_ANNOTATION = "NEEDS_VOICE_ANNOTATION"
+    VOICE_ANNOTATION_IN_PROGRESS = "VOICE_ANNOTATION_IN_PROGRESS"
     READY_FOR_ANNOTATION = "READY_FOR_ANNOTATION"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
