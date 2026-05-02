@@ -103,3 +103,4 @@ websockets==16.0
 faster-whisper==1.1.1
 num2words==0.5.14
 PySastrawi==1.2.0
+yt-dlp

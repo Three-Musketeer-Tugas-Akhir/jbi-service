@@ -409,3 +409,112 @@ async def cleanup_stale_uploads(
     except Exception as e:
         logger.error(f"Failed to cleanup uploads: {e}")
         raise HTTPException(status_code=500, detail="Failed to cleanup uploads")
+
+
+# ── YouTube Download Endpoints ────────────────────────────────────────
+
+@router.post("/youtube", status_code=status.HTTP_202_ACCEPTED)
+async def start_youtube_download(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Start a YouTube video download in the background.
+    
+    Request body (JSON):
+        url: YouTube video URL (required)
+        category: Sign language category - SIBI or BISINDO (optional)
+    
+    Returns:
+        202 Accepted with download_id for progress tracking
+    """
+    from app.services.youtube_download_service import (
+        start_youtube_download as _start_download,
+        is_valid_youtube_url,
+    )
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    url = body.get("url", "").strip()
+    category = body.get("category")
+
+    if not url:
+        raise HTTPException(status_code=400, detail="YouTube URL is required")
+
+    if not is_valid_youtube_url(url):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid YouTube URL. Must be a youtube.com or youtu.be link.",
+        )
+
+    if category and category not in ("SIBI", "BISINDO"):
+        raise HTTPException(
+            status_code=400,
+            detail="Category must be 'SIBI' or 'BISINDO'",
+        )
+
+    try:
+        download_id = _start_download(
+            url=url,
+            user_id=current_user.id,
+            category=category,
+        )
+
+        logger.info(
+            f"YouTube download started: {download_id} by user {current_user.id} "
+            f"for URL: {url}"
+        )
+
+        return {
+            "download_id": download_id,
+            "url": url,
+            "status": "pending",
+            "message": "YouTube download started. Use GET /upload/youtube/{download_id} to track progress.",
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to start YouTube download: {e}")
+        raise HTTPException(status_code=500, detail="Failed to start download")
+
+
+@router.get("/youtube/{download_id}")
+async def get_youtube_download_progress(
+    download_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get progress of a YouTube download.
+    
+    Returns download status including percent, speed, ETA, and
+    the pipeline job_id once the download completes.
+    """
+    from app.services.youtube_download_service import get_download_progress
+
+    progress = get_download_progress(download_id)
+    if not progress:
+        raise HTTPException(status_code=404, detail="Download not found")
+
+    # Verify ownership
+    if progress.user_id != str(current_user.id):
+        raise HTTPException(status_code=404, detail="Download not found")
+
+    return progress.to_dict()
+
+
+@router.get("/youtube")
+async def list_youtube_downloads(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    List all active YouTube downloads for the current user.
+    """
+    from app.services.youtube_download_service import get_user_downloads
+
+    downloads = get_user_downloads(str(current_user.id))
+    return {"downloads": downloads}
+
