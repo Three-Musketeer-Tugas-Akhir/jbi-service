@@ -119,19 +119,13 @@ class CroppingWorker(BaseWorker):
             failure_count = len(results) - success_count
             
             if failure_count == 0:
-                # Initialize voice annotations and run Sastrawi flagging.
-                # This sets the job status to NEEDS_VOICE_ANNOTATION or
-                # READY_FOR_ANNOTATION depending on whether any words are
-                # flagged as OOV.
-                from app.services.voice_annotation_service import VoiceAnnotationService
-                va_service = VoiceAnnotationService(session)
-                va_result = await va_service.initialize_for_job(UUID(job_id))
+                # CV2 complete — move to voice annotation (human loop).
+                # Sastrawi/KBBI validation is handled during voice annotation,
+                # not here in the AI pipeline.
+                await job_repo.update_status(UUID(job_id), JobStatus.NEEDS_VOICE_ANNOTATION)
                 logger.info(
-                    "Job %s voice annotation init: %d clean, %d flagged → %s",
-                    job_id,
-                    va_result.get("clean", 0),
-                    va_result.get("flagged", 0),
-                    va_result.get("status", "unknown"),
+                    "Job %s cropping complete: %d/%d utterances → NEEDS_VOICE_ANNOTATION",
+                    job_id, success_count, len(results)
                 )
             else:
                 await job_repo.update_status(
