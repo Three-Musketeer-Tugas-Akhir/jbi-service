@@ -373,7 +373,6 @@ async def _upload_to_storage_and_create_job(
                 final_key=minio_key,
                 category=category,
                 user_id=user_id,
-                job_id=job_id,  # Set the pre-generated job_id
                 completed_at=datetime.utcnow(),
                 expires_at=datetime.utcnow() + timedelta(hours=24),
             )
