@@ -120,8 +120,6 @@ class CroppingWorker(BaseWorker):
             
             if failure_count == 0:
                 # CV2 complete — move to voice annotation (human loop).
-                # Sastrawi/KBBI validation is handled during voice annotation,
-                # not here in the AI pipeline.
                 await job_repo.update_status(UUID(job_id), JobStatus.NEEDS_VOICE_ANNOTATION)
                 logger.info(
                     "Job %s cropping complete: %d/%d utterances → NEEDS_VOICE_ANNOTATION",
@@ -139,6 +137,29 @@ class CroppingWorker(BaseWorker):
                 )
             
             await session.commit()
+        
+        # After CV2 is committed successfully, initialize voice annotations
+        # (Sastrawi KBBI validation). This runs separately so it NEVER blocks
+        # or fails the CV2 pipeline. If it crashes, job stays in
+        # NEEDS_VOICE_ANNOTATION and admin can re-trigger via API.
+        if failure_count == 0:
+            try:
+                async with async_session() as va_session:
+                    from app.services.voice_annotation_service import VoiceAnnotationService
+                    va_service = VoiceAnnotationService(va_session)
+                    va_result = await va_service.initialize_for_job(UUID(job_id))
+                    await va_session.commit()
+                    logger.info(
+                        "Job %s voice annotation init: %d clean, %d flagged",
+                        job_id,
+                        va_result.get("clean", 0),
+                        va_result.get("flagged", 0),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Job %s voice annotation init failed (non-blocking): %s",
+                    job_id, str(e)
+                )
         
         return {
             "job_id": job_id,

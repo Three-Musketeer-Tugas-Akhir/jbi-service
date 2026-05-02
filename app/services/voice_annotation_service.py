@@ -92,29 +92,21 @@ class VoiceAnnotationService:
             else:
                 clean_count += 1
 
-        # Update job counters and status
-        job_status = (
-            JobStatus.NEEDS_VOICE_ANNOTATION
-            if flagged_count > 0
-            else JobStatus.READY_FOR_ANNOTATION
-        )
-
+        # Update job counters only (status is managed by CV2 / update_ground_truth)
         await self.db.execute(
             update(PipelineJob)
             .where(PipelineJob.id == job_id)
             .values(
                 clean_utterance_count=clean_count,
                 flagged_utterance_count=flagged_count,
-                status=job_status,
-                current_stage="voice_annotation" if flagged_count > 0 else "ready",
             )
         )
 
         await self.db.flush()
 
         logger.info(
-            "Voice annotation init for job %s: %d clean, %d flagged → %s",
-            job_id, clean_count, flagged_count, job_status,
+            "Voice annotation init for job %s: %d clean, %d flagged",
+            job_id, clean_count, flagged_count,
         )
 
         return {
@@ -122,7 +114,6 @@ class VoiceAnnotationService:
             "total": clean_count + flagged_count,
             "clean": clean_count,
             "flagged": flagged_count,
-            "status": job_status,
         }
 
     # ── Read operations ─────────────────────────────────────────────
