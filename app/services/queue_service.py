@@ -1,7 +1,7 @@
 """Queue service for job queue management."""
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from uuid import UUID
 
 from sqlalchemy import select, update, func
@@ -148,19 +148,62 @@ class QueueService:
                     status="completed",
                     processed_at=now
                 )
-            )
-            await db.flush()
-        else:
-            async with get_db_session() as db:
-                await db.execute(
-                    update(QueueJob)
-                    .where(QueueJob.id == job_id)
-                    .values(
-                        status="completed",
-                        processed_at=now
-                    )
                 )
                 await db.commit()
+    
+    async def cleanup_zombies(
+        self,
+        queue_name: str,
+        db: AsyncSession = None
+    ) -> List[UUID]:
+        """
+        Find all jobs stuck in 'processing' state for this queue and mark them as failed.
+        This is typically called on worker startup to clean up jobs left over from a crash.
+        
+        Args:
+            queue_name: The queue to clean up
+            db: Database session (if None, creates new session)
+            
+        Returns:
+            List of PipelineJob IDs that were affected
+        """
+        async def _cleanup(session: AsyncSession) -> List[UUID]:
+            now = datetime.now(timezone.utc)
+            
+            # Find zombie jobs
+            result = await session.execute(
+                select(QueueJob).where(
+                    QueueJob.queue_name == queue_name,
+                    QueueJob.status == "processing"
+                )
+            )
+            zombies = result.scalars().all()
+            
+            pipeline_job_ids = []
+            
+            for job in zombies:
+                job.status = "failed"
+                job.error_message = "Worker process died unexpectedly (zombie job)"
+                job.processed_at = now
+                
+                if job.payload and "job_id" in job.payload:
+                    try:
+                        pipeline_job_ids.append(UUID(job.payload["job_id"]))
+                    except ValueError:
+                        pass
+                        
+            if zombies:
+                await session.flush()
+                
+            return pipeline_job_ids
+            
+        if db is not None:
+            return await _cleanup(db)
+        else:
+            async with get_db_session() as new_db:
+                ids = await _cleanup(new_db)
+                await new_db.commit()
+                return ids
     
     async def mark_failed(
         self,

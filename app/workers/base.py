@@ -12,6 +12,7 @@ import logging
 from app.db.session import async_session
 from app.db.models.pipeline import QueueJob
 from app.services.queue_service import queue_service
+from app.repositories.job_repository import JobRepository
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ class BaseWorker(ABC):
         """
         logger.info(f"Starting {self.__class__.__name__} for queue: {self.queue_name}")
         
+        # Cleanup zombie jobs left over from unexpected container crashes
+        await self._cleanup_zombies()
+        
         while True:
             try:
                 job = await self._dequeue()
@@ -62,6 +66,29 @@ class BaseWorker(ABC):
             except Exception as e:
                 logger.exception(f"Error in worker loop: {e}")
                 await asyncio.sleep(5)  # Back off on error
+                
+    async def _cleanup_zombies(self) -> None:
+        """
+        Detects jobs stuck in 'processing' state (which means the worker crashed 
+        while processing them) and marks them as failed.
+        """
+        try:
+            async with async_session() as session:
+                pipeline_job_ids = await queue_service.cleanup_zombies(
+                    queue_name=self.queue_name,
+                    db=session
+                )
+                
+                if pipeline_job_ids:
+                    logger.warning(f"Found {len(pipeline_job_ids)} zombie jobs in queue '{self.queue_name}'. Marking as FAILED.")
+                    job_repo = JobRepository(session)
+                    for job_id in pipeline_job_ids:
+                        # Convert UUID to str for update_status
+                        await job_repo.update_status(str(job_id), "FAILED")
+                    
+                await session.commit()
+        except Exception as e:
+            logger.exception(f"Failed to clean up zombie jobs: {e}")
     
     async def _dequeue(self) -> Optional[QueueJob]:
         """

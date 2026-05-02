@@ -58,8 +58,8 @@ def _ensure_loaded():
     try:
         from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
         factory = StemmerFactory()
-        _stemmer = factory.createStemmer()
-        _kamus = set(factory.getWords())
+        _stemmer = factory.create_stemmer()
+        _kamus = set(factory.get_words())
         logger.info("Sastrawi dictionary loaded: %d words", len(_kamus))
     except ImportError:
         logger.warning(
