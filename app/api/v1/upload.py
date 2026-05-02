@@ -411,11 +411,12 @@ async def cleanup_stale_uploads(
         raise HTTPException(status_code=500, detail="Failed to cleanup uploads")
 
 
-# ── YouTube Download Endpoints ────────────────────────────────────────
+from fastapi import BackgroundTasks
 
 @router.post("/youtube", status_code=status.HTTP_202_ACCEPTED)
 async def start_youtube_download(
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -460,6 +461,7 @@ async def start_youtube_download(
         download_id = _start_download(
             url=url,
             user_id=current_user.id,
+            background_tasks=background_tasks,
             category=category,
         )
 

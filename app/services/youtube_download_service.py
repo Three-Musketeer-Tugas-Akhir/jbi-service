@@ -123,22 +123,104 @@ def is_valid_youtube_url(url: str) -> bool:
 
 # ── Core Download Logic (runs in background thread) ──────────────────
 
-def _run_download_in_background(
+def _download_sync(download_id: str, url: str, temp_dir: str, output_template: str, progress: YTDownloadProgress):
+    import yt_dlp
+    
+    # ── Step 1: Extract video info ───────────────────────────
+    logger.info(f"[YT-DL {download_id}] Extracting info for: {url}")
+
+    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        if info is None:
+            raise ValueError("Could not extract video info from URL")
+        
+        progress.title = info.get("title", "Untitled")
+        progress.file_size = info.get("filesize") or info.get("filesize_approx") or 0
+        progress.filename = f"{info.get('title', 'video')}.mp4"
+        _set_progress(progress)
+
+    logger.info(f"[YT-DL {download_id}] Title: {progress.title}")
+
+    # ── Step 2: Download video ───────────────────────────────
+    progress.status = YTDownloadStatus.DOWNLOADING
+    _set_progress(progress)
+
+    def _progress_hook(d):
+        if d["status"] == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            downloaded = d.get("downloaded_bytes", 0)
+            progress.downloaded_bytes = downloaded
+            if total > 0:
+                progress.file_size = total
+                progress.percent = (downloaded / total) * 100
+            speed = d.get("speed")
+            if speed:
+                if speed > 1_000_000:
+                    progress.speed = f"{speed / 1_000_000:.1f} MB/s"
+                elif speed > 1_000:
+                    progress.speed = f"{speed / 1_000:.0f} KB/s"
+                else:
+                    progress.speed = f"{speed:.0f} B/s"
+            eta = d.get("eta")
+            if eta is not None:
+                mins, secs = divmod(int(eta), 60)
+                progress.eta = f"{mins}:{secs:02d}"
+            _set_progress(progress)
+        elif d["status"] == "finished":
+            progress.percent = 100.0
+            progress.speed = None
+            progress.eta = None
+            _set_progress(progress)
+
+    ydl_opts = {
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "outtmpl": output_template,
+        "quiet": True,
+        "no_warnings": True,
+        "progress_hooks": [_progress_hook],
+        "merge_output_format": "mp4",
+        "socket_timeout": 30,
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    # Find the downloaded file
+    downloaded_files = list(Path(temp_dir).glob("*.*"))
+    if not downloaded_files:
+        raise FileNotFoundError("No file was downloaded by yt-dlp")
+
+    temp_file_path = str(downloaded_files[0])
+    actual_size = os.path.getsize(temp_file_path)
+    actual_filename = downloaded_files[0].name
+
+    # Sanitize filename for storage
+    safe_filename = re.sub(r'[^\w\s\-\.]', '_', actual_filename)
+    if not safe_filename.lower().endswith('.mp4'):
+        safe_filename += '.mp4'
+
+    progress.file_size = actual_size
+    progress.filename = safe_filename
+    progress.percent = 100.0
+    _set_progress(progress)
+    
+    return temp_file_path, safe_filename, actual_size
+
+
+async def _run_download_in_background(
     download_id: str,
     url: str,
     user_id: UUID,
     category: Optional[str] = None,
 ):
     """
-    Background thread function that:
-    1. Uses yt-dlp to extract info & download video
+    Async background task that:
+    1. Uses yt-dlp (in thread executor) to extract info & download video
     2. Uploads the file to MinIO via UploadService
     3. Creates a PipelineJob via PipelineJobService
-    
-    All progress is tracked via the in-memory store.
     """
     import asyncio
-
+    
     progress = YTDownloadProgress(
         download_id=download_id,
         url=url,
@@ -148,90 +230,22 @@ def _run_download_in_background(
     _set_progress(progress)
 
     temp_dir = None
-    temp_file_path = None
 
     try:
-        import yt_dlp
-
         temp_dir = tempfile.mkdtemp(prefix="ytdl_")
         output_template = os.path.join(temp_dir, "%(title)s.%(ext)s")
 
-        # ── Step 1: Extract video info ───────────────────────────
-        logger.info(f"[YT-DL {download_id}] Extracting info for: {url}")
-
-        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if info is None:
-                raise ValueError("Could not extract video info from URL")
-            
-            progress.title = info.get("title", "Untitled")
-            progress.file_size = info.get("filesize") or info.get("filesize_approx") or 0
-            progress.filename = f"{info.get('title', 'video')}.mp4"
-            _set_progress(progress)
-
-        logger.info(f"[YT-DL {download_id}] Title: {progress.title}")
-
-        # ── Step 2: Download video ───────────────────────────────
-        progress.status = YTDownloadStatus.DOWNLOADING
-        _set_progress(progress)
-
-        def _progress_hook(d):
-            if d["status"] == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                downloaded = d.get("downloaded_bytes", 0)
-                progress.downloaded_bytes = downloaded
-                if total > 0:
-                    progress.file_size = total
-                    progress.percent = (downloaded / total) * 100
-                speed = d.get("speed")
-                if speed:
-                    if speed > 1_000_000:
-                        progress.speed = f"{speed / 1_000_000:.1f} MB/s"
-                    elif speed > 1_000:
-                        progress.speed = f"{speed / 1_000:.0f} KB/s"
-                    else:
-                        progress.speed = f"{speed:.0f} B/s"
-                eta = d.get("eta")
-                if eta is not None:
-                    mins, secs = divmod(int(eta), 60)
-                    progress.eta = f"{mins}:{secs:02d}"
-                _set_progress(progress)
-            elif d["status"] == "finished":
-                progress.percent = 100.0
-                progress.speed = None
-                progress.eta = None
-                _set_progress(progress)
-
-        ydl_opts = {
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "outtmpl": output_template,
-            "quiet": True,
-            "no_warnings": True,
-            "progress_hooks": [_progress_hook],
-            "merge_output_format": "mp4",
-            "socket_timeout": 30,
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-
-        # Find the downloaded file
-        downloaded_files = list(Path(temp_dir).glob("*.*"))
-        if not downloaded_files:
-            raise FileNotFoundError("No file was downloaded by yt-dlp")
-
-        temp_file_path = str(downloaded_files[0])
-        actual_size = os.path.getsize(temp_file_path)
-        actual_filename = downloaded_files[0].name
-
-        # Sanitize filename for storage
-        safe_filename = re.sub(r'[^\w\s\-\.]', '_', actual_filename)
-        if not safe_filename.lower().endswith('.mp4'):
-            safe_filename += '.mp4'
-
-        progress.file_size = actual_size
-        progress.filename = safe_filename
-        progress.percent = 100.0
+        # Run the blocking yt-dlp part in an executor
+        loop = asyncio.get_running_loop()
+        temp_file_path, safe_filename, actual_size = await loop.run_in_executor(
+            None,
+            _download_sync,
+            download_id,
+            url,
+            temp_dir,
+            output_template,
+            progress
+        )
 
         logger.info(
             f"[YT-DL {download_id}] Downloaded: {safe_filename} "
@@ -242,24 +256,16 @@ def _run_download_in_background(
         progress.status = YTDownloadStatus.UPLOADING_TO_STORAGE
         _set_progress(progress)
 
-        # We need an async event loop for the DB/MinIO operations
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            job_id = loop.run_until_complete(
-                _upload_to_storage_and_create_job(
-                    download_id=download_id,
-                    file_path=temp_file_path,
-                    filename=safe_filename,
-                    file_size=actual_size,
-                    user_id=user_id,
-                    category=category,
-                    progress=progress,
-                )
-            )
-            progress.job_id = str(job_id)
-        finally:
-            loop.close()
+        job_id = await _upload_to_storage_and_create_job(
+            download_id=download_id,
+            file_path=temp_file_path,
+            filename=safe_filename,
+            file_size=actual_size,
+            user_id=user_id,
+            category=category,
+            progress=progress,
+        )
+        progress.job_id = str(job_id)
 
         # ── Done ─────────────────────────────────────────────────
         progress.status = YTDownloadStatus.COMPLETED
@@ -395,14 +401,16 @@ async def _upload_to_storage_and_create_job(
 def start_youtube_download(
     url: str,
     user_id: UUID,
+    background_tasks,
     category: Optional[str] = None,
 ) -> str:
     """
-    Start a YouTube video download in a background thread.
+    Start a YouTube video download in an async background task.
     
     Args:
         url: YouTube video URL
         user_id: Requesting user's ID
+        background_tasks: FastAPI BackgroundTasks instance
         category: Optional sign language category (SIBI/BISINDO)
         
     Returns:
@@ -428,14 +436,14 @@ def start_youtube_download(
     )
     _set_progress(progress)
 
-    # Start background thread
-    thread = threading.Thread(
-        target=_run_download_in_background,
-        args=(download_id, url, user_id, category),
-        daemon=True,
-        name=f"ytdl-{download_id[:8]}",
+    # Start background task via FastAPI
+    background_tasks.add_task(
+        _run_download_in_background,
+        download_id=download_id,
+        url=url,
+        user_id=user_id,
+        category=category,
     )
-    thread.start()
 
-    logger.info(f"[YT-DL {download_id}] Started background download for: {url}")
+    logger.info(f"[YT-DL {download_id}] Started async background download for: {url}")
     return download_id
