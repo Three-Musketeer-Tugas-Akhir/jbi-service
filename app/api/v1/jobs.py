@@ -422,6 +422,114 @@ async def update_job_category(
     )
 
 
+# ── POST /pipeline/jobs/{job_id}/start ───────────────────────────────────
+
+@router.post(
+    "/pipeline/jobs/{job_id}/start",
+    responses={
+        404: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+    },
+)
+async def start_pipeline_processing(
+    job_id: str,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start pipeline processing for a classified job.
+    
+    The job must be in UPLOADED status and have a category set.
+    Creates detection → ASR → cropping queue jobs.
+    """
+    from app.services.pipeline_job_service import PipelineJobService
+    
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid job ID: {job_id}")
+    
+    try:
+        service = PipelineJobService(session)
+        job = await service.start_pipeline_processing(job_uuid)
+        await session.commit()
+        
+        logger.info("Pipeline processing started: job_id=%s, user=%s", job_id, current_user.id)
+        
+        return {
+            "job_id": str(job.id),
+            "status": job.status,
+            "message": "Pipeline processing started",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to start pipeline processing for job %s: %s", job_id, e)
+        raise HTTPException(status_code=500, detail="Failed to start processing")
+
+
+# ── POST /pipeline/jobs/start-classified ─────────────────────────────────
+
+@router.post(
+    "/pipeline/jobs/start-classified",
+    responses={
+        400: {"model": ErrorResponse},
+    },
+)
+async def start_all_classified(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start pipeline processing for ALL classified-but-unprocessed jobs.
+    
+    Finds all jobs with status=UPLOADED and category IS NOT NULL,
+    then starts processing for each.
+    """
+    from app.services.pipeline_job_service import PipelineJobService
+    from sqlalchemy import select, and_
+    from app.db.models import PipelineJob
+    
+    # Find all UPLOADED jobs that have a category
+    result = await session.execute(
+        select(PipelineJob).where(
+            and_(
+                PipelineJob.status == JobStatus.UPLOADED,
+                PipelineJob.category.isnot(None),
+            )
+        )
+    )
+    jobs = result.scalars().all()
+    
+    if not jobs:
+        return {
+            "started_count": 0,
+            "message": "No classified-but-unprocessed jobs found",
+        }
+    
+    service = PipelineJobService(session)
+    started = 0
+    errors = []
+    
+    for job in jobs:
+        try:
+            await service.start_pipeline_processing(job.id)
+            started += 1
+        except ValueError as e:
+            errors.append({"job_id": str(job.id), "error": str(e)})
+    
+    await session.commit()
+    
+    logger.info(
+        "Batch pipeline start: %d started, %d errors, user=%s",
+        started, len(errors), current_user.id,
+    )
+    
+    return {
+        "started_count": started,
+        "errors": errors,
+        "message": f"{started} job(s) started for processing",
+    }
+
+
 # ── DELETE /jobs/{job_id} ────────────────────────────────────────────────
 
 @router.delete(

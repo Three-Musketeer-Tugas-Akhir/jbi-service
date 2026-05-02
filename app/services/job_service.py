@@ -370,7 +370,8 @@ class JobService:
                 "updated_at": job.updated_at.isoformat() if job.updated_at else None,
                 "error_message": job.error_message,
                 "total_segments": total_segments or 0,
-                "completed_segments": completed_segments or 0
+                "completed_segments": completed_segments or 0,
+                "category": job.category
             })
         
         total_pages = (total + page_size - 1) // page_size if total > 0 else 1

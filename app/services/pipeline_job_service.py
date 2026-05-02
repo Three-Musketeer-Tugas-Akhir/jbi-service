@@ -48,7 +48,10 @@ class PipelineJobService:
     
     async def create_pipeline_job(self, upload: Upload, user: User) -> PipelineJob:
         """
-        Create a complete pipeline job with all stage queue jobs.
+        Create a pipeline job record WITHOUT starting processing.
+        
+        The job is created with status=UPLOADED and no queue jobs.
+        Processing must be triggered separately via start_pipeline_processing().
         
         Called after file assembly is complete.
         
@@ -57,19 +60,19 @@ class PipelineJobService:
             user: Uploading user
             
         Returns:
-            Created PipelineJob
+            Created PipelineJob (status=UPLOADED, no queue jobs)
         """
         logger.info(
             f"Creating pipeline job for upload {upload.upload_id}: "
             f"{upload.filename} ({upload.file_size} bytes)"
         )
         
-        # 1. Create main PipelineJob record
+        # 1. Create main PipelineJob record (NO queue jobs)
         job = PipelineJob(
             id=uuid4(),
             video_path=f"{upload.final_bucket}/{upload.final_key}",
             original_filename=upload.filename,
-            status=JobStatus.UPLOADED,  # Initial state
+            status=JobStatus.UPLOADED,  # Stays UPLOADED until user triggers processing
             current_stage=None,
             category=upload.category,
             file_size=upload.file_size,
@@ -81,14 +84,7 @@ class PipelineJobService:
         self.db.add(job)
         await self.db.flush()  # Get job.id without full commit
         
-        # 2. Create queue jobs for each pipeline stage
-        queue_jobs = await self._create_queue_jobs(job, upload)
-        
-        # 3. Update job status to QUEUED
-        job.status = JobStatus.QUEUED
-        job.updated_at = datetime.utcnow()
-        
-        # 4. Link upload to job
+        # 2. Link upload to job (no queue jobs created here)
         upload.job_id = job.id
         upload.status = "complete"
         upload.completed_at = datetime.utcnow()
@@ -97,11 +93,67 @@ class PipelineJobService:
         
         logger.info(
             f"Created pipeline job {job.id} for upload {upload.upload_id} "
-            f"with {len(queue_jobs)} queue jobs"
+            f"(status=UPLOADED, awaiting manual trigger)"
         )
         
-        # 5. Publish event (if message bus available)
+        # 3. Publish event (if message bus available)
         await self._publish_job_created_event(job, upload)
+        
+        return job
+    
+    async def start_pipeline_processing(self, job_id: UUID) -> PipelineJob:
+        """
+        Start pipeline processing for a job by creating queue jobs.
+        
+        Requires the job to be in UPLOADED status and have a category set.
+        Creates detection → ASR → cropping queue jobs and sets status to QUEUED.
+        
+        Args:
+            job_id: Pipeline job ID
+            
+        Returns:
+            Updated PipelineJob (status=QUEUED)
+            
+        Raises:
+            ValueError: If job not found, not in correct status, or not classified
+        """
+        result = await self.db.execute(
+            select(PipelineJob).where(PipelineJob.id == job_id)
+        )
+        job = result.scalar_one_or_none()
+        
+        if not job:
+            raise ValueError(f"Job {job_id} not found")
+        
+        if job.status != JobStatus.UPLOADED:
+            raise ValueError(
+                f"Job {job_id} cannot be started: status is {job.status}, expected UPLOADED"
+            )
+        
+        if not job.category:
+            raise ValueError(
+                f"Job {job_id} must be classified before processing can start"
+            )
+        
+        # Find the associated upload record for payload data
+        upload_result = await self.db.execute(
+            select(Upload).where(Upload.job_id == job_id)
+        )
+        upload = upload_result.scalar_one_or_none()
+        
+        # Create queue jobs for each pipeline stage
+        queue_jobs = await self._create_queue_jobs(job, upload)
+        
+        # Update job status to QUEUED
+        job.status = JobStatus.QUEUED
+        job.updated_at = datetime.utcnow()
+        
+        await self.db.flush()
+        
+        logger.info(
+            f"Started pipeline processing for job {job.id} "
+            f"with {len(queue_jobs)} queue jobs"
+        )
         
         return job
     
