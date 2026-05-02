@@ -65,12 +65,18 @@ class DetectionWorker(BaseWorker):
         # Download video from MinIO
         temp_video = None
         try:
-            if video_key:
-                video_data = await self.minio_service.download_file(video_key)
+            # The payload provides 'video_path' which is the MinIO key
+            minio_key = video_key or payload.get("video_path")
+            
+            # If minio_key doesn't look like an absolute local path that exists, download it
+            if minio_key and not Path(minio_key).is_file():
+                logger.info(f"Downloading video from MinIO key: {minio_key}")
+                video_data = await self.minio_service.download_file(minio_key)
                 temp_video = self._save_temp_video(video_data, job_id)
                 video_path = str(temp_video)
             else:
-                video_path = payload.get("video_path")
+                video_path = minio_key
+
             
             # Run detection (pure ML, no DB)
             segments = await self._run_detection(video_path, job_id)
