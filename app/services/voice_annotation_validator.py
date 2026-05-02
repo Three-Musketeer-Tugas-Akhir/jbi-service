@@ -1,8 +1,16 @@
 """Voice Annotation Validator — Sastrawi-based OOV detection.
 
-Adapted from the user's reference implementation. Uses the PySastrawi
+Exact implementation of the reference algorithm. Uses the PySastrawi
 dictionary and stemmer to flag out-of-vocabulary (OOV) words in a
 transcript string.
+
+Algorithm:
+1. Load Sastrawi stemmer and kamus (dictionary)
+2. For each word in input text:
+   - Skip if purely numeric
+   - CEK 1: Is word in kamus?
+   - CEK 2: Stem word, is stem in kamus?
+   - If neither → OOV (flagged)
 """
 import re
 import logging
@@ -13,40 +21,6 @@ logger = logging.getLogger(__name__)
 # Lazy singleton so the heavy Sastrawi dictionary is loaded only once
 _stemmer = None
 _kamus: Set[str] = set()
-
-# Seed list of common proper nouns / brand names that are NOT in Sastrawi
-# but appear frequently in Indonesian news broadcasts.
-CUSTOM_DICTIONARY: Set[str] = {
-    # Politik & Pemerintahan
-    "jokowi", "joko", "widodo", "prabowo", "subianto", "gibran",
-    "megawati", "soekarnoputri", "ahok", "anies", "baswedan",
-    "ganjar", "pranowo", "sandiaga", "uno", "mahfud",
-    "luhut", "pandjaitan", "sri", "mulyani", "retno", "marsudi",
-    "risma", "erick", "thohir", "nadiem", "makarim",
-    # Lembaga & Organisasi
-    "kpu", "kpk", "bpk", "dpr", "dprd", "mpr", "mk", "ma",
-    "polri", "tni", "bnn", "bnpb", "bpom", "ojk", "bi",
-    "kominfo", "kemendikbud", "kemenkes", "kemenhub",
-    "nu", "muhammadiyah", "pdip", "gerindra", "golkar",
-    "demokrat", "pks", "pkb", "nasdem", "psi", "perindo",
-    # Kota & Daerah
-    "jakarta", "bandung", "surabaya", "semarang", "yogyakarta",
-    "jogja", "medan", "makassar", "palembang", "denpasar",
-    "bali", "lombok", "sulawesi", "kalimantan", "sumatra",
-    "papua", "maluku", "ntt", "ntb", "jabar", "jateng",
-    "jatim", "banten", "dki", "diy",
-    # Media & Teknologi
-    "chatgpt", "openai", "google", "facebook", "instagram",
-    "tiktok", "youtube", "whatsapp", "twitter", "telegram",
-    "netflix", "spotify", "linkedin", "zoom",
-    # Istilah Umum Berita
-    "covid", "corona", "omicron", "vaksin", "booster",
-    "pilkada", "pilpres", "pemilu", "rapbd", "apbn",
-    "rupiah", "dollar", "euro",
-    # Singkatan Umum
-    "ri", "ruu", "uu", "pp", "perpres", "perda", "rp",
-    "km", "kg", "dll", "dsb", "dkk", "sda", "sdm",
-}
 
 
 def _ensure_loaded():
@@ -73,14 +47,13 @@ def _ensure_loaded():
 def validate_text(text: str) -> List[str]:
     """Validate transcript text and return list of flagged (OOV) words.
 
-    Algorithm (matching user's reference implementation):
+    Algorithm (exact match with reference implementation):
     1. Strip punctuation, lowercase, split into words.
     2. For each word:
        - Skip if purely numeric.
-       - Check custom dictionary.
-       - Check Sastrawi dictionary.
-       - Check stemmed result in dictionary.
-       - Otherwise → flagged.
+       - CEK 1: Apakah kata dasar ada di kamus Indonesia?
+       - CEK 2: Stemming Indonesia — apakah akar kata ada di kamus?
+       - Jika lolos dari pengecekan, berarti OOV.
 
     Returns:
         Sorted list of unique flagged words. Empty list means all clean.
@@ -95,33 +68,25 @@ def validate_text(text: str) -> List[str]:
         return []
 
     # Clean text: remove punctuation, lowercase
-    teks_bersih = re.sub(r'[^\w\s]', '', text).lower()
+    teks_bersih = re.sub(r'[^\w\s]', '', str(text)).lower()
     kata_kata = teks_bersih.split()
 
-    flagged: set = set()
+    kata_tidak_ditemukan: set = set()
 
     for kata in kata_kata:
-        if not kata:
-            continue
-
-        # Skip pure numbers
         if kata.isdigit():
             continue
 
-        # Check 1: Custom dictionary (proper nouns, abbreviations)
-        if kata in CUSTOM_DICTIONARY:
-            continue
-
-        # Check 2: Sastrawi dictionary (exact match)
+        # --- CEK 1: Apakah kata dasar ada di kamus Indonesia? ---
         if kata in _kamus:
             continue
 
-        # Check 3: Stemming — does the stem exist in dictionary?
-        akar = _stemmer.stem(kata)
-        if akar in _kamus:
+        # --- CEK 2: Stemming Indonesia ---
+        akar_id = _stemmer.stem(kata)
+        if akar_id in _kamus:
             continue
 
-        # Failed all checks → OOV
-        flagged.add(kata)
+        # Jika lolos dari pengecekan, berarti OOV
+        kata_tidak_ditemukan.add(kata)
 
-    return sorted(flagged)
+    return sorted(kata_tidak_ditemukan)
