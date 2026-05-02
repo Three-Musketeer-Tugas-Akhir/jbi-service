@@ -148,8 +148,8 @@ class QueueService:
                     status="completed",
                     processed_at=now
                 )
-                )
-                await db.commit()
+            )
+            await db.commit()
     
     async def cleanup_zombies(
         self,
