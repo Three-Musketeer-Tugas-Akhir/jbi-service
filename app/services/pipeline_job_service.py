@@ -206,64 +206,9 @@ class PipelineJobService:
         queue_jobs.append(detection_job)
         await self.db.flush()  # Get ID for dependency
         
-        # Stage 2: ASR (Whisper transcription)
-        # Depends on detection completion
-        asr_job = QueueJob(
-            id=uuid4(),
-            job_id=job.id,
-            queue_name="asr",
-            stage="asr",
-            status="pending",
-            priority=2,
-            payload={
-                "job_id": str(job.id),
-                "video_path": job.video_path,
-                "category": job.category,
-                "stage": "asr",
-                "upload_id": str(upload.id),
-                "depends_on_detection": True,
-            },
-            depends_on=detection_job.id,  # Wait for detection
-            attempts=0,
-            max_attempts=3,
-            created_at=datetime.utcnow(),
-            scheduled_at=datetime.utcnow(),
-        )
-        self.db.add(asr_job)
-        queue_jobs.append(asr_job)
-        await self.db.flush()
-        
-        # Stage 3: Cropping (Video segmentation)
-        # Depends on ASR completion
-        cropping_job = QueueJob(
-            id=uuid4(),
-            job_id=job.id,
-            queue_name="cropping",
-            stage="cropping",
-            status="pending",
-            priority=3,
-            payload={
-                "job_id": str(job.id),
-                "video_path": job.video_path,
-                "category": job.category,
-                "stage": "cropping",
-                "upload_id": str(upload.id),
-                "depends_on_asr": True,
-            },
-            depends_on=asr_job.id,  # Wait for ASR
-            attempts=0,
-            max_attempts=3,
-            created_at=datetime.utcnow(),
-            scheduled_at=datetime.utcnow(),
-        )
-        self.db.add(cropping_job)
-        queue_jobs.append(cropping_job)
-        
-        await self.db.flush()
-        
         logger.debug(
-            f"Created queue jobs for pipeline job {job.id}: "
-            f"detection={detection_job.id}, asr={asr_job.id}, cropping={cropping_job.id}"
+            f"Created queue job for pipeline job {job.id}: "
+            f"detection={detection_job.id}"
         )
         
         return queue_jobs
