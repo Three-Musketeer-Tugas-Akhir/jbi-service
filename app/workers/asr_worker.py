@@ -10,7 +10,6 @@ import asyncio
 from uuid import UUID
 from typing import Dict, Any, List, Optional
 
-from app.core.config import get_settings
 from app.workers.base import BaseWorker
 from app.pipeline.stages.stage2_asr import run_asr, ASRSegmentInput
 from app.pipeline.utils.video import crop_audio
