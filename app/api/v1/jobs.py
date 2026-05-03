@@ -1963,10 +1963,10 @@ async def download_dataset_zip(
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             global_idx = 1
             for segment in segments:
-                # Get latest submitted annotation edit for this segment
+                # Get latest submitted or approved annotation edit for this segment
                 latest_edit = None
                 for edit in segment.annotation_edits:
-                    if edit.status == AnnotationEdit.STATUS_SUBMITTED:
+                    if edit.status in (AnnotationEdit.STATUS_SUBMITTED, AnnotationEdit.STATUS_APPROVED):
                         if latest_edit is None or edit.created_at > latest_edit.created_at:
                             latest_edit = edit
 
