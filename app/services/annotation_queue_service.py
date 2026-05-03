@@ -3,6 +3,9 @@ from typing import List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+
+from app.db.models.voice_annotation import VoiceAnnotation
 
 from app.repositories.annotation_queue_repository import AnnotationQueueRepository
 from app.repositories.annotation_edit_repository import AnnotationEditRepository
@@ -111,14 +114,21 @@ class AnnotationQueueService:
                 AnnotationQueue.STATUS_IN_PROGRESS
             )
         
-        # Build transcripts list from all utterances
+        # Build transcripts list from all utterances, using Voice Annotation ground truth if available
         transcripts = []
         if segment.transcripts:
             sorted_transcripts = sorted(segment.transcripts, key=lambda t: t.utterance_index)
+            
+            # Fetch voice annotations for these transcripts
+            transcript_ids = [t.id for t in sorted_transcripts]
+            va_query = select(VoiceAnnotation).where(VoiceAnnotation.transcript_id.in_(transcript_ids))
+            va_result = await self.db.execute(va_query)
+            voice_annotations = {va.transcript_id: va for va in va_result.scalars().all()}
+            
             transcripts = [
                 {
                     "utterance_index": t.utterance_index,
-                    "text": t.text,
+                    "text": voice_annotations[t.id].ground_truth_text if t.id in voice_annotations else t.text,
                     "start": t.start,
                     "end": t.end,
                     "confidence": t.confidence
