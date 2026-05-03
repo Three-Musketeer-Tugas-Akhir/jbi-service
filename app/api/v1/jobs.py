@@ -1819,9 +1819,10 @@ async def get_dataset_explorer(
                 cv_url = f"{settings.api_v1_prefix}/assets/{cv_path}?token={token}"
 
             audio_url = None
-            if asr_t.audio_path:
-                token = streaming_token_service.generate_token(current_user.id, asr_t.audio_path)
-                audio_url = f"{settings.api_v1_prefix}/assets/{asr_t.audio_path}?token={token}"
+            audio_path = u_data.get("cropped_audio_path") or asr_t.audio_path
+            if audio_path:
+                token = streaming_token_service.generate_token(current_user.id, audio_path)
+                audio_url = f"{settings.api_v1_prefix}/assets/{audio_path}?token={token}"
 
             explorer_utterances.append(DatasetExplorerUtterance(
                 utterance_index=asr_t.utterance_index,
@@ -1981,8 +1982,8 @@ async def download_dataset_zip(
 
                     # 1. Video (Cropped by JBI)
                     cv_path = u_corr.get("cropped_video_path")
-                    # 2. Audio (WAV from ASR)
-                    wav_path = transcript.audio_path
+                    # 2. Audio (WAV from ASR, preferably cropped)
+                    wav_path = u_corr.get("cropped_audio_path") or transcript.audio_path
                     # 3. Transkripsi (GT)
                     gt_text = va_map.get(transcript.id) or transcript.text
                     # 4. Transkripsi Norm

@@ -12,7 +12,7 @@ from app.db.session import async_session_maker
 from app.db.models.pipeline import PipelineSegment
 from app.db.models.annotation import AnnotationEdit
 from app.services.minio_service import get_minio_service
-from app.pipeline.utils.video import run_ffmpeg_crop, FFmpegConfig
+from app.pipeline.utils.video import run_ffmpeg_crop, FFmpegConfig, extract_audio
 
 logger = logging.getLogger(__name__)
 
@@ -107,12 +107,27 @@ class UtteranceCroppingService:
                 with open(tmp_output, "rb") as f:
                     await minio_service.upload_file(f, upload_key)
                 
-                # Cleanup local file
+                # 5.5 Extract Audio (.wav) for Dataset Export
+                tmp_audio_output = f"/tmp/{segment_id}_utt_{utterance_index}.wav"
+                audio_upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.wav"
+                try:
+                    await extract_audio(tmp_output, tmp_audio_output)
+                    with open(tmp_audio_output, "rb") as f:
+                        await minio_service.upload_file(f, audio_upload_key, content_type="audio/wav")
+                except Exception as audio_err:
+                    logger.warning(f"Failed to extract/upload WAV for {segment_id} utt {utterance_index}: {audio_err}")
+                    audio_upload_key = None
+
+                # Cleanup local files
                 if os.path.exists(tmp_output):
                     os.remove(tmp_output)
+                if os.path.exists(tmp_audio_output):
+                    os.remove(tmp_audio_output)
                 
                 # 6. Update DB
                 utt_list[utt_idx_in_array]["cropped_video_path"] = upload_key
+                if audio_upload_key:
+                    utt_list[utt_idx_in_array]["cropped_audio_path"] = audio_upload_key
                 utt_list[utt_idx_in_array]["status"] = "OK"
                 
                 edit.utterance_corrections = utt_list
