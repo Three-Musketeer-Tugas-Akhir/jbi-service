@@ -132,6 +132,56 @@ class VideoProcessor:
             raise
         except Exception as e:
             raise ProcessingError(f"Audio extraction failed: {e}")
+            
+    async def crop_audio(
+        self,
+        input_path: str,
+        output_path: str,
+        start_time: float,
+        end_time: float
+    ) -> str:
+        """
+        Crop an audio file using FFmpeg.
+        
+        Args:
+            input_path: Input audio file
+            output_path: Output audio file
+            start_time: Start time in seconds
+            end_time: End time in seconds
+            
+        Returns:
+            Path to cropped audio file
+        """
+        duration = end_time - start_time
+        try:
+            cmd = [
+                self._ffmpeg_path,
+                "-y",
+                "-ss", str(start_time),
+                "-i", str(input_path),
+                "-t", str(duration),
+                "-acodec", "pcm_s16le",
+                "-ar", str(self.SAMPLE_RATE),
+                "-ac", str(self.AUDIO_CHANNELS),
+                str(output_path)
+            ]
+            
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            
+            if proc.returncode != 0:
+                stderr_text = stderr.decode('utf-8', errors='replace') if stderr else "Unknown error"
+                raise ProcessingError(f"Audio crop failed: {stderr_text}")
+                
+            return output_path
+            
+        except Exception as e:
+            raise ProcessingError(f"Audio crop failed: {e}")
     
     async def transcode_video(
         self,
@@ -247,6 +297,12 @@ async def extract_audio(video_path: str, output_path: Optional[str] = None) -> s
     """Extract audio from video."""
     processor = get_video_processor()
     return await processor.extract_audio(video_path, output_path)
+
+
+async def crop_audio(input_path: str, output_path: str, start_time: float, end_time: float) -> str:
+    """Crop audio file."""
+    processor = get_video_processor()
+    return await processor.crop_audio(input_path, output_path, start_time, end_time)
 
 
 async def transcode_video(
