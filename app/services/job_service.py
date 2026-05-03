@@ -263,6 +263,7 @@ class JobService:
             "id": str(job.id),
             "original_filename": job.original_filename,
             "status": job.status,
+            "category": job.category,
             "curation_status": job.curation_status,
             "current_stage": job.current_stage,
             "progress": progress,
