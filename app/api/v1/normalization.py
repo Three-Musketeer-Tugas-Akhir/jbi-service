@@ -91,10 +91,6 @@ async def _collect_ok_utterances(
             transcript_map[t.utterance_index] = t
 
         for u_corr in latest_edit.utterance_corrections:
-            # Only process OK utterances
-            if u_corr.get("status") != "OK":
-                continue
-
             utt_idx = u_corr["utterance_index"]
             transcript = transcript_map.get(utt_idx)
 

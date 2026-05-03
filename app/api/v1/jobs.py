@@ -1977,7 +1977,7 @@ async def download_dataset_zip(
 
                 for transcript in sorted(segment.transcripts, key=lambda t: t.utterance_index):
                     u_corr = u_corr_map.get(transcript.utterance_index)
-                    if not u_corr or u_corr.get("status") != "OK":
+                    if not u_corr:
                         continue
 
                     # 1. Video (Cropped by JBI)
