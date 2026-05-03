@@ -263,6 +263,7 @@ class Stage2UtteranceResponse(BaseModel):
     end: float = Field(..., description="End time in seconds (relative to segment)")
     confidence: float = Field(..., description="ASR confidence score (0-1)")
     url: Optional[str] = Field(None, description="Asset URL for utterance video")
+    audio_url: Optional[str] = Field(None, description="Asset URL for utterance audio WAV")
     status: str = Field(..., description="Cropping status: pending, cropped, or failed")
 
 

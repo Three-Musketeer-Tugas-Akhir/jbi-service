@@ -1463,6 +1463,14 @@ async def get_stage2_results(
                     # Default pattern: utterance_{segment_index}_{utterance_index}.mp4
                     url = f"/api/v1/assets/jobs/{job_id}/utterances/utterance_{segment.segment_index:04d}_{transcript.utterance_index:04d}.mp4"
                 
+                # Build asset URL for utterance audio WAV
+                audio_url = None
+                if transcript.audio_path:
+                    if transcript.audio_path.startswith("jobs/"):
+                        audio_url = f"/api/v1/assets/{transcript.audio_path}"
+                    else:
+                        audio_url = f"/api/v1/assets/jobs/{job_id}/audio/{transcript.audio_path}"
+
                 utterances.append(
                     Stage2UtteranceResponse(
                         id=str(transcript.id),
@@ -1472,6 +1480,7 @@ async def get_stage2_results(
                         end=transcript.end,
                         confidence=transcript.confidence,
                         url=url,
+                        audio_url=audio_url,
                         status=transcript.status or "pending",
                     )
                 )
