@@ -73,6 +73,10 @@ class UpdateGroundTruthRequest(BaseModel):
         ..., min_length=0,
         description="New ground-truth text. Empty string is allowed."
     )
+    is_unflagged: bool = Field(
+        default=False,
+        description="If true, bypasses validation and forces the utterance to be CLEAN."
+    )
 
 
 class UpdateGroundTruthResponse(BaseModel):

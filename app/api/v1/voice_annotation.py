@@ -103,6 +103,7 @@ async def update_ground_truth(
         voice_annotation_id=voice_annotation_id,
         new_text=body.ground_truth_text,
         user_id=current_user.id,
+        is_unflagged=body.is_unflagged,
     )
     await db.commit()
     return result

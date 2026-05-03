@@ -238,12 +238,13 @@ class VoiceAnnotationService:
         voice_annotation_id: UUID,
         new_text: str,
         user_id: UUID,
+        is_unflagged: bool = False,
     ) -> dict:
         """Update ground truth text, re-validate, and recalculate job status.
 
         This is the core annotator action per the PRD:
         1. Save new ground_truth_text
-        2. Re-run Sastrawi validation
+        2. Re-run Sastrawi validation (unless is_unflagged is true)
         3. Update per-utterance flag status
         4. Recalculate job-level counters and status
         """
@@ -263,9 +264,13 @@ class VoiceAnnotationService:
         va.annotator_id = user_id
         va.edited_at = datetime.utcnow()
 
-        # 2. Re-run validation
-        flagged_words = validate_text(new_text)
-        has_flag = len(flagged_words) > 0
+        # 2. Re-run validation or force unflag
+        if is_unflagged:
+            flagged_words = []
+            has_flag = False
+        else:
+            flagged_words = validate_text(new_text)
+            has_flag = len(flagged_words) > 0
 
         va.flagged_words = flagged_words
         va.has_flag = has_flag
