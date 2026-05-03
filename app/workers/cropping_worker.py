@@ -303,15 +303,10 @@ class CroppingWorker(BaseWorker):
             # Skip utterances that start after video ends
             if current_start >= video_duration:
                 logger.warning(
-                    "Skipping utterance %s that starts after video ends: %.2f >= %.2f",
+                    "Utterance %s starts after video ends (%.2f >= %.2f) - Clamping to end of video",
                     utterance_id, current_start, video_duration
                 )
-                return {
-                    "transcript_id": utterance_id,
-                    "utterance_index": utterance.utterance_index,
-                    "success": False,
-                    "error": f"Utterance starts after video ends: {current_start:.2f} >= {video_duration:.2f}"
-                }
+                current_start = max(0.0, video_duration - 1.0)
             
             # Apply notebook algorithm for start time
             is_first = utterance_index == 0
@@ -347,19 +342,16 @@ class CroppingWorker(BaseWorker):
             # Clamp to video duration
             current_end = min(current_end, video_duration)
             
-            # Ensure valid range after adjustments
+            # Ensure valid range after adjustments (Safeguard against Whisper overlaps/zero-duration)
             if current_start >= current_end:
                 logger.warning(
-                    "Invalid time range for utterance %s: %.2f -> %.2f",
+                    "Adjusting invalid time range for utterance %s: %.2f -> %.2f",
                     utterance_id, current_start, current_end
                 )
-                return {
-                    "transcript_id": utterance_id,
-                    "utterance_index": utterance.utterance_index,
-                    "success": False,
-                    "error": f"Invalid time range: {current_start:.2f} >= {current_end:.2f}"
-                }
-            
+                # Enforce at least 0.5s duration
+                current_end = min(current_start + 0.5, video_duration)
+                if current_start >= current_end:
+                    current_start = max(0.0, current_end - 0.5)
             # Create output directory
             output_dir = self.storage.get_stage2_output_dir(job_id)
             output_path = Path(output_dir) / f"{segment.id}_utt_{utterance.utterance_index}.mp4"
