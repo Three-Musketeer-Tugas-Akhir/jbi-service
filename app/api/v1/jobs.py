@@ -1773,6 +1773,14 @@ async def get_dataset_explorer(
     # Get all segments for job with their transcripts
     segments = await segment_repo.get_by_job_id(uuid.UUID(job_id))
     
+    # Get ground truth from VoiceAnnotation
+    from app.db.models.voice_annotation import VoiceAnnotation
+    from sqlalchemy import select
+    va_result = await db.execute(
+        select(VoiceAnnotation).where(VoiceAnnotation.job_id == uuid.UUID(job_id))
+    )
+    va_map = {va.transcript_id: va.ground_truth_text for va in va_result.scalars().all()}
+    
     explorer_segments = []
     for segment in segments:
         # Get original ASR transcripts
@@ -1801,12 +1809,21 @@ async def get_dataset_explorer(
                 token = streaming_token_service.generate_token(current_user.id, cv_path)
                 cv_url = f"{settings.api_v1_prefix}/assets/{cv_path}?token={token}"
 
+            audio_url = None
+            if asr_t.audio_path:
+                token = streaming_token_service.generate_token(current_user.id, asr_t.audio_path)
+                audio_url = f"{settings.api_v1_prefix}/assets/{asr_t.audio_path}?token={token}"
+
             explorer_utterances.append(DatasetExplorerUtterance(
                 utterance_index=asr_t.utterance_index,
                 status=status,
                 asr_text=asr_t.text,
+                gt_text=va_map.get(asr_t.id) or asr_t.text,
+                norm_transcript=u_data.get("normalized_transcript", ""),
                 glosa_text=u_data.get("text", ""),
+                norm_glosa=u_data.get("normalized_glosa", ""),
                 cropped_video_url=cv_url,
+                audio_url=audio_url,
                 start=u_data.get("start", asr_t.start),
                 end=u_data.get("end", asr_t.end)
             ))
@@ -1899,6 +1916,8 @@ async def download_dataset_zip(
         # Get segments with transcripts and annotation edits
         from sqlalchemy.orm import selectinload
         from sqlalchemy import select
+        from app.db.models.voice_annotation import VoiceAnnotation
+        from app.db.models.annotation import AnnotationEdit
 
         result = await db.execute(
             select(PipelineSegment)
@@ -1910,123 +1929,85 @@ async def download_dataset_zip(
             .order_by(PipelineSegment.segment_index)
         )
         segments = result.scalars().all()
+        
+        # Get ground truth from VoiceAnnotation
+        va_result = await db.execute(
+            select(VoiceAnnotation).where(VoiceAnnotation.job_id == job_uuid)
+        )
+        va_map = {va.transcript_id: va.ground_truth_text for va in va_result.scalars().all()}
 
         minio_service = get_minio_service()
+
+        # Date format: release_date (YYYYMMDD) -> YYMMDD or created_at -> YYMMDD
+        if job.release_date and len(job.release_date) == 8:
+            yymmdd = job.release_date[2:]
+        else:
+            yymmdd = job.created_at.strftime("%y%m%d")
+            
+        cat_code = "SB" if job.category == "SIBI" else "BS" if job.category == "BISINDO" else "XX"
+        base_prefix = f"INEWS_{cat_code}_{yymmdd}"
 
         # Prepare ZIP in memory
         zip_buffer = io.BytesIO()
 
-        # Track transcript data for JSON files
-        asr_transcripts = []
-        annotated_transcripts = []
-        normalized_transcripts = []
-
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-            # 1. Original video
-            if job.video_path:
-                try:
-                    video_data = await minio_service.download_file(job.video_path)
-                    original_name = job.original_filename or "original_video.mp4"
-                    zf.writestr(f"original/{original_name}", video_data)
-                except Exception as e:
-                    logger.warning("Failed to add original video to ZIP: %s", e)
-
+            global_idx = 1
             for segment in segments:
-                seg_idx = segment.segment_index
-
-                # 2. Segment videos (stage 1)
-                if segment.cropped_video_path:
-                    try:
-                        seg_data = await minio_service.download_file(segment.cropped_video_path)
-                        zf.writestr(f"segments/segment_{seg_idx:04d}.mp4", seg_data)
-                    except Exception as e:
-                        logger.warning("Failed to add segment %s to ZIP: %s", seg_idx, e)
-
                 # Get latest submitted annotation edit for this segment
                 latest_edit = None
                 for edit in segment.annotation_edits:
                     if edit.status == AnnotationEdit.STATUS_SUBMITTED:
-                        latest_edit = edit
-                        break
+                        if latest_edit is None or edit.created_at > latest_edit.created_at:
+                            latest_edit = edit
 
-                for transcript in segment.transcripts:
-                    utt_idx = transcript.utterance_index
+                if not latest_edit or not latest_edit.utterance_corrections:
+                    continue
+                    
+                u_corr_map = {u["utterance_index"]: u for u in latest_edit.utterance_corrections}
 
-                    # 3. Utterance videos (stage 3)
-                    if transcript.video_path:
+                for transcript in sorted(segment.transcripts, key=lambda t: t.utterance_index):
+                    u_corr = u_corr_map.get(transcript.utterance_index)
+                    if not u_corr or u_corr.get("status") != "OK":
+                        continue
+
+                    # 1. Video (Cropped by JBI)
+                    cv_path = u_corr.get("cropped_video_path")
+                    # 2. Audio (WAV from ASR)
+                    wav_path = transcript.audio_path
+                    # 3. Transkripsi (GT)
+                    gt_text = va_map.get(transcript.id) or transcript.text
+                    # 4. Transkripsi Norm
+                    norm_transcript = u_corr.get("normalized_transcript", "")
+                    # 5. Glosa
+                    glosa = u_corr.get("text", "")
+                    # 6. Glosa Norm
+                    norm_glosa = u_corr.get("normalized_glosa", "")
+
+                    prefix = f"{base_prefix}_{global_idx:04d}"
+
+                    # Write Video
+                    if cv_path:
                         try:
-                            utt_data = await minio_service.download_file(transcript.video_path)
-                            zf.writestr(
-                                f"utterances/{segment.id}_utt_{utt_idx}.mp4",
-                                utt_data
-                            )
+                            video_data = await minio_service.download_file(cv_path)
+                            zf.writestr(f"{prefix}.mp4", video_data)
                         except Exception as e:
-                            logger.warning(
-                                "Failed to add utterance video to ZIP: segment=%s utt=%s error=%s",
-                                segment.id, utt_idx, e
-                            )
+                            logger.warning(f"Failed to add video to ZIP: {cv_path} - {e}")
 
-                    # 4. Audio WAV files
-                    if transcript.audio_path:
+                    # Write Audio
+                    if wav_path:
                         try:
-                            audio_data = await minio_service.download_file(transcript.audio_path)
-                            zf.writestr(
-                                f"audio/{segment.id}.wav",
-                                audio_data
-                            )
+                            audio_data = await minio_service.download_file(wav_path)
+                            zf.writestr(f"{prefix}.wav", audio_data)
                         except Exception as e:
-                            logger.warning(
-                                "Failed to add audio to ZIP: segment=%s error=%s",
-                                segment.id, e
-                            )
+                            logger.warning(f"Failed to add audio to ZIP: {wav_path} - {e}")
 
-                    # Collect transcript data
-                    asr_transcripts.append({
-                        "segment_index": seg_idx,
-                        "utterance_index": utt_idx,
-                        "text": transcript.text,
-                        "start": transcript.start,
-                        "end": transcript.end,
-                        "confidence": transcript.confidence,
-                    })
+                    # Write Texts
+                    zf.writestr(f"{prefix}_transkripsi.txt", gt_text.encode("utf-8"))
+                    zf.writestr(f"{prefix}_transkripsi_normalized.txt", norm_transcript.encode("utf-8"))
+                    zf.writestr(f"{prefix}_glosa.txt", glosa.encode("utf-8"))
+                    zf.writestr(f"{prefix}_glosa_normalized.txt", norm_glosa.encode("utf-8"))
 
-                    if latest_edit:
-                        annotated_transcripts.append({
-                            "segment_index": seg_idx,
-                            "utterance_index": utt_idx,
-                            "text": latest_edit.new_text,
-                            "start": latest_edit.new_start,
-                            "end": latest_edit.new_end,
-                        })
-
-                        if latest_edit.normalized_text:
-                            normalized_transcripts.append({
-                                "segment_index": seg_idx,
-                                "utterance_index": utt_idx,
-                                "text": latest_edit.normalized_text,
-                                "start": latest_edit.new_start,
-                                "end": latest_edit.new_end,
-                            })
-
-            # 5. Transcript JSON files
-            import json
-
-            zf.writestr(
-                "transcripts/asr.json",
-                json.dumps(asr_transcripts, indent=2, ensure_ascii=False).encode("utf-8")
-            )
-
-            if annotated_transcripts:
-                zf.writestr(
-                    "transcripts/annotated.json",
-                    json.dumps(annotated_transcripts, indent=2, ensure_ascii=False).encode("utf-8")
-                )
-
-            if normalized_transcripts:
-                zf.writestr(
-                    "transcripts/normalized.json",
-                    json.dumps(normalized_transcripts, indent=2, ensure_ascii=False).encode("utf-8")
-                )
+                    global_idx += 1
 
         # Prepare response
         zip_buffer.seek(0)

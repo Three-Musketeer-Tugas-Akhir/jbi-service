@@ -325,8 +325,12 @@ class DatasetExplorerUtterance(BaseModel):
     utterance_index: int
     status: Optional[str] = None
     asr_text: str
+    gt_text: str = ""
+    norm_transcript: str = ""
     glosa_text: str
+    norm_glosa: str = ""
     cropped_video_url: Optional[str] = None
+    audio_url: Optional[str] = None
     start: float
     end: float
 

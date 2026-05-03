@@ -58,6 +58,11 @@ class PipelineJob(Base):
         ForeignKey("auth_users.id", ondelete="SET NULL"),
         nullable=True
     )
+    release_date: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="Release/Upload date from YouTube or external source (YYYYMMDD)"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -44,6 +44,7 @@ class YTDownloadProgress:
     status: YTDownloadStatus = YTDownloadStatus.PENDING
     title: Optional[str] = None
     filename: Optional[str] = None
+    release_date: Optional[str] = None
     file_size: int = 0
     downloaded_bytes: int = 0
     percent: float = 0.0
@@ -68,6 +69,7 @@ class YTDownloadProgress:
             "eta": self.eta,
             "error": self.error,
             "job_id": self.job_id,
+            "release_date": self.release_date,
             "created_at": self.created_at,
         }
 
@@ -137,6 +139,7 @@ def _download_sync(download_id: str, url: str, temp_dir: str, output_template: s
         progress.title = info.get("title", "Untitled")
         progress.file_size = info.get("filesize") or info.get("filesize_approx") or 0
         progress.filename = f"{info.get('title', 'video')}.mp4"
+        progress.release_date = info.get("upload_date")
         _set_progress(progress)
 
     logger.info(f"[YT-DL {download_id}] Title: {progress.title}")
@@ -385,6 +388,10 @@ async def _upload_to_storage_and_create_job(
 
             pipeline_service = PipelineJobService(db)
             job = await pipeline_service.create_pipeline_job(upload_record, user, job_id=job_id)
+            
+            # Save the release date from YouTube
+            if progress.release_date:
+                job.release_date = progress.release_date
 
             await db.commit()
 
