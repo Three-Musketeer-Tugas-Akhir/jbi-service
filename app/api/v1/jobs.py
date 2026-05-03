@@ -1908,7 +1908,7 @@ async def download_dataset_zip(
             raise PermissionError("Not authorized to access this job")
 
         # Check curation status
-        allowed_statuses = {"READY_TO_BE_NORMALIZED", "NORMALIZED"}
+        allowed_statuses = {"READY_TO_BE_NORMALIZED", "NORMALIZED", "READY_TO_EXPORT"}
         if job.curation_status not in allowed_statuses:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
