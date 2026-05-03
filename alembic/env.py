@@ -24,11 +24,14 @@ target_metadata = Base.metadata
 # Override sqlalchemy.url with DATABASE_URL from environment variable.
 # This allows Alembic to work correctly inside Docker containers
 # where the database host is a service name (e.g., 'db') rather than 'localhost'.
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+psycopg2://postgres:postgres@db:5432/anotasi_db"
-)
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+db_url = os.environ.get("DATABASE_URL")
+if db_url:
+    # Alembic uses synchronous SQLAlchemy engine, so we need to use
+    # a synchronous driver. If the URL uses asyncpg, replace it with
+    # the default psycopg2 driver.
+    if db_url.startswith("postgresql+asyncpg://"):
+        db_url = db_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    config.set_main_option("sqlalchemy.url", db_url)
 
 
 def run_migrations_offline() -> None:
