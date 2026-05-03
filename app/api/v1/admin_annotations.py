@@ -106,6 +106,73 @@ async def assign_segments_to_annotator(
     }
 
 
+@router.post(
+    "/assign-job",
+    summary="Assign job to annotator (Admin)",
+    description="Assign all unassigned segments of a pipeline job to an annotator."
+)
+async def assign_job_to_annotator(
+    job_id: UUID,
+    annotator_id: UUID,
+    priority: int = Query(0, ge=0, le=10),
+    due_days: int = Query(7, ge=1, le=30),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Assign an entire job to an annotator.
+    
+    Finds all segments belonging to the job that are not yet assigned
+    and assigns them to the specified annotator.
+    """
+    from sqlalchemy import select, not_, exists
+    
+    queue_repo = AnnotationQueueRepository(db)
+    
+    # Query segments that belong to the job and don't have a queue entry yet
+    query = select(PipelineSegment).where(
+        PipelineSegment.job_id == job_id,
+        not_(
+            exists().where(
+                AnnotationQueue.segment_id == PipelineSegment.id
+            )
+        )
+    )
+    
+    result = await db.execute(query)
+    unassigned_segments = result.scalars().all()
+    
+    if not unassigned_segments:
+        return {
+            "success": False,
+            "message": "No unassigned segments found for this job.",
+            "assigned_count": 0
+        }
+    
+    assigned = []
+    
+    for segment in unassigned_segments:
+        queue_entry = AnnotationQueue(
+            segment_id=segment.id,
+            annotator_id=annotator_id,
+            status=AnnotationQueue.STATUS_ASSIGNED,
+            priority=priority,
+            assigned_at=datetime.utcnow(),
+            due_date=datetime.utcnow() + timedelta(days=due_days)
+        )
+        db.add(queue_entry)
+        assigned.append(str(segment.id))
+        
+    await db.commit()
+    
+    return {
+        "success": True,
+        "message": f"Successfully assigned {len(assigned)} segments to annotator.",
+        "assigned_count": len(assigned),
+        "segment_ids": assigned
+    }
+
+
 @router.get(
     "/unassigned-segments",
     summary="Get unassigned segments (Admin)",
