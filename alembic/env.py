@@ -1,4 +1,5 @@
 from logging.config import fileConfig
+import os
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
@@ -20,10 +21,14 @@ if config.config_file_name is not None:
 # Use the ORM metadata for autogenerate support
 target_metadata = Base.metadata
 
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
+# Override sqlalchemy.url with DATABASE_URL from environment variable.
+# This allows Alembic to work correctly inside Docker containers
+# where the database host is a service name (e.g., 'db') rather than 'localhost'.
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+psycopg2://postgres:postgres@db:5432/anotasi_db"
+)
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 
 def run_migrations_offline() -> None:
