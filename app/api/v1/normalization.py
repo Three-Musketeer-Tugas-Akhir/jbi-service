@@ -3,6 +3,7 @@
 Provides preview and apply endpoints for normalizing ground truth transcripts
 and glosa annotations for OK-status utterances within a pipeline job.
 """
+import copy
 import uuid
 from typing import Dict, List, Tuple
 
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.api.deps import require_annotator_or_curator
 from app.db.models.annotation import AnnotationEdit
@@ -291,18 +293,21 @@ async def apply_normalization(
         # Build lookup for quick access
         update_lookup = {u["utterance_index"]: u for u in updates}
 
-        # Update each utterance correction in-place
+        # Update each utterance correction — deep-copy to guarantee
+        # SQLAlchemy detects the JSONB mutation
         new_corrections = []
         for u_corr in latest_edit.utterance_corrections:
-            utt_idx = u_corr["utterance_index"]
+            u_corr_copy = copy.deepcopy(u_corr)
+            utt_idx = u_corr_copy["utterance_index"]
             if utt_idx in update_lookup:
-                u_corr["normalized_transcript"] = update_lookup[utt_idx]["normalized_transcript"]
-                u_corr["normalized_glosa"] = update_lookup[utt_idx]["normalized_glosa"]
+                u_corr_copy["normalized_transcript"] = update_lookup[utt_idx]["normalized_transcript"]
+                u_corr_copy["normalized_glosa"] = update_lookup[utt_idx]["normalized_glosa"]
                 updated_count += 1
-            new_corrections.append(u_corr)
+            new_corrections.append(u_corr_copy)
 
         # Write back the updated corrections
         latest_edit.utterance_corrections = new_corrections
+        flag_modified(latest_edit, "utterance_corrections")
         # Also update the aggregated normalized_text field
         norm_texts = [
             update_lookup[uc["utterance_index"]]["normalized_glosa"]

@@ -76,6 +76,7 @@ class JobStatusResponse(BaseModel):
     status: str
     video_title: Optional[str] = None
     category: Optional[str] = None
+    curation_status: Optional[str] = None
     progress: Optional[JobProgressResponse] = None
     error: Optional[str] = None
     created_at: datetime

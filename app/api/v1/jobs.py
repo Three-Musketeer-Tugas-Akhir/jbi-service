@@ -117,6 +117,7 @@ def _record_to_status_response(record) -> JobStatusResponse:
         status=record.status,
         video_title=record.original_filename or None,
         category=record.category,
+        curation_status=getattr(record, 'curation_status', None),
         progress=progress,
         error=record.error_message,
         created_at=record.created_at,
