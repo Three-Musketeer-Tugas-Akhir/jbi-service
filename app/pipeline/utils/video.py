@@ -535,3 +535,97 @@ async def transcode_to_h264(
         
     except ProcessingError as e:
         raise TranscodeError(f"Transcoding failed: {e}") from e
+
+
+async def run_ffmpeg_concat(
+    input_paths: list,
+    output_path: str,
+    timeout_seconds: int = 300,
+    config: Optional[FFmpegConfig] = None
+) -> bool:
+    """
+    Concatenate multiple video files into one using FFmpeg concat demuxer.
+    
+    Used by Boundary Cross-Cropping & Merging when an utterance spans
+    across two segment videos.
+    
+    Args:
+        input_paths: List of video file paths to concatenate (in order)
+        output_path: Output merged video file
+        timeout_seconds: Maximum time to wait for FFmpeg
+        config: FFmpeg encoding configuration
+        
+    Returns:
+        True if successful
+    """
+    if not input_paths or len(input_paths) < 2:
+        logger.error("run_ffmpeg_concat requires at least 2 input files")
+        return False
+    
+    processor = get_video_processor()
+    cfg = config or processor.DEFAULT_FFMPEG_CONFIG
+    cfg.validate()
+    
+    # Create a temporary concat list file
+    concat_list_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.txt', delete=False, prefix='concat_'
+        ) as f:
+            concat_list_path = f.name
+            for path in input_paths:
+                f.write(f"file '{path}'\n")
+        
+        cmd = [
+            processor._ffmpeg_path,
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_list_path,
+            "-c:v", cfg.video_codec,
+            "-crf", str(cfg.video_crf),
+            "-preset", cfg.video_preset,
+            "-c:a", cfg.audio_codec,
+            "-b:a", f"{cfg.audio_bitrate}k",
+            str(output_path)
+        ]
+        
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            logger.error("FFmpeg concat timed out after %s seconds", timeout_seconds)
+            proc.kill()
+            await proc.wait()
+            _cleanup_file(output_path)
+            return False
+        
+        if proc.returncode != 0:
+            stderr_text = stderr.decode('utf-8', errors='replace') if stderr else "Unknown error"
+            logger.error("FFmpeg concat failed: %s", stderr_text)
+            _cleanup_file(output_path)
+            return False
+        
+        output_file = Path(output_path)
+        if not output_file.exists() or output_file.stat().st_size == 0:
+            logger.error("FFmpeg concat output is empty or missing: %s", output_path)
+            return False
+        
+        logger.info("Videos concatenated: %s -> %s", input_paths, output_path)
+        return True
+        
+    except Exception as e:
+        logger.error("FFmpeg concat error: %s", e)
+        _cleanup_file(output_path)
+        return False
+    finally:
+        if concat_list_path:
+            _cleanup_file(concat_list_path)

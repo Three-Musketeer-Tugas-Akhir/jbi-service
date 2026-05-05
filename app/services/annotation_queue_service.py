@@ -125,16 +125,21 @@ class AnnotationQueueService:
             va_result = await self.db.execute(va_query)
             voice_annotations = {va.transcript_id: va for va in va_result.scalars().all()}
             
-            transcripts = [
-                {
+            transcripts = []
+            for t in sorted_transcripts:
+                cv2_url = None
+                if t.video_path:
+                    token = streaming_token_service.generate_token(annotator_id, t.video_path)
+                    cv2_url = f"{settings.api_v1_prefix}/assets/{t.video_path}?token={token}"
+                
+                transcripts.append({
                     "utterance_index": t.utterance_index,
                     "text": voice_annotations[t.id].ground_truth_text if t.id in voice_annotations else t.text,
                     "start": t.start,
                     "end": t.end,
-                    "confidence": t.confidence
-                }
-                for t in sorted_transcripts
-            ]
+                    "confidence": t.confidence,
+                    "video_path": cv2_url
+                })
         
         # Get current utterance corrections from latest edit (if any)
         latest_edit = await self.edit_repo.get_latest_by_segment(segment.id)
