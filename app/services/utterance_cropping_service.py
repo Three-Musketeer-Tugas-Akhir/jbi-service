@@ -89,39 +89,43 @@ class UtteranceCroppingService:
                 # 4. Calculate crop parameters.
                 #
                 # Key facts:
-                # - CV2 video always starts at 0.0 physically (already cropped from CV1 by pipeline)
-                # - PipelineTranscript.start/end are ASR absolute timestamps (e.g. 414.8, 418.0)
-                # - The FE sends start_time/end_time that may be in either ASR-absolute or
-                #   global-continuous space. Either way, what matters is DURATION.
-                # - orig_duration = ASR-declared duration of this utterance
-                # - requested_duration = what the annotator wants (end_time - start_time)
-                # - If requested_duration > orig_duration → must merge with next utterance
-                # - relative_start into CV2 video = 0.0 always (FE cannot seek into middle
-                #   of CV2 because CV2 is already a single-utterance clip)
+                # - CV2 video always starts at 0.0 physically
+                # - PipelineTranscript.start/end are ASR absolute timestamps
+                # - FE sends start_time/end_time in ASR space (preserved by offset fix)
+                # - relative_start = how far into CV2 video to seek (trim-in from left)
+                # - right_overlap = how much extra we need from the next video (trim-out)
                 
                 orig_start = curr_transcript.start
                 orig_end = curr_transcript.end
-                orig_duration = max(0.01, orig_end - orig_start)  # ASR-declared duration
+                orig_duration = max(0.01, orig_end - orig_start)
                 
-                requested_duration = abs(end_time - start_time)   # always positive
-                relative_start = 0.0                               # CV2 always starts at 0
+                requested_duration = abs(end_time - start_time)
+                relative_start = max(0.0, start_time - orig_start)  # seek into CV2
+                remaining_in_video = max(0.01, orig_duration - relative_start)
                 
-                # right_overlap: duration that exceeds what this CV2 video can provide
-                right_overlap = requested_duration - orig_duration
+                # How much exceeds what this CV2 video can provide after seeking
+                right_overlap = requested_duration - remaining_in_video
                 
                 config = FFmpegConfig(video_preset="ultrafast")
+                
+                logger.info(
+                    f"Crop utt {utterance_index}: orig=[{orig_start:.2f},{orig_end:.2f}] "
+                    f"req=[{start_time:.2f},{end_time:.2f}] rel_start={relative_start:.2f} "
+                    f"req_dur={requested_duration:.2f} overlap={right_overlap:.2f}"
+                )
                 
                 if right_overlap <= 0:
                     # ══════════════════════════════════════════════
                     # NORMAL CASE: fits within this CV2 video
+                    # Handles: no-trim, trim-in-left, trim-in-right, or both
                     # ══════════════════════════════════════════════
                     tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
                     
                     success = await run_ffmpeg_crop(
                         input_path=curr_video_url,
                         output_path=tmp_output,
-                        start_time=0.0,
-                        end_time=requested_duration,
+                        start_time=relative_start,
+                        end_time=relative_start + requested_duration,
                         use_input_seeking=True,
                         config=config
                     )
@@ -132,6 +136,7 @@ class UtteranceCroppingService:
                 else:
                     # ══════════════════════════════════════════════
                     # BOUNDARY CROSS-CROPPING & MERGING
+                    # Trim-out to right (possibly with trim-in from left too)
                     # ══════════════════════════════════════════════
                     logger.info(f"Cross-segment merge for utt {utterance_index}: overlap={right_overlap:.2f}s")
                     
@@ -155,28 +160,32 @@ class UtteranceCroppingService:
                         await _mark_failed(db, edit, utt_list, utt_idx_in_array)
                         return
                     
+                    # Clamp right_overlap to next video's duration
+                    next_duration = max(0.01, next_transcript.end - next_transcript.start)
+                    clamped_overlap = min(right_overlap, next_duration)
+                    
                     next_video_url = await minio_service.generate_presigned_url(
                         next_transcript.video_path, expiry=3600
                     )
                     
-                    # Part A: Crop ENTIRE current CV2 video (from 0 to end)
+                    # Part A: Current video from relative_start to end
                     tmp_part_a = f"/tmp/{segment_id}_utt_{utterance_index}_partA.mp4"
                     success_a = await run_ffmpeg_crop(
                         input_path=curr_video_url,
                         output_path=tmp_part_a,
-                        start_time=0.0,
-                        end_time=orig_duration,   # Full CV2 video, not 9999
+                        start_time=relative_start,
+                        end_time=orig_duration,
                         use_input_seeking=True,
                         config=config
                     )
                     
-                    # Part B: Crop next video from 0 to right_overlap
+                    # Part B: Next video from 0 to clamped_overlap
                     tmp_part_b = f"/tmp/{segment_id}_utt_{utterance_index}_partB.mp4"
                     success_b = await run_ffmpeg_crop(
                         input_path=next_video_url,
                         output_path=tmp_part_b,
                         start_time=0.0,
-                        end_time=right_overlap,
+                        end_time=clamped_overlap,
                         use_input_seeking=True,
                         config=config
                     )
@@ -202,7 +211,7 @@ class UtteranceCroppingService:
                     
                     # Cascade update the next utterance
                     await _cascade_update_next_utterance(
-                        db, next_transcript.segment_id, next_transcript.utterance_index, right_overlap
+                        db, next_transcript.segment_id, next_transcript.utterance_index, clamped_overlap
                     )
                 
                 # Upload video
