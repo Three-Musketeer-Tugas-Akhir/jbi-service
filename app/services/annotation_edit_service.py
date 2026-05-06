@@ -241,6 +241,9 @@ class AnnotationEditService:
         # Get current values (excluding previous drafts)
         old_text, old_start, old_end = await self._get_current_values_for_draft(segment_id, editor_id)
         
+        # Sort utterances by utterance_index before storing for consistent ordering
+        utterance_dicts.sort(key=lambda x: x.get('utterance_index', 0))
+        
         # Create draft edit
         draft = AnnotationEdit(
             segment_id=segment_id,
