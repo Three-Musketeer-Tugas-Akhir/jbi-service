@@ -86,18 +86,35 @@ class UtteranceCroppingService:
                 
                 curr_video_url = await minio_service.generate_presigned_url(curr_transcript.video_path, expiry=3600)
                 
-                # 4. Calculate overlap based on original CV2 boundaries
+                # 4. Calculate crop parameters.
+                # 
+                # IMPORTANT: PipelineTranscript.start/end are ASR absolute timestamps,
+                # NOT relative to the CV2 video (which starts at 0.0 physically).
+                # The CV2 video duration = orig_end - orig_start (from ASR),
+                # but physical video may be shorter due to silence removal.
+                #
+                # The requested start_time and end_time from FE are also in the same
+                # ASR absolute coordinate space.
+                #
+                # Crop parameters for the CV2 video:
+                #   - CV2 physical start = 0.0 always
+                #   - Relative seek into CV2 = start_time - orig_start (clamped to 0)
+                #   - Duration requested = end_time - start_time
                 orig_start = curr_transcript.start
                 orig_end = curr_transcript.end
+                orig_duration = orig_end - orig_start  # ASR-declared duration
                 
+                requested_duration = end_time - start_time
                 relative_start = max(0.0, start_time - orig_start)
-                right_overlap = end_time - orig_end
+                
+                # Overflow = how much the requested duration exceeds what's in this CV2 video
+                right_overlap = requested_duration - (orig_duration - relative_start)
                 
                 config = FFmpegConfig(video_preset="ultrafast")
                 
                 if right_overlap <= 0:
                     # ══════════════════════════════════════════════
-                    # NORMAL CASE: No overlap
+                    # NORMAL CASE: requested fits within this CV2 video
                     # ══════════════════════════════════════════════
                     tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
                     
@@ -105,7 +122,7 @@ class UtteranceCroppingService:
                         input_path=curr_video_url,
                         output_path=tmp_output,
                         start_time=relative_start,
-                        end_time=relative_start + (end_time - start_time),
+                        end_time=relative_start + requested_duration,
                         use_input_seeking=True,
                         config=config
                     )
@@ -189,11 +206,11 @@ class UtteranceCroppingService:
                         db, next_transcript.segment_id, next_transcript.utterance_index, right_overlap
                     )
                 
-                # Upload
+                # Upload video
                 upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
                 with open(tmp_output, "rb") as f:
                     await minio_service.upload_file(f, upload_key)
-
+                
                 _cleanup_tmp(tmp_output)
                 
                 utt_list[utt_idx_in_array]["cropped_video_path"] = upload_key
