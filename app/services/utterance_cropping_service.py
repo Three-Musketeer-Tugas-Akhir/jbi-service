@@ -87,42 +87,41 @@ class UtteranceCroppingService:
                 curr_video_url = await minio_service.generate_presigned_url(curr_transcript.video_path, expiry=3600)
                 
                 # 4. Calculate crop parameters.
-                # 
-                # IMPORTANT: PipelineTranscript.start/end are ASR absolute timestamps,
-                # NOT relative to the CV2 video (which starts at 0.0 physically).
-                # The CV2 video duration = orig_end - orig_start (from ASR),
-                # but physical video may be shorter due to silence removal.
                 #
-                # The requested start_time and end_time from FE are also in the same
-                # ASR absolute coordinate space.
-                #
-                # Crop parameters for the CV2 video:
-                #   - CV2 physical start = 0.0 always
-                #   - Relative seek into CV2 = start_time - orig_start (clamped to 0)
-                #   - Duration requested = end_time - start_time
+                # Key facts:
+                # - CV2 video always starts at 0.0 physically (already cropped from CV1 by pipeline)
+                # - PipelineTranscript.start/end are ASR absolute timestamps (e.g. 414.8, 418.0)
+                # - The FE sends start_time/end_time that may be in either ASR-absolute or
+                #   global-continuous space. Either way, what matters is DURATION.
+                # - orig_duration = ASR-declared duration of this utterance
+                # - requested_duration = what the annotator wants (end_time - start_time)
+                # - If requested_duration > orig_duration → must merge with next utterance
+                # - relative_start into CV2 video = 0.0 always (FE cannot seek into middle
+                #   of CV2 because CV2 is already a single-utterance clip)
+                
                 orig_start = curr_transcript.start
                 orig_end = curr_transcript.end
-                orig_duration = orig_end - orig_start  # ASR-declared duration
+                orig_duration = max(0.01, orig_end - orig_start)  # ASR-declared duration
                 
-                requested_duration = end_time - start_time
-                relative_start = max(0.0, start_time - orig_start)
+                requested_duration = abs(end_time - start_time)   # always positive
+                relative_start = 0.0                               # CV2 always starts at 0
                 
-                # Overflow = how much the requested duration exceeds what's in this CV2 video
-                right_overlap = requested_duration - (orig_duration - relative_start)
+                # right_overlap: duration that exceeds what this CV2 video can provide
+                right_overlap = requested_duration - orig_duration
                 
                 config = FFmpegConfig(video_preset="ultrafast")
                 
                 if right_overlap <= 0:
                     # ══════════════════════════════════════════════
-                    # NORMAL CASE: requested fits within this CV2 video
+                    # NORMAL CASE: fits within this CV2 video
                     # ══════════════════════════════════════════════
                     tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
                     
                     success = await run_ffmpeg_crop(
                         input_path=curr_video_url,
                         output_path=tmp_output,
-                        start_time=relative_start,
-                        end_time=relative_start + requested_duration,
+                        start_time=0.0,
+                        end_time=requested_duration,
                         use_input_seeking=True,
                         config=config
                     )
@@ -160,13 +159,13 @@ class UtteranceCroppingService:
                         next_transcript.video_path, expiry=3600
                     )
                     
-                    # Part A: Crop current video from relative_start to end (which is original duration)
+                    # Part A: Crop ENTIRE current CV2 video (from 0 to end)
                     tmp_part_a = f"/tmp/{segment_id}_utt_{utterance_index}_partA.mp4"
                     success_a = await run_ffmpeg_crop(
                         input_path=curr_video_url,
                         output_path=tmp_part_a,
-                        start_time=relative_start,
-                        end_time=9999.0, # Run to end of file
+                        start_time=0.0,
+                        end_time=orig_duration,   # Full CV2 video, not 9999
                         use_input_seeking=True,
                         config=config
                     )
