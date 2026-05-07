@@ -85,22 +85,28 @@ class AnnotationEditService:
             new_start = min(u['start'] for u in utterance_dicts)
             new_end = max(u['end'] for u in utterance_dicts)
         
-        # Validate timestamps against video bounds
+        # Validate and clamp timestamps against video bounds
+        # Cross-segment trim on the frontend can produce local times slightly
+        # beyond segment boundaries — clamp instead of rejecting.
         min_time = 0.0
         max_time = segment.jbi_end if segment.jbi_end is not None else (segment.asr_end if segment.asr_end is not None else new_end)
         
         if new_start is not None and new_start < min_time:
-            raise ValidationError(
-                f"Start time ({new_start}) must be at least {min_time}"
-            )
+            new_start = min_time
         
         if new_end is not None and max_time is not None and new_end > max_time:
-            raise ValidationError(
-                f"End time ({new_end}) must not exceed video duration ({max_time})"
-            )
+            new_end = max_time
         
         if new_start is not None and new_end is not None and new_start >= new_end:
             raise ValidationError("Start time must be less than end time")
+        
+        # Also clamp individual utterance timestamps
+        if max_time is not None:
+            for u_dict in utterance_dicts:
+                if u_dict.get('end') is not None and u_dict['end'] > max_time:
+                    u_dict['end'] = max_time
+                if u_dict.get('start') is not None and u_dict['start'] < min_time:
+                    u_dict['start'] = min_time
         
         # Determine old values (from ASR or previous edit)
         old_text, old_start, old_end = await self._get_current_values(segment_id)
@@ -228,15 +234,25 @@ class AnnotationEditService:
             new_start = min(u['start'] for u in utterance_dicts)
             new_end = max(u['end'] for u in utterance_dicts)
         
-        # Validate timestamps
+        # Validate and clamp timestamps against video bounds
+        # Cross-segment trim on the frontend can produce local times slightly
+        # beyond segment boundaries — clamp instead of rejecting.
         min_time = 0.0
         max_time = segment.jbi_end if segment.jbi_end is not None else (segment.asr_end if segment.asr_end is not None else new_end)
         
         if new_start is not None and new_start < min_time:
-            raise ValidationError(f"Start time ({new_start}) must be at least {min_time}")
+            new_start = min_time
         
         if new_end is not None and max_time is not None and new_end > max_time:
-            raise ValidationError(f"End time ({new_end}) must not exceed video duration ({max_time})")
+            new_end = max_time
+        
+        # Also clamp individual utterance timestamps
+        if max_time is not None:
+            for u_dict in utterance_dicts:
+                if u_dict.get('end') is not None and u_dict['end'] > max_time:
+                    u_dict['end'] = max_time
+                if u_dict.get('start') is not None and u_dict['start'] < min_time:
+                    u_dict['start'] = min_time
         
         # Get current values (excluding previous drafts)
         old_text, old_start, old_end = await self._get_current_values_for_draft(segment_id, editor_id)
