@@ -16,6 +16,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.db.models.annotation import AnnotationEdit, ASRReview, AnnotationQueue
+    from app.db.models.dataset import Dataset
 
 
 class SignLanguageCategory:
@@ -97,6 +98,15 @@ class PipelineJob(Base):
         comment="Curation workflow status: PENDING, ANNOTATED, READY_TO_BE_NORMALIZED, NORMALIZING, NORMALIZED, READY_TO_EXPORT"
     )
     
+    # Dataset relation
+    dataset_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("datasets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Associated dataset/project"
+    )
+    
     # Cancellation fields (Story 2.9)
     is_cancelled: Mapped[bool] = mapped_column(
         default=False,
@@ -118,6 +128,10 @@ class PipelineJob(Base):
     )
     
     # Relationships
+    dataset: Mapped[Optional["Dataset"]] = relationship(
+        "Dataset",
+        back_populates="jobs"
+    )
     segments: Mapped[List["PipelineSegment"]] = relationship(
         "PipelineSegment",
         back_populates="job",

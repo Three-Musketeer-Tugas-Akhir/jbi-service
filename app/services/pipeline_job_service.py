@@ -46,7 +46,7 @@ class PipelineJobService:
         self.db = db
         self.minio = MinIOService()
     
-    async def create_pipeline_job(self, upload: Upload, user: User, job_id: Optional[UUID] = None) -> PipelineJob:
+    async def create_pipeline_job(self, upload: Upload, user: User, job_id: Optional[UUID] = None, dataset_id: Optional[UUID] = None) -> PipelineJob:
         """
         Create a pipeline job record WITHOUT starting processing.
         
@@ -59,6 +59,7 @@ class PipelineJobService:
             upload: Completed upload record
             user: Uploading user
             job_id: Optional pre-generated job ID
+            dataset_id: Optional associated dataset ID
             
         Returns:
             Created PipelineJob (status=UPLOADED, no queue jobs)
@@ -81,6 +82,7 @@ class PipelineJobService:
             category=upload.category,
             file_size=upload.file_size,
             created_by=user.id,
+            dataset_id=dataset_id,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
             is_cancelled=False,

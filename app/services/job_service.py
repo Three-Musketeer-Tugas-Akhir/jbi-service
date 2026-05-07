@@ -82,7 +82,8 @@ class JobService:
         filename: str,
         file_data: Union[bytes, BinaryIO],
         file_size: int,
-        user: User
+        user: User,
+        dataset_id: Optional[UUID] = None,
     ) -> PipelineJob:
         """
         Create a new job from uploaded file.
@@ -100,6 +101,7 @@ class JobService:
             file_data: File content
             file_size: File size in bytes
             user: Uploading user
+            dataset_id: Optional associated dataset ID
             
         Returns:
             Created PipelineJob with status UPLOADED
@@ -115,7 +117,8 @@ class JobService:
         job = await self.job_repo.create(
             original_filename=filename,
             file_size=file_size,
-            created_by=user.id
+            created_by=user.id,
+            dataset_id=dataset_id,
         )
         
         try:
@@ -171,7 +174,8 @@ class JobService:
     async def create_job_from_url(
         self,
         video_url: str,
-        user: User
+        user: User,
+        dataset_id: Optional[UUID] = None,
     ) -> PipelineJob:
         """
         Create a new job from URL.
@@ -181,6 +185,7 @@ class JobService:
         Args:
             video_url: URL to download video from
             user: Uploading user
+            dataset_id: Optional associated dataset ID
             
         Returns:
             Created PipelineJob
@@ -266,6 +271,7 @@ class JobService:
             "category": job.category,
             "curation_status": job.curation_status,
             "current_stage": job.current_stage,
+            "dataset_id": str(job.dataset_id) if job.dataset_id else None,
             "progress": progress,
             "created_at": job.created_at.isoformat() if job.created_at else None,
             "updated_at": job.updated_at.isoformat() if job.updated_at else None,
@@ -366,6 +372,7 @@ class JobService:
                 "status": job.status,
                 "curation_status": job.curation_status,
                 "current_stage": job.current_stage,
+                "dataset_id": str(job.dataset_id) if job.dataset_id else None,
                 "progress": progress,
                 "created_at": job.created_at.isoformat() if job.created_at else None,
                 "updated_at": job.updated_at.isoformat() if job.updated_at else None,

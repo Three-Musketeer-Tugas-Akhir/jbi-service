@@ -23,7 +23,8 @@ class JobRepository:
         file_size: int,
         created_by: Optional[UUID] = None,
         status: str = "UPLOADED",
-        category: Optional[str] = None
+        category: Optional[str] = None,
+        dataset_id: Optional[UUID] = None,
     ) -> PipelineJob:
         """Create a new pipeline job.
         
@@ -33,6 +34,7 @@ class JobRepository:
             created_by: UUID of the user who created the job
             status: Initial job status (default: UPLOADED)
             category: Sign language category (SIBI or BISINDO)
+            dataset_id: Associated dataset ID
             
         Returns:
             Created PipelineJob instance
@@ -47,6 +49,7 @@ class JobRepository:
             status=status,
             current_stage="upload",
             category=category,
+            dataset_id=dataset_id,
         )
         self.db.add(job)
         await self.db.flush()
@@ -219,15 +222,17 @@ class JobRepository:
         self,
         status: Optional[str] = None,
         category: Optional[str] = None,
+        dataset_id: Optional[UUID] = None,
         limit: int = 20,
         offset: int = 0
     ) -> Tuple[List[PipelineJob], int]:
         """
-        List jobs with optional status and category filtering and pagination.
+        List jobs with optional status, category, and dataset filtering and pagination.
         
         Args:
             status: Filter by job status (optional)
             category: Filter by sign language category (optional)
+            dataset_id: Filter by dataset ID (optional)
             limit: Max number of jobs to return
             offset: Number of jobs to skip
             
@@ -247,6 +252,11 @@ class JobRepository:
         if category:
             base_query = base_query.where(PipelineJob.category == category)
             count_query = count_query.where(PipelineJob.category == category)
+        
+        # Apply dataset filter if provided
+        if dataset_id:
+            base_query = base_query.where(PipelineJob.dataset_id == dataset_id)
+            count_query = count_query.where(PipelineJob.dataset_id == dataset_id)
         
         # Get total count
         total_result = await self.db.execute(count_query)

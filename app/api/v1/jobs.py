@@ -118,6 +118,7 @@ def _record_to_status_response(record) -> JobStatusResponse:
         video_title=record.original_filename or None,
         category=record.category,
         curation_status=getattr(record, 'curation_status', None),
+        dataset_id=str(record.dataset_id) if record.dataset_id else None,
         progress=progress,
         error=record.error_message,
         created_at=record.created_at,
@@ -158,10 +159,11 @@ async def list_jobs(
     session: AsyncSession = Depends(get_db),
     status: Optional[str] = Query(None, description="Filter by job status"),
     category: Optional[str] = Query(None, description="Filter by sign language category (SIBI or BISINDO)"),
+    dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
     limit: int = Query(20, ge=1, le=100, description="Max jobs to return"),
     offset: int = Query(0, ge=0, description="Number of jobs to skip"),
 ):
-    """List all jobs with optional status and category filtering and pagination.
+    """List all jobs with optional status, category, and dataset filtering and pagination.
 
     Jobs are sorted by creation time (newest first).
     """
@@ -177,8 +179,15 @@ async def list_jobs(
             detail=f"Invalid category '{category}'. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}",
         )
 
+    dataset_uuid = None
+    if dataset_id:
+        try:
+            dataset_uuid = uuid.UUID(dataset_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
+
     records, total = await JobRepository(session).list_filtered(
-        status=status, category=category, limit=limit, offset=offset,
+        status=status, category=category, dataset_id=dataset_uuid, limit=limit, offset=offset,
     )
 
     jobs = [_record_to_status_response(r) for r in records]
@@ -200,6 +209,7 @@ async def create_job(
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
     category: Optional[str] = Form(None, description="Sign language category (SIBI or BISINDO)"),
+    dataset_id: Optional[str] = Form(None, description="Associated dataset ID"),
 ):
     """Upload a video or provide a URL to start a detection job.
 
@@ -209,8 +219,8 @@ async def create_job(
     Optional category field to classify the sign language type (SIBI or BISINDO).
     """
     logger.debug(
-        "create_job called — file=%s, url=%s, category=%s",
-        file.filename if file else None, url, category,
+        "create_job called — file=%s, url=%s, category=%s, dataset_id=%s",
+        file.filename if file else None, url, category, dataset_id,
     )
 
     if file is None and url is None:
@@ -226,6 +236,14 @@ async def create_job(
             status_code=400,
             detail=f"Invalid category '{category}'. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}",
         )
+    
+    # Validate dataset_id if provided
+    dataset_uuid = None
+    if dataset_id:
+        try:
+            dataset_uuid = uuid.UUID(dataset_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
 
     job_id = str(uuid.uuid4())
     logger.debug("Generated job_id=%s", job_id)
@@ -246,10 +264,14 @@ async def create_job(
         logger.debug("URL downloaded to %s, size=%d bytes", file_path, file_size)
 
     # --- Create job record in DB ---
-    logger.debug("Creating DB record — job_id=%s, video_title=%s, category=%s", job_id, video_title, category)
+    logger.debug("Creating DB record — job_id=%s, video_title=%s, category=%s, dataset_id=%s", job_id, video_title, category, dataset_id)
     record = await JobRepository(session).create(
         job_id, str(file_path), video_title=video_title, category=category
     )
+    # Set dataset_id separately since create method signature changed
+    if dataset_uuid:
+        record.dataset_id = dataset_uuid
+        await session.flush()
     logger.debug("DB record created — status=%s, category=%s, created_at=%s", record.status, record.category, record.created_at)
 
     logger.info("Job created: id=%s, source=%s", job_id, "upload" if file else "url")
@@ -756,7 +778,8 @@ async def upload_video_pipeline(
     video: Annotated[UploadFile, File(...)],
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    job_repo: JobRepository = Depends(get_job_repository)
+    job_repo: JobRepository = Depends(get_job_repository),
+    dataset_id: Optional[str] = Form(None, description="Associated dataset ID"),
 ):
     """
     Upload a video file for processing via the new pipeline.
@@ -780,13 +803,22 @@ async def upload_video_pipeline(
         file_size = video_file.tell()
         video_file.seek(0)  # Reset to beginning
         
+        # Parse dataset_id
+        dataset_uuid = None
+        if dataset_id:
+            try:
+                dataset_uuid = uuid.UUID(dataset_id)
+            except ValueError:
+                raise ValidationError(f"Invalid dataset_id: {dataset_id}")
+        
         # Create job using streaming upload (pass file object directly)
         job_service = get_job_service(db, job_repo)
         job = await job_service.create_job_from_upload(
             filename=video.filename,
             file_data=video_file,
             file_size=file_size,
-            user=current_user
+            user=current_user,
+            dataset_id=dataset_uuid,
         )
         
         return JobCreateResponse(
@@ -835,7 +867,8 @@ async def create_job_from_url_pipeline(
     request: JobCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    job_repo: JobRepository = Depends(get_job_repository)
+    job_repo: JobRepository = Depends(get_job_repository),
+    dataset_id: Optional[str] = Query(None, description="Associated dataset ID"),
 ):
     """
     Create a processing job from a video URL via the new pipeline.
@@ -844,10 +877,18 @@ async def create_job_from_url_pipeline(
     - System will download and process the video
     """
     try:
+        dataset_uuid = None
+        if dataset_id:
+            try:
+                dataset_uuid = uuid.UUID(dataset_id)
+            except ValueError:
+                raise ValidationError(f"Invalid dataset_id: {dataset_id}")
+        
         job_service = get_job_service(db, job_repo)
         job = await job_service.create_job_from_url(
             video_url=str(request.video_url),
-            user=current_user
+            user=current_user,
+            dataset_id=dataset_uuid,
         )
         
         return JobCreateResponse(

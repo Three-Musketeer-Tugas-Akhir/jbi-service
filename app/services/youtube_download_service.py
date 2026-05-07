@@ -215,6 +215,7 @@ async def _run_download_in_background(
     url: str,
     user_id: UUID,
     category: Optional[str] = None,
+    dataset_id: Optional[UUID] = None,
 ):
     """
     Async background task that:
@@ -266,6 +267,7 @@ async def _run_download_in_background(
             file_size=actual_size,
             user_id=user_id,
             category=category,
+            dataset_id=dataset_id,
             progress=progress,
         )
         progress.job_id = str(job_id)
@@ -305,6 +307,7 @@ async def _upload_to_storage_and_create_job(
     file_size: int,
     user_id: UUID,
     category: Optional[str],
+    dataset_id: Optional[UUID],
     progress: YTDownloadProgress,
 ) -> UUID:
     """
@@ -387,7 +390,7 @@ async def _upload_to_storage_and_create_job(
             _set_progress(progress)
 
             pipeline_service = PipelineJobService(db)
-            job = await pipeline_service.create_pipeline_job(upload_record, user, job_id=job_id)
+            job = await pipeline_service.create_pipeline_job(upload_record, user, job_id=job_id, dataset_id=dataset_id)
             
             # Save the release date from YouTube
             if progress.release_date:
@@ -413,6 +416,7 @@ def start_youtube_download(
     user_id: UUID,
     background_tasks,
     category: Optional[str] = None,
+    dataset_id: Optional[UUID] = None,
 ) -> str:
     """
     Start a YouTube video download in an async background task.
@@ -422,6 +426,7 @@ def start_youtube_download(
         user_id: Requesting user's ID
         background_tasks: FastAPI BackgroundTasks instance
         category: Optional sign language category (SIBI/BISINDO)
+        dataset_id: Optional associated dataset ID
         
     Returns:
         download_id for tracking progress
@@ -453,6 +458,7 @@ def start_youtube_download(
         url=url,
         user_id=user_id,
         category=category,
+        dataset_id=dataset_id,
     )
 
     logger.info(f"[YT-DL {download_id}] Started async background download for: {url}")

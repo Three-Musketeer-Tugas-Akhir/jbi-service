@@ -2,6 +2,7 @@
 
 from app.db.models.auth import User, Role, user_roles
 from app.db.models.audit import AuditLog, AuditAction
+from app.db.models.dataset import Dataset
 from app.db.models.pipeline import (
     PipelineJob,
     PipelineSegment,
@@ -43,6 +44,7 @@ __all__ = [
     "user_roles",
     "AuditLog",
     "AuditAction",
+    "Dataset",
     "PipelineJob",
     "PipelineSegment",
     "PipelineJobLog",

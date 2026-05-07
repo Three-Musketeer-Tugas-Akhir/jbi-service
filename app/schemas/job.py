@@ -30,6 +30,7 @@ class JobCreateResponse(BaseModel):
     original_filename: str
     file_size: int
     category: Optional[str] = None
+    dataset_id: Optional[str] = None
     created_at: datetime
     message: str
 
@@ -77,6 +78,7 @@ class JobStatusResponse(BaseModel):
     video_title: Optional[str] = None
     category: Optional[str] = None
     curation_status: Optional[str] = None
+    dataset_id: Optional[str] = None
     progress: Optional[JobProgressResponse] = None
     error: Optional[str] = None
     created_at: datetime
@@ -153,6 +155,7 @@ class JobStatusDetailResponse(BaseModel):
     curation_status: Optional[str] = Field(None, description="Current curation status")
     current_stage: Optional[str] = Field(None, description="Current processing stage")
     category: Optional[str] = Field(None, description="Sign language category (SIBI/BISINDO)")
+    dataset_id: Optional[str] = Field(None, description="Associated dataset ID")
     progress: int = Field(..., ge=0, le=100, description="Completion percentage (0-100)")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
@@ -170,6 +173,7 @@ class JobListItemResponse(BaseModel):
     curation_status: Optional[str] = Field(None, description="Current curation status")
     current_stage: Optional[str] = Field(None, description="Current processing stage")
     category: Optional[str] = Field(None, description="Sign language category (SIBI/BISINDO)")
+    dataset_id: Optional[str] = Field(None, description="Associated dataset ID")
     progress: int = Field(..., ge=0, le=100, description="Completion percentage (0-100)")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")

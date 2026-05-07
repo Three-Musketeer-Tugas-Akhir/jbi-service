@@ -441,6 +441,7 @@ async def start_youtube_download(
 
     url = body.get("url", "").strip()
     category = body.get("category")
+    dataset_id = body.get("dataset_id")
 
     if not url:
         raise HTTPException(status_code=400, detail="YouTube URL is required")
@@ -456,6 +457,15 @@ async def start_youtube_download(
             status_code=400,
             detail="Category must be 'SIBI' or 'BISINDO'",
         )
+    
+    # Parse dataset_id
+    dataset_uuid = None
+    if dataset_id:
+        from uuid import UUID
+        try:
+            dataset_uuid = UUID(dataset_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
 
     try:
         download_id = _start_download(
@@ -463,6 +473,7 @@ async def start_youtube_download(
             user_id=current_user.id,
             background_tasks=background_tasks,
             category=category,
+            dataset_id=dataset_uuid,
         )
 
         logger.info(

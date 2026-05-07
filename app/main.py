@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.core.swagger_config import TAGS_METADATA, SECURITY_SCHEMES, SWAGGER_UI_CONFIG, REDOC_CONFIG
 from app.db.session import engine
 from app.db.base import Base
-from app.api.v1 import admin, admin_audit, admin_annotations, annotations, annotation_sync, asr_review, assets, auth, chat, chat_ws, curation, dashboard, health, jobs, normalization, notifications, users, upload, voice_annotation
+from app.api.v1 import admin, admin_audit, admin_annotations, annotations, annotation_sync, asr_review, assets, auth, chat, chat_ws, curation, dashboard, datasets, health, jobs, normalization, notifications, users, upload, voice_annotation
 from app.services.scheduler import start_cleanup_scheduler, stop_cleanup_scheduler
 from app.core.exceptions import register_exception_handlers
 from app.logging_config import setup_logging
@@ -199,6 +199,7 @@ app.include_router(chat.router, prefix=settings.api_v1_prefix, tags=["chat"])
 app.include_router(chat_ws.router, tags=["chat-websocket"])
 app.include_router(users.router, prefix=settings.api_v1_prefix, tags=["users"])
 app.include_router(admin.router, prefix=settings.api_v1_prefix, tags=["admin"])
+app.include_router(datasets.router, prefix=settings.api_v1_prefix, tags=["datasets"])
 app.include_router(jobs.router, prefix=settings.api_v1_prefix, tags=["jobs"])
 app.include_router(
     annotations.router,
