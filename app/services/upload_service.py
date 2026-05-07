@@ -358,7 +358,7 @@ class UploadService:
         import os
         import re
         basename = os.path.basename(upload.filename)
-        safe_filename = re.sub(r'[^\w\s\-\.]', '_', basename)
+        safe_filename = re.sub(r'[^\w\s\-\.\[\]]', '_', basename)
         if not safe_filename:
             safe_filename = "video.mp4"
             

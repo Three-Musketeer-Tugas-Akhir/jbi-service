@@ -198,7 +198,7 @@ def _download_sync(download_id: str, url: str, temp_dir: str, output_template: s
     actual_filename = downloaded_files[0].name
 
     # Sanitize filename for storage
-    safe_filename = re.sub(r'[^\w\s\-\.]', '_', actual_filename)
+    safe_filename = re.sub(r'[^\w\s\-\.\[\]]', '_', actual_filename)
     if not safe_filename.lower().endswith('.mp4'):
         safe_filename += '.mp4'
 
