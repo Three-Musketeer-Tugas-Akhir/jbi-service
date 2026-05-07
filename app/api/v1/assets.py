@@ -209,13 +209,14 @@ async def get_asset(
     bucket_name = settings.minio_bucket_name
     
     try:
-        # Get object from MinIO
-        response = minio_service.client.get_object(bucket_name, path)
+        # Get object info first for Content-Length and Range validation
+        obj_info = minio_service.client.stat_object(bucket_name, path)
+        file_size = obj_info.size
         
         # Determine content type
         content_type = get_content_type(path)
         
-        # Build response headers
+        # Build initial response headers
         headers = {
             "Content-Type": content_type,
             "Accept-Ranges": "bytes",
@@ -225,6 +226,51 @@ async def get_asset(
         # Add filename for download (optional)
         filename = path.split('/')[-1]
         headers["Content-Disposition"] = f"inline; filename=\"{filename}\""
+        
+        # Handle Range requests
+        range_header = request.headers.get("Range")
+        start = 0
+        end = file_size - 1
+        status_code = status.HTTP_200_OK
+        
+        if range_header:
+            # Parse range: bytes=start-end
+            match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+            if match:
+                start = int(match.group(1))
+                if match.group(2):
+                    end = int(match.group(2))
+                
+                # Validate range
+                if start >= file_size:
+                    raise HTTPException(
+                        status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                        detail="Requested Range Not Satisfiable"
+                    )
+                
+                # Clamp end
+                end = min(end, file_size - 1)
+                status_code = status.HTTP_206_PARTIAL_CONTENT
+                
+                content_length = end - start + 1
+                headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+                headers["Content-Length"] = str(content_length)
+                
+                # Get specific range from MinIO
+                response = minio_service.client.get_object(
+                    bucket_name, 
+                    path, 
+                    offset=start, 
+                    length=content_length
+                )
+            else:
+                # Invalid range format, ignore and send whole file
+                response = minio_service.client.get_object(bucket_name, path)
+                headers["Content-Length"] = str(file_size)
+        else:
+            # Full file request
+            response = minio_service.client.get_object(bucket_name, path)
+            headers["Content-Length"] = str(file_size)
         
         # Generator to stream content and ensure cleanup
         def iterfile():
@@ -238,10 +284,13 @@ async def get_asset(
         # Return streaming response
         return StreamingResponse(
             content=iterfile(),
+            status_code=status_code,
             headers=headers,
             media_type=content_type,
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         error_msg = str(e).lower()
         if "nosuchkey" in error_msg or "not found" in error_msg:
