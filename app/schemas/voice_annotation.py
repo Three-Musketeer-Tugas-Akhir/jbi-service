@@ -55,6 +55,7 @@ class VoiceAnnotationUtterance(BaseModel):
     voice_annotation_status: str
     start: float
     end: float
+    audio_url: Optional[str] = None
     annotator_id: Optional[str] = None
     edited_at: Optional[str] = None
 

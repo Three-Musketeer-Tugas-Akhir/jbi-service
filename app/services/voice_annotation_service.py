@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models.pipeline import PipelineJob, PipelineTranscript, PipelineSegment, JobStatus
 from app.db.models.voice_annotation import VoiceAnnotation
 from app.services.voice_annotation_validator import validate_text
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,15 @@ class VoiceAnnotationService:
 
         for idx, va in enumerate(sorted_rows):
             t = va.transcript
+
+            # Build asset URL for utterance audio WAV (mirrors stage-2 results logic)
+            audio_url = None
+            if t and t.audio_path:
+                if t.audio_path.startswith("jobs/"):
+                    audio_url = f"{settings.api_v1_prefix}/assets/{t.audio_path}"
+                else:
+                    audio_url = f"{settings.api_v1_prefix}/assets/jobs/{job_id}/audio/{t.audio_path}"
+
             result.append({
                 "id": str(va.id),
                 "transcript_id": str(va.transcript_id),
@@ -170,6 +180,7 @@ class VoiceAnnotationService:
                 "voice_annotation_status": va.voice_annotation_status,
                 "start": t.start if t else 0,
                 "end": t.end if t else 0,
+                "audio_url": audio_url,
                 "annotator_id": str(va.annotator_id) if va.annotator_id else None,
                 "edited_at": va.edited_at.isoformat() if va.edited_at else None,
             })
