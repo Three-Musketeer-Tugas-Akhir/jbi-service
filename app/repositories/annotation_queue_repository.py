@@ -1,4 +1,5 @@
 """Annotation queue repository."""
+from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
@@ -62,6 +63,36 @@ class AnnotationQueueRepository:
             return False
         
         entry.status = status
+        await self.db.flush()
+        return True
+    
+    async def get_by_job_id(
+        self,
+        job_id: UUID
+    ) -> List[AnnotationQueue]:
+        """Get all queue entries for segments belonging to a job."""
+        from app.db.models.pipeline import PipelineSegment
+        
+        query = (
+            select(AnnotationQueue)
+            .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
+            .where(PipelineSegment.job_id == job_id)
+        )
+        result = await self.db.execute(query)
+        return result.scalars().all()
+    
+    async def update_annotator(
+        self,
+        queue_id: UUID,
+        new_annotator_id: UUID
+    ) -> bool:
+        """Update the annotator assigned to a queue entry."""
+        entry = await self.get_by_id(queue_id)
+        if not entry:
+            return False
+        
+        entry.annotator_id = new_annotator_id
+        entry.assigned_at = datetime.utcnow()
         await self.db.flush()
         return True
     

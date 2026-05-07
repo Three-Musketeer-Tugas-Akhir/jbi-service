@@ -225,6 +225,202 @@ async def get_unassigned_segments(
     }
 
 
+@router.post(
+    "/reassign-job",
+    summary="Reassign a job to a different annotator (Admin)",
+    description="Reassign all segments of a pipeline job to a new annotator without resetting progress."
+)
+async def reassign_job_to_annotator(
+    job_id: UUID,
+    annotator_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Reassign an entire job to a different annotator.
+    
+    Updates the annotator_id on existing annotation_queue entries for all
+    segments belonging to the job. Does NOT modify AnnotationEdit records,
+    so existing progress (drafts, corrections) is preserved.
+    
+    - **job_id**: UUID of the pipeline job to reassign
+    - **annotator_id**: UUID of the new annotator
+    """
+    from app.db.models.auth import User
+    from app.db.models.pipeline import PipelineJob, JobStatus
+    
+    # Verify job exists and is ready for annotation
+    job = await db.get(PipelineJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.status != JobStatus.READY_FOR_ANNOTATION:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Job must be in '{JobStatus.READY_FOR_ANNOTATION}' status to reassign. Current status: {job.status}"
+        )
+    
+    # Verify annotator exists and has annotator role
+    annotator = await db.get(User, annotator_id)
+    if not annotator:
+        raise HTTPException(status_code=404, detail="Annotator not found")
+    
+    if not annotator.has_any_role(["annotator", "admin"]):
+        raise HTTPException(status_code=400, detail="User must be an annotator or admin")
+    
+    # Find all queue entries for this job's segments
+    queue_repo = AnnotationQueueRepository(db)
+    queue_entries = await queue_repo.get_by_job_id(job_id)
+    
+    if not queue_entries:
+        raise HTTPException(
+            status_code=400,
+            detail="No assigned segments found for this job. Use /assign-job to assign first."
+        )
+    
+    reassigned = []
+    for entry in queue_entries:
+        old_annotator_id = entry.annotator_id
+        entry.annotator_id = annotator_id
+        entry.assigned_at = datetime.utcnow()
+        reassigned.append({
+            "queue_id": str(entry.id),
+            "segment_id": str(entry.segment_id),
+            "old_annotator_id": str(old_annotator_id),
+            "new_annotator_id": str(annotator_id),
+            "status": entry.status
+        })
+    
+    await db.commit()
+    
+    return {
+        "success": True,
+        "message": f"Successfully reassigned {len(reassigned)} segments to annotator {annotator.email}.",
+        "reassigned_count": len(reassigned),
+        "job_id": str(job_id),
+        "new_annotator_id": str(annotator_id),
+        "new_annotator_email": annotator.email,
+        "segments": reassigned
+    }
+
+
+@router.get(
+    "/job-assignments",
+    summary="Get job assignment status (Admin)",
+    description="List all jobs ready for annotation with their assignment status (assigned annotator or unassigned)."
+)
+async def get_job_assignments(
+    status: Optional[str] = Query(None, description="Filter by job status"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    current_user: CurrentUser = Depends(require_admin)
+):
+    """
+    Get all jobs with their assignment status.
+    
+    Returns a list of jobs showing whether they are assigned to an annotator
+    or still need to be assigned.
+    """
+    from sqlalchemy import func, select, distinct
+    from app.db.models.auth import User
+    from app.db.models.pipeline import PipelineJob, JobStatus
+    
+    # Base query: jobs that are ready for annotation
+    base_query = select(PipelineJob).where(
+        PipelineJob.status == JobStatus.READY_FOR_ANNOTATION
+    )
+    
+    if status:
+        base_query = base_query.where(PipelineJob.status == status)
+    
+    # Count total
+    count_query = select(func.count(PipelineJob.id)).where(
+        PipelineJob.status == JobStatus.READY_FOR_ANNOTATION
+    )
+    if status:
+        count_query = count_query.where(PipelineJob.status == status)
+    
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+    
+    # Get paginated jobs
+    jobs_result = await db.execute(
+        base_query
+        .order_by(PipelineJob.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    jobs = jobs_result.scalars().all()
+    
+    # Build assignment info for each job
+    items = []
+    for job in jobs:
+        # Find segments of this job and their queue assignments
+        segment_query = (
+            select(
+                PipelineSegment.id,
+                AnnotationQueue.annotator_id,
+                User.email
+            )
+            .outerjoin(
+                AnnotationQueue,
+                AnnotationQueue.segment_id == PipelineSegment.id
+            )
+            .outerjoin(
+                User,
+                AnnotationQueue.annotator_id == User.id
+            )
+            .where(PipelineSegment.job_id == job.id)
+        )
+        
+        seg_result = await db.execute(segment_query)
+        segments = seg_result.all()
+        
+        total_segments = len(segments)
+        assigned_segments = sum(1 for s in segments if s.annotator_id is not None)
+        
+        # Determine assignment status
+        if assigned_segments == 0:
+            assignment_status = "unassigned"
+            assigned_to = None
+            assigned_to_email = None
+        elif assigned_segments < total_segments:
+            assignment_status = "partial"
+            # Use the most common annotator
+            annotator_counts = {}
+            for s in segments:
+                if s.annotator_id:
+                    annotator_counts[s.email] = annotator_counts.get(s.email, 0) + 1
+            assigned_to_email = max(annotator_counts, key=annotator_counts.get) if annotator_counts else None
+            assigned_to = None
+        else:
+            assignment_status = "assigned"
+            # All segments assigned — use the first annotator (they should all be the same)
+            assigned_to_email = segments[0].email if segments else None
+            assigned_to = str(segments[0].annotator_id) if segments and segments[0].annotator_id else None
+        
+        items.append({
+            "job_id": str(job.id),
+            "original_filename": job.original_filename,
+            "status": job.status,
+            "category": job.category,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "total_segments": total_segments,
+            "assigned_segments": assigned_segments,
+            "assignment_status": assignment_status,
+            "assigned_to": assigned_to,
+            "assigned_to_email": assigned_to_email
+        })
+    
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
+
+
 @router.get(
     "/queue-status",
     summary="Get annotation queue status (Admin)",
