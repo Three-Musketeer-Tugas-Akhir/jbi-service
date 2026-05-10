@@ -16,7 +16,7 @@ from app.db.models.pipeline import PipelineJob, PipelineSegment
 from app.repositories.job_repository import JobRepository
 from app.repositories.audit_log_repository import AuditLogRepository
 from app.services.minio_service import get_minio_service
-from app.services.queue_service import queue_service
+from app.messaging.kafka_client import pipeline_producer
 
 
 class JobService:
@@ -133,15 +133,11 @@ class JobService:
             await self.job_repo.update_video_path(job.id, video_path)
             job.video_path = video_path
             
-            # Enqueue for detection (using same DB session for atomicity)
-            await queue_service.enqueue(
-                db=self.db,
-                queue_name="detection",
-                payload={
-                    "job_id": str(job.id),
-                    "stage": "detection",
-                    "video_key": video_path
-                }
+            # Publish to Kafka for pipeline detection
+            await pipeline_producer.publish_detection_job(
+                job_id=str(job.id),
+                video_key=video_path,
+                category=job.category or "SIBI",
             )
             
             # Commit all changes atomically

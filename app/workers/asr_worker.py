@@ -1,49 +1,77 @@
 """
-ASR Worker - Stage 2 Queue Consumer
+ASR Worker - Stage 2 Kafka Consumer
 
-Processes ASR jobs from the queue using faster-whisper,
-then queues Stage 3 (Cropping) for timestamp-based re-cropping.
+Processes ASR jobs from Kafka using faster-whisper,
+then publishes Stage 3 (Cropping) messages.
 """
 
 import logging
 import asyncio
+import os
 from uuid import UUID
 from typing import Dict, Any, List, Optional
 
-from app.workers.base import BaseWorker
+from app.workers.kafka_base import KafkaPipelineWorker
 from app.pipeline.stages.stage2_asr import run_asr, ASRSegmentInput
 from app.pipeline.utils.video import crop_audio
 from app.repositories.job_repository import JobRepository
 from app.repositories.segment_repository import SegmentRepository
-from app.services.queue_service import queue_service
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus, PipelineTranscript
 from app.services.minio_service import get_minio_service
 from app.core.exceptions import ProcessingError
+from app.messaging.topics import PipelineTopics
 
 logger = logging.getLogger(__name__)
 
 
-class ASRWorker(BaseWorker):
+class ASRWorker(KafkaPipelineWorker):
     """
-    Worker that processes ASR jobs from the queue.
+    Worker that processes ASR jobs from Kafka.
     
-    Consumes jobs from 'asr' queue, transcribes audio,
-    updates segments, and queues cropping stage.
+    Consumes from 'pipeline.jobs.asr' topic, transcribes audio,
+    updates segments, and publishes cropping stage to 'pipeline.jobs.crop'.
     """
     
-    queue_name = "asr"
+    topic = PipelineTopics.ASR
+    consumer_group = "asr-workers"
+    next_stage_topic = PipelineTopics.CROPPING
     max_retries = 3
+    
+    async def is_already_processed(self, job_id: str) -> bool:
+        """Check if ASR was already done for this job."""
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            return False
+        
+        async with async_session() as session:
+            segment_repo = SegmentRepository(session)
+            segments = await segment_repo.get_by_job_id(job_uuid)
+            if not segments:
+                return False
+            
+            # Check if any transcripts exist for these segments
+            segment_ids = [s.id for s in segments]
+            from sqlalchemy import select
+            from app.db.models.pipeline import PipelineTranscript
+            result = await session.execute(
+                select(PipelineTranscript).where(
+                    PipelineTranscript.segment_id.in_(segment_ids)
+                )
+            )
+            transcripts = result.scalars().all()
+            return len(transcripts) > 0
     
     async def process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process an ASR job.
         
         Args:
-            payload: {"job_id": str, "segment_count": int}
+            payload: {"job_id": str, "segment_count": int, "segment_ids": list}
             
         Returns:
-            {"segments_processed": int}
+            {"transcripts_count": int, "segments_processed": int}
         """
         job_id = UUID(payload["job_id"])
         
@@ -57,8 +85,7 @@ class ASRWorker(BaseWorker):
             segments = await segment_repo.get_by_job_id(job_id)
             
             # Update status
-            job_repo = JobRepository(session)
-            await job_repo.update_status(job_id, "TRANSCRIBING")
+            await job_repo.update_status(job_id, JobStatus.TRANSCRIBING)
             await session.commit()
         
         # Prepare inputs for pipeline stage
@@ -89,7 +116,7 @@ class ASRWorker(BaseWorker):
                 job_repo = JobRepository(session)
                 await job_repo.update_status(
                     job_id, 
-                    "FAILED", 
+                    JobStatus.FAILED, 
                     error_message=f"ASR failed for all {len(results)} segments"
                 )
                 await session.commit()
@@ -102,7 +129,6 @@ class ASRWorker(BaseWorker):
             )
         
         # Store individual utterances in pipeline_transcripts
-        # Note: ASR data is now stored only at utterance-level, not in pipeline_segments
         async with async_session() as session:
             segment_repo = SegmentRepository(session)
             segments = await segment_repo.get_by_job_id(job_id)
@@ -120,7 +146,6 @@ class ASRWorker(BaseWorker):
                             utterance_audio_path = None
                             if result.audio_path and result.audio_path.exists():
                                 try:
-                                    import os
                                     tmp_utt_audio = f"/tmp/{seg.id}_utt_{utt.utterance_index}.wav"
                                     wav_key = f"jobs/{job_id}/audio/{seg.id}_utt_{utt.utterance_index}.wav"
                                     
@@ -178,10 +203,18 @@ class ASRWorker(BaseWorker):
         # Populate ASR Review queue if enabled
         await self._populate_asr_review_queue(job_id, results)
         
-        # Finalize job and queue cropping stage
-        await self._finalize_job_and_queue_cropping(job_id)
+        # Update job status to ASR_COMPLETED
+        async with async_session() as session:
+            job_repo = JobRepository(session)
+            await job_repo.update_status(job_id, JobStatus.ASR_COMPLETED)
+            await session.commit()
         
-        return {"segments_processed": len(results)}
+        total_utterances = sum(len(r.utterances) for r in results)
+        
+        return {
+            "segments_processed": len(results),
+            "transcripts_count": total_utterances,
+        }
     
     async def _populate_asr_review_queue(
         self,
@@ -201,12 +234,7 @@ class ASRWorker(BaseWorker):
         
         async with async_session() as session:
             # Check if ASR Review is enabled via config
-            # For now, check job metadata or use default False
-            # Future: Implement ConfigService for per-job configuration
             asr_review_enabled = False  # Default disabled until configured
-            
-            # TODO: Check job config for asr_review_enabled flag
-            # This will be implemented when per-job configuration is available
             
             if not asr_review_enabled:
                 logger.info(f"ASR Review disabled for job {job_id}")
@@ -246,48 +274,3 @@ class ASRWorker(BaseWorker):
             logger.info(
                 f"Created {len(db_segments)} ASR Review records for job {job_id}"
             )
-    
-    async def _finalize_job_and_queue_cropping(self, job_id: UUID):
-        """
-        Finalize ASR stage and queue cropping stage.
-        
-        Updates job to ASR_COMPLETED and queues cropping job.
-        If queuing fails, job remains in ASR_COMPLETED state with error logged.
-        """
-        logger.info("ASR complete for job %s. Queuing cropping stage.", job_id)
-        
-        async with async_session() as session:
-            # Update job status to ASR_COMPLETED
-            job_repo = JobRepository(session)
-            await job_repo.update_status(job_id, "ASR_COMPLETED")
-            await session.commit()
-            
-            # Queue cropping job (outside transaction to avoid locking issues)
-            try:
-                cropping_job = await queue_service.enqueue(
-                    queue_name="cropping",
-                    payload={"job_id": str(job_id)},
-                    db=None,  # Use new session
-                    priority=0,
-                    max_attempts=3
-                )
-                logger.info(
-                    "Cropping stage queued for job %s (queue_job_id: %s)",
-                    job_id, cropping_job.id
-                )
-            except Exception as e:
-                # Log critical error - job is in ASR_COMPLETED but cropping not queued
-                logger.error(
-                    "CRITICAL: Failed to queue cropping stage for job %s: %s",
-                    job_id, e,
-                    exc_info=True
-                )
-                # Update job with error note
-                job_repo = JobRepository(session)
-                await job_repo.update_status(
-                    job_id,
-                    "ASR_COMPLETED"
-                )
-                await session.commit()
-                # Re-raise to trigger worker retry
-                raise

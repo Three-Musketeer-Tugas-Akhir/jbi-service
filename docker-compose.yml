@@ -25,6 +25,53 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ── Kafka (KRaft mode — no Zookeeper) ────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 3000
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── Kafka UI (Optional) ──────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    profiles: ["cpu", "gpu", "dev"]
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: jbi-pipeline
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ── CPU API Service ──────────────────────────────────────
   api:
     build:
@@ -38,10 +85,13 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
       USE_AUTH_FOR_ASSET: "false"
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     volumes:
       - ./model_weights:/app/model_weights:ro
@@ -62,10 +112,13 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
       USE_AUTH_FOR_ASSET: "false"
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     volumes:
       - ./model_weights:/app/model_weights:ro
@@ -91,10 +144,13 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     volumes:
       - ./model_weights:/app/model_weights
@@ -120,10 +176,13 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     volumes:
       - ./model_weights:/app/model_weights
@@ -149,10 +208,13 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       db:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     volumes:
       - ./model_weights:/app/model_weights
@@ -165,6 +227,28 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    restart: unless-stopped
+
+  # ── Reconciliation Job ───────────────────────────────────
+  reconciliation:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    profiles: ["gpu"]
+    command: python run_reconciliation.py
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      KAFKA_BROKERS: kafka:9092
+      RECONCILIATION_INTERVAL_MINUTES: "5"
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./model_weights:/app/model_weights
     restart: unless-stopped
 
   # ── MinIO Object Storage ─────────────────────────────────
@@ -191,3 +275,4 @@ volumes:
   uploads_data:
   outputs_data:
   minio_data:
+  kafka_data:

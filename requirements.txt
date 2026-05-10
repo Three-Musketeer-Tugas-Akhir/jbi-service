@@ -103,6 +103,7 @@ uvloop==0.22.1
 watchfiles==1.1.1
 websockets==16.0
 faster-whisper==1.1.1
+aiokafka==0.11.0
 num2words==0.5.14
 PySastrawi==1.2.0
 yt-dlp

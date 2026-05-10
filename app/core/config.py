@@ -85,6 +85,22 @@ class Settings(BaseSettings):
     model_cache_dir: str = "model_weights"
     force_cpu: bool = False  # Set True to disable GPU even if available
 
+    # --- Kafka Configuration ---
+    kafka_brokers: str = "localhost:9092"
+    kafka_topic_prefix: str = "pipeline"
+    kafka_max_poll_records: int = 1
+    kafka_session_timeout_ms: int = 45000
+    kafka_heartbeat_interval_ms: int = 15000
+    kafka_retry_max_attempts: int = 3
+    kafka_retry_base_delay_seconds: int = 5
+    kafka_dlq_topic: str = "pipeline.dlq"
+    kafka_enable_idempotence: bool = True
+
+    @property
+    def kafka_brokers_list(self) -> list[str]:
+        """Return Kafka brokers as list."""
+        return [b.strip() for b in self.kafka_brokers.split(",")]
+
     # --- MinIO / S3 Storage ---
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"

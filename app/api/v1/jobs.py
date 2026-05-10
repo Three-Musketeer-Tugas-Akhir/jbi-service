@@ -589,6 +589,19 @@ async def cancel_job(job_id: str, session: AsyncSession = Depends(get_db)):
             detail=f"Cannot cancel job '{job_id}' in state '{record.status}'",
         )
 
+    # Publish cancellation event to Kafka for pipeline workers
+    try:
+        from app.messaging.kafka_client import pipeline_producer
+        await pipeline_producer.publish_event(
+            event_type="job.cancelled",
+            job_id=job_id,
+            stage="pipeline",
+            status=JobStatus.CANCELLED,
+        )
+    except Exception as e:
+        # Log but don't fail cancellation if Kafka is unavailable
+        logger.warning(f"Failed to publish cancellation event to Kafka: {e}")
+
     # Clean up uploaded video file
     _cleanup_upload(record.video_path)
 

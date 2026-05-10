@@ -1,7 +1,7 @@
 """
 Cropping Worker - Stage 3: Utterance-level cropping with dynamic buffer.
 
-Consumes from 'cropping' queue and creates final annotation clips.
+Consumes from 'pipeline.jobs.crop' topic and creates final annotation clips.
 Uses the same algorithm as cv_asr_annotation.ipynb:
 - Dynamic buffer based on gap to next utterance
 - One video per utterance
@@ -20,12 +20,13 @@ from app.pipeline.utils.storage import StorageManager
 from app.repositories.job_repository import JobRepository
 from app.repositories.segment_repository import SegmentRepository
 from app.services.minio_service import get_minio_service
-from app.workers.base import BaseWorker
+from app.workers.kafka_base import KafkaPipelineWorker
+from app.messaging.topics import PipelineTopics
 
 logger = logging.getLogger(__name__)
 
 
-class CroppingWorker(BaseWorker):
+class CroppingWorker(KafkaPipelineWorker):
     """
     Worker for Stage 3 cropping: utterance-level with dynamic buffer.
     
@@ -40,13 +41,39 @@ class CroppingWorker(BaseWorker):
     - Last utterance: extend to video duration or +1s
     """
     
-    queue_name = "cropping"
+    topic = PipelineTopics.CROPPING
+    consumer_group = "cropping-workers"
+    next_stage_topic = None  # Last stage in pipeline
     max_retries = 3
     
     def __init__(self):
         super().__init__()
         self.storage = StorageManager()
         self.minio_service = get_minio_service()
+    
+    async def is_already_processed(self, job_id: str) -> bool:
+        """Check if cropping was already done for this job."""
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            return False
+        
+        async with async_session() as session:
+            segment_repo = SegmentRepository(session)
+            segments = await segment_repo.get_by_job_id(job_uuid)
+            if not segments:
+                return False
+            
+            segment_ids = [s.id for s in segments]
+            from sqlalchemy import select
+            result = await session.execute(
+                select(PipelineTranscript).where(
+                    PipelineTranscript.segment_id.in_(segment_ids),
+                    PipelineTranscript.status == "cropped"
+                )
+            )
+            cropped = result.scalars().all()
+            return len(cropped) > 0
     
     async def process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -352,6 +379,7 @@ class CroppingWorker(BaseWorker):
                 current_end = min(current_start + 0.5, video_duration)
                 if current_start >= current_end:
                     current_start = max(0.0, current_end - 0.5)
+            
             # Create output directory
             output_dir = self.storage.get_stage2_output_dir(job_id)
             output_path = Path(output_dir) / f"{segment.id}_utt_{utterance.utterance_index}.mp4"

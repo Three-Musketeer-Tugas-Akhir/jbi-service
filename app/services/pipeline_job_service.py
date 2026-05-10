@@ -109,10 +109,10 @@ class PipelineJobService:
     
     async def start_pipeline_processing(self, job_id: UUID) -> PipelineJob:
         """
-        Start pipeline processing for a job by creating queue jobs.
+        Start pipeline processing for a job by publishing to Kafka.
         
         Requires the job to be in UPLOADED status and have a category set.
-        Creates detection → ASR → cropping queue jobs and sets status to QUEUED.
+        Publishes detection job to 'pipeline.jobs.detect' topic and sets status to QUEUED.
         
         Args:
             job_id: Pipeline job ID
@@ -146,9 +146,10 @@ class PipelineJobService:
             select(Upload).where(Upload.job_id == job_id)
         )
         upload = upload_result.scalar_one_or_none()
+        upload_id = str(upload.id) if upload else None
         
-        # Create queue jobs for each pipeline stage
-        queue_jobs = await self._create_queue_jobs(job, upload)
+        # Publish to Kafka for pipeline processing
+        await self._publish_to_kafka(job, upload_id)
         
         # Update job status to QUEUED
         job.status = JobStatus.QUEUED
@@ -158,62 +159,39 @@ class PipelineJobService:
         
         logger.info(
             f"Started pipeline processing for job {job.id} "
-            f"with {len(queue_jobs)} queue jobs"
+            f"via Kafka topic pipeline.jobs.detect"
         )
         
         return job
     
-    async def _create_queue_jobs(
+    async def _publish_to_kafka(
         self, 
         job: PipelineJob, 
-        upload: Upload
-    ) -> List[QueueJob]:
+        upload_id: Optional[str] = None
+    ) -> None:
         """
-        Create QueueJob records for each pipeline stage.
+        Publish detection job to Kafka topic.
         
-        Establishes dependencies:
-        detection → ASR → cropping
+        This replaces the old QueueJob creation with Kafka messaging.
+        ASR and Cropping stages are queued automatically by workers
+        upon successful completion of each stage.
         
         Args:
             job: PipelineJob record
-            upload: Upload record with metadata
-            
-        Returns:
-            List of created QueueJob records
+            upload_id: Optional upload ID for payload
         """
-        queue_jobs = []
+        from app.messaging.kafka_client import pipeline_producer
         
-        # Stage 1: Detection (YOLO inference)
-        detection_job = QueueJob(
-            id=uuid4(),
-            job_id=job.id,
-            queue_name="detection",
-            stage="detection",
-            status="pending",
-            priority=1,
-            payload={
-                "job_id": str(job.id),
-                "video_path": job.video_path,
-                "category": job.category,
-                "stage": "detection",
-                "upload_id": str(upload.id),
-            },
-            depends_on=None,  # First stage - no dependency
-            attempts=0,
-            max_attempts=3,
-            created_at=datetime.utcnow(),
-            scheduled_at=datetime.utcnow(),
+        await pipeline_producer.publish_detection_job(
+            job_id=str(job.id),
+            video_key=job.video_path,
+            category=job.category,
+            upload_id=upload_id,
         )
-        self.db.add(detection_job)
-        queue_jobs.append(detection_job)
-        await self.db.flush()  # Get ID for dependency
         
         logger.debug(
-            f"Created queue job for pipeline job {job.id}: "
-            f"detection={detection_job.id}"
+            f"Published detection job to Kafka for pipeline job {job.id}"
         )
-        
-        return queue_jobs
     
     async def _publish_job_created_event(
         self, 

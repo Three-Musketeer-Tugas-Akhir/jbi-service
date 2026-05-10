@@ -1,7 +1,9 @@
 """
-Detection Worker - Stage 1 Queue Consumer
+Detection Worker - Stage 1 Kafka Consumer
 
-Processes detection jobs from the queue using YOLOv8.
+Processes detection jobs from Kafka using YOLOv8.
+Consumes from 'pipeline.jobs.detect', runs YOLO inference,
+creates segments, and publishes to 'pipeline.jobs.asr'.
 """
 
 import asyncio
@@ -12,28 +14,30 @@ from pathlib import Path
 from uuid import UUID
 from typing import Dict, Any, Optional
 
-from app.workers.base import BaseWorker
+from app.workers.kafka_base import KafkaPipelineWorker
 from app.pipeline.stages.stage1_detection import JBIDetector
 from app.repositories.job_repository import JobRepository
 from app.repositories.segment_repository import SegmentRepository
-from app.services.queue_service import queue_service
 from app.services.minio_service import get_minio_service
 from app.db.session import async_session
 from app.db.models.pipeline import JobStatus, PipelineSegment
 from app.core.exceptions import ProcessingError
+from app.messaging.topics import PipelineTopics
 
 logger = logging.getLogger(__name__)
 
 
-class DetectionWorker(BaseWorker):
+class DetectionWorker(KafkaPipelineWorker):
     """
-    Worker that processes detection jobs from the queue.
+    Worker that processes detection jobs from Kafka.
     
-    Consumes jobs from 'detection' queue, runs YOLO inference,
-    creates segments, and queues next stage (ASR).
+    Consumes from 'pipeline.jobs.detect' topic, runs YOLO inference,
+    creates segments, and publishes next stage to 'pipeline.jobs.asr'.
     """
     
-    queue_name = "detection"
+    topic = PipelineTopics.DETECTION
+    consumer_group = "detection-workers"
+    next_stage_topic = PipelineTopics.ASR
     max_retries = 3
     
     def __init__(self):
@@ -41,15 +45,27 @@ class DetectionWorker(BaseWorker):
         self.minio_service = get_minio_service()
         self.detector = JBIDetector()
     
+    async def is_already_processed(self, job_id: str) -> bool:
+        """Check if detection was already done for this job."""
+        try:
+            job_uuid = UUID(job_id)
+        except ValueError:
+            return False
+        
+        async with async_session() as session:
+            segment_repo = SegmentRepository(session)
+            segments = await segment_repo.get_by_job_id(job_uuid)
+            return len(segments) > 0
+    
     async def process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a detection job.
         
         Args:
-            payload: {"job_id": str, "video_path": str, "video_key": str}
+            payload: {"job_id": str, "video_key": str, "category": str}
             
         Returns:
-            {"segments_detected": int, "confidence": float}
+            {"segments_detected": int, "segment_ids": list, "confidence": float}
         """
         job_id = UUID(payload["job_id"])
         video_key = payload.get("video_key")
@@ -59,13 +75,12 @@ class DetectionWorker(BaseWorker):
         # Update status to DETECTING
         async with async_session() as session:
             job_repo = JobRepository(session)
-            await job_repo.update_status(job_id, "DETECTING")
+            await job_repo.update_status(job_id, JobStatus.DETECTING)
             await session.commit()
         
         # Download video from MinIO
         temp_video = None
         try:
-            # The payload provides 'video_path' which is the MinIO key
             minio_key = video_key or payload.get("video_path")
             
             # If minio_key doesn't look like an absolute local path that exists, download it
@@ -76,7 +91,6 @@ class DetectionWorker(BaseWorker):
                 video_path = str(temp_video)
             else:
                 video_path = minio_key
-
             
             # Run detection (pure ML, no DB)
             segments = await self._run_detection(video_path, job_id)
@@ -86,9 +100,9 @@ class DetectionWorker(BaseWorker):
                 # Update job status and complete
                 async with async_session() as session:
                     job_repo = JobRepository(session)
-                    await job_repo.update_status(job_id, "READY_FOR_ANNOTATION")
+                    await job_repo.update_status(job_id, JobStatus.READY_FOR_ANNOTATION)
                     await session.commit()
-                return {"segments_detected": 0, "confidence": 0}
+                return {"segments_detected": 0, "confidence": 0, "segment_ids": []}
             
             # Crop segments from the original video
             logger.info(f"Cropping {len(segments)} segments for job {job_id}")
@@ -117,14 +131,15 @@ class DetectionWorker(BaseWorker):
                     db_segments.append(db_segment)
                 await segment_repo.create_many(db_segments)
                 await session.commit()
-            
-            # Queue next stage
-            await self._queue_next_stage(job_id, segments)
+                
+                # Collect segment IDs for next stage
+                segment_ids = [str(s.id) for s in db_segments]
             
             avg_confidence = sum(s.confidence for s in segments) / len(segments) if segments else 0
             
             return {
                 "segments_detected": len(segments),
+                "segment_ids": segment_ids,
                 "confidence": avg_confidence
             }
         
@@ -133,7 +148,7 @@ class DetectionWorker(BaseWorker):
             logger.error(f"Detection failed for job {job_id}: {e}")
             async with async_session() as session:
                 job_repo = JobRepository(session)
-                await job_repo.update_status(job_id, "FAILED", error_message=str(e))
+                await job_repo.update_status(job_id, JobStatus.FAILED, error_message=str(e))
                 await session.commit()
             # Re-raise to trigger retry mechanism
             raise
@@ -304,7 +319,6 @@ class DetectionWorker(BaseWorker):
                 output_path = output_dir / f"segment_{i:04d}.mp4"
                 
                 # Build ffmpeg command for cropping
-                # First extract the time segment, then apply bbox crop if available
                 duration = end_time - start_time
                 
                 if bbox and isinstance(bbox, dict):
@@ -370,7 +384,6 @@ class DetectionWorker(BaseWorker):
                     # Upload to MinIO
                     try:
                         minio_key = f"jobs/{job_id}/segments/segment_{i:04d}.mp4"
-                        # Read file and upload as bytes
                         with open(output_path, "rb") as f:
                             file_bytes = f.read()
                         await self.minio_service.upload_file(file_bytes, minio_key)
@@ -385,19 +398,6 @@ class DetectionWorker(BaseWorker):
                 cropped_paths.append(None)
         
         return cropped_paths
-    
-    async def _queue_next_stage(self, job_id: UUID, segments):
-        """Queue ASR stage after detection."""
-        async with async_session() as session:
-            await queue_service.enqueue(
-                queue_name="asr",
-                payload={
-                    "job_id": str(job_id),
-                    "segment_count": len(segments)
-                },
-                db=session
-            )
-            await session.commit()
     
     def _save_temp_video(self, video_data: bytes, job_id: UUID) -> Path:
         """Save video data to temporary file."""
