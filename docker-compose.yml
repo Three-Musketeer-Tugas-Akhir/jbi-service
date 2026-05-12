@@ -144,7 +144,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
       KAFKA_BROKERS: kafka:9092
     depends_on:
       db:
@@ -164,6 +164,8 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   # ── ASR Worker (GPU) ─────────────────────────────────────
@@ -176,7 +178,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
       KAFKA_BROKERS: kafka:9092
     depends_on:
       db:
@@ -196,6 +198,8 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   # ── Cropping Worker (GPU) ────────────────────────────────
@@ -208,7 +212,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
       KAFKA_BROKERS: kafka:9092
     depends_on:
       db:
@@ -228,6 +232,8 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   # ── Reconciliation Job ───────────────────────────────────
@@ -240,7 +246,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/anotasi_db
+      DATABASE_URL: postgresql+asyncpg://postgres:Pastibisa123@db:5432/anotasi_db
       KAFKA_BROKERS: kafka:9092
       RECONCILIATION_INTERVAL_MINUTES: "5"
     depends_on:
@@ -250,6 +256,8 @@ services:
         condition: service_healthy
     volumes:
       - ./model_weights:/app/model_weights
+    healthcheck:
+      disable: true
     restart: unless-stopped
 
   # ── MinIO Object Storage ─────────────────────────────────
