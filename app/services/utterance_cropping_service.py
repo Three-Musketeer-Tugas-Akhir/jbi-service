@@ -114,7 +114,11 @@ class UtteranceCroppingService:
                     f"req_dur={requested_duration:.2f} overlap={right_overlap:.2f}"
                 )
                 
-                if right_overlap <= 0:
+                # Edge case: if relative_start already at or past the end of the CV2 video,
+                # we need to pull everything from the next video (skip Part A)
+                skip_part_a = relative_start >= orig_duration - 0.001
+                
+                if right_overlap <= 0 and not skip_part_a:
                     # ══════════════════════════════════════════════
                     # NORMAL CASE: fits within this CV2 video
                     # Handles: no-trim, trim-in-left, trim-in-right, or both
@@ -168,46 +172,69 @@ class UtteranceCroppingService:
                         next_transcript.video_path, expiry=3600
                     )
                     
-                    # Part A: Current video from relative_start to end
-                    tmp_part_a = f"/tmp/{segment_id}_utt_{utterance_index}_partA.mp4"
-                    success_a = await run_ffmpeg_crop(
-                        input_path=curr_video_url,
-                        output_path=tmp_part_a,
-                        start_time=relative_start,
-                        end_time=orig_duration,
-                        use_input_seeking=True,
-                        config=config
-                    )
+                    # Edge case: if remaining Part A is too small to be a valid video,
+                    # skip Part A and pull the full requested duration from next video
+                    part_a_duration = orig_duration - relative_start
+                    MIN_PART_A_DURATION = 0.05  # ~1.5 frames at 30fps
                     
-                    # Part B: Next video from 0 to clamped_overlap
-                    tmp_part_b = f"/tmp/{segment_id}_utt_{utterance_index}_partB.mp4"
-                    success_b = await run_ffmpeg_crop(
-                        input_path=next_video_url,
-                        output_path=tmp_part_b,
-                        start_time=0.0,
-                        end_time=clamped_overlap,
-                        use_input_seeking=True,
-                        config=config
-                    )
-                    
-                    if not (success_a and success_b):
+                    if part_a_duration < MIN_PART_A_DURATION:
+                        logger.info(
+                            f"Part A too short ({part_a_duration:.3f}s < {MIN_PART_A_DURATION}s), "
+                            f"using next video only for full duration"
+                        )
+                        tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
+                        success = await run_ffmpeg_crop(
+                            input_path=next_video_url,
+                            output_path=tmp_output,
+                            start_time=0.0,
+                            end_time=min(requested_duration, next_duration),
+                            use_input_seeking=True,
+                            config=config
+                        )
+                        if not success:
+                            await _mark_failed(db, edit, utt_list, utt_idx_in_array)
+                            return
+                    else:
+                        # Part A: Current video from relative_start to end
+                        tmp_part_a = f"/tmp/{segment_id}_utt_{utterance_index}_partA.mp4"
+                        success_a = await run_ffmpeg_crop(
+                            input_path=curr_video_url,
+                            output_path=tmp_part_a,
+                            start_time=relative_start,
+                            end_time=orig_duration,
+                            use_input_seeking=True,
+                            config=config
+                        )
+                        
+                        # Part B: Next video from 0 to clamped_overlap
+                        tmp_part_b = f"/tmp/{segment_id}_utt_{utterance_index}_partB.mp4"
+                        success_b = await run_ffmpeg_crop(
+                            input_path=next_video_url,
+                            output_path=tmp_part_b,
+                            start_time=0.0,
+                            end_time=clamped_overlap,
+                            use_input_seeking=True,
+                            config=config
+                        )
+                        
+                        if not (success_a and success_b):
+                            _cleanup_tmp(tmp_part_a, tmp_part_b)
+                            await _mark_failed(db, edit, utt_list, utt_idx_in_array)
+                            return
+                        
+                        # Merge
+                        tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
+                        success_merge = await run_ffmpeg_concat(
+                            input_paths=[tmp_part_a, tmp_part_b],
+                            output_path=tmp_output,
+                            config=config
+                        )
+                        
                         _cleanup_tmp(tmp_part_a, tmp_part_b)
-                        await _mark_failed(db, edit, utt_list, utt_idx_in_array)
-                        return
-                    
-                    # Merge
-                    tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
-                    success_merge = await run_ffmpeg_concat(
-                        input_paths=[tmp_part_a, tmp_part_b],
-                        output_path=tmp_output,
-                        config=config
-                    )
-                    
-                    _cleanup_tmp(tmp_part_a, tmp_part_b)
-                    
-                    if not success_merge:
-                        await _mark_failed(db, edit, utt_list, utt_idx_in_array)
-                        return
+                        
+                        if not success_merge:
+                            await _mark_failed(db, edit, utt_list, utt_idx_in_array)
+                            return
                     
                     # Cascade update the next utterance
                     await _cascade_update_next_utterance(

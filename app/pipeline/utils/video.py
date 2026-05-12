@@ -390,6 +390,15 @@ async def run_ffmpeg_crop(
     
     processor = get_video_processor()
     duration = end_time - start_time
+    # Enforce minimum crop duration to avoid unplayable sub-frame videos
+    MIN_CROP_DURATION = 0.067  # 2 frames at 30fps
+    if duration < MIN_CROP_DURATION:
+        logger.warning(
+            "Crop duration %.3fs below minimum %.3fs; clamping to minimum",
+            duration, MIN_CROP_DURATION
+        )
+        duration = MIN_CROP_DURATION
+        end_time = start_time + duration
     output_file = Path(output_path)
     
     # Use provided config or default
@@ -610,9 +619,58 @@ async def run_ffmpeg_concat(
         
         if proc.returncode != 0:
             stderr_text = stderr.decode('utf-8', errors='replace') if stderr else "Unknown error"
-            logger.error("FFmpeg concat failed: %s", stderr_text)
+            logger.warning("FFmpeg concat demuxer failed: %s", stderr_text)
+            
+            # Fallback: use filter_complex concat (more robust for mixed streams)
+            logger.info("Trying filter_complex concat fallback...")
             _cleanup_file(output_path)
-            return False
+            
+            # Build filter_complex concat command without audio
+            # (avoids audio stream mismatch issues)
+            filter_cmd = [
+                processor._ffmpeg_path,
+                "-y",
+            ]
+            for path in input_paths:
+                filter_cmd.extend(["-i", str(path)])
+            
+            n = len(input_paths)
+            video_inputs = "".join(f"[{i}:v]" for i in range(n))
+            filter_complex = f"{video_inputs}concat=n={n}:v=1:a=0[outv]"
+            
+            filter_cmd.extend([
+                "-filter_complex", filter_complex,
+                "-map", "[outv]",
+                "-c:v", cfg.video_codec,
+                "-crf", str(cfg.video_crf),
+                "-preset", cfg.video_preset,
+                "-an",  # No audio
+                str(output_path)
+            ])
+            
+            proc2 = await asyncio.create_subprocess_exec(
+                *filter_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            try:
+                stdout2, stderr2 = await asyncio.wait_for(
+                    proc2.communicate(),
+                    timeout=timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                logger.error("FFmpeg filter_complex concat timed out")
+                proc2.kill()
+                await proc2.wait()
+                _cleanup_file(output_path)
+                return False
+            
+            if proc2.returncode != 0:
+                stderr2_text = stderr2.decode('utf-8', errors='replace') if stderr2 else "Unknown error"
+                logger.error("FFmpeg filter_complex concat also failed: %s", stderr2_text)
+                _cleanup_file(output_path)
+                return False
         
         output_file = Path(output_path)
         if not output_file.exists() or output_file.stat().st_size == 0:
