@@ -331,7 +331,32 @@ async def _cascade_update_next_utterance(
     2. Clear cropped_video_path so next utterance will be re-cropped
     3. Clear merged_video_path so next utterance will be re-merged
     """
-    # Update AnnotationEdit (draft corrections)
+    # Get the transcript for next utterance
+    transcript_result = await db.execute(
+        select(PipelineTranscript).where(
+            PipelineTranscript.segment_id == segment_id,
+            PipelineTranscript.utterance_index == utterance_index
+        )
+    )
+    transcript = transcript_result.scalar_one_or_none()
+    if not transcript:
+        return
+    
+    # Push start forward
+    old_start = transcript.start
+    new_start = old_start + right_overlap
+    if new_start > old_start:
+        transcript.start = new_start
+        # Ensure start < end
+        if transcript.start >= transcript.end:
+            transcript.start = transcript.end - 0.1
+        
+        # Clear merged video so next load re-merges
+        transcript.merged_video_path = None
+        transcript.merged_video_duration = None
+        transcript.video_n_duration = None
+    
+    # Also update AnnotationEdit (draft corrections) if exists
     edit_result = await db.execute(
         select(AnnotationEdit).where(
             AnnotationEdit.segment_id == segment_id,
@@ -346,47 +371,23 @@ async def _cascade_update_next_utterance(
         
         for i, utt in enumerate(next_utt_list):
             if utt.get("utterance_index") == utterance_index:
-                old_start = utt.get("start", 0.0)
+                old_start_edit = utt.get("start", 0.0)
+                new_start_edit = max(old_start_edit, transcript.start)
                 
-                # Get original start from transcript
-                transcript_result = await db.execute(
-                    select(PipelineTranscript).where(
-                        PipelineTranscript.segment_id == segment_id,
-                        PipelineTranscript.utterance_index == utterance_index
-                    )
-                )
-                transcript = transcript_result.scalar_one_or_none()
-                if transcript:
-                    # Add overlap to the ORIGINAL start to push it forward
-                    new_start = max(old_start, transcript.start + right_overlap)
+                if new_start_edit > old_start_edit:
+                    next_utt_list[i]["start"] = new_start_edit
+                    # Clear cropped_video_path so it will be re-cropped
+                    next_utt_list[i]["cropped_video_path"] = None
+                    # Clear status so it can be edited again
+                    if next_utt_list[i].get("status") == "OK":
+                        next_utt_list[i]["status"] = "DRAFT"
                     
-                    if new_start > old_start:
-                        next_utt_list[i]["start"] = new_start
-                        # Clear cropped_video_path so it will be re-cropped
-                        next_utt_list[i]["cropped_video_path"] = None
-                        # Clear status so it can be edited again
-                        if next_utt_list[i].get("status") == "OK":
-                            next_utt_list[i]["status"] = "DRAFT"
-                        
-                        if next_utt_list[i]["start"] >= next_utt_list[i].get("end", 999):
-                            next_utt_list[i]["start"] = next_utt_list[i]["end"] - 0.1
-                        
-                        next_edit.utterance_corrections = next_utt_list
-                        flag_modified(next_edit, "utterance_corrections")
+                    if next_utt_list[i]["start"] >= next_utt_list[i].get("end", 999):
+                        next_utt_list[i]["start"] = next_utt_list[i]["end"] - 0.1
+                    
+                    next_edit.utterance_corrections = next_utt_list
+                    flag_modified(next_edit, "utterance_corrections")
                 break
-    
-    # Also clear merged_video_path in PipelineTranscript so next load re-merges
-    transcript_result = await db.execute(
-        select(PipelineTranscript).where(
-            PipelineTranscript.segment_id == segment_id,
-            PipelineTranscript.utterance_index == utterance_index
-        )
-    )
-    transcript = transcript_result.scalar_one_or_none()
-    if transcript:
-        transcript.merged_video_path = None
-        transcript.merged_video_duration = None
-        transcript.video_n_duration = None
     
     await db.commit()
 
