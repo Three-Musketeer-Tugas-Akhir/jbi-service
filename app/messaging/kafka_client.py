@@ -70,7 +70,7 @@ class PipelineProducer:
                 "upload_id": upload_id,
             },
         )
-        await self._send(PipelineTopics.DETECTION, message, key=job_id)
+        await self._send(PipelineTopics.DETECTION.value, message, key=job_id)
     
     async def publish_asr_job(
         self,
@@ -88,7 +88,7 @@ class PipelineProducer:
                 "segment_ids": segment_ids or [],
             },
         )
-        await self._send(PipelineTopics.ASR, message, key=job_id)
+        await self._send(PipelineTopics.ASR.value, message, key=job_id)
     
     async def publish_cropping_job(
         self,
@@ -104,7 +104,7 @@ class PipelineProducer:
                 "transcript_count": transcript_count,
             },
         )
-        await self._send(PipelineTopics.CROPPING, message, key=job_id)
+        await self._send(PipelineTopics.CROPPING.value, message, key=job_id)
     
     async def publish_event(
         self,
@@ -123,7 +123,7 @@ class PipelineProducer:
             metadata=metadata or {},
         )
         await self._send(
-            PipelineTopics.EVENTS,
+            PipelineTopics.EVENTS.value,
             event.model_dump(mode="json"),
             key=job_id,
         )
@@ -145,7 +145,7 @@ class PipelineProducer:
             job_id=job_id,
         )
         await self._send(
-            PipelineTopics.DLQ,
+            PipelineTopics.DLQ.value,
             dlq.model_dump(mode="json"),
             key=job_id,
         )

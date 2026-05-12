@@ -41,7 +41,7 @@ class CroppingWorker(KafkaPipelineWorker):
     - Last utterance: extend to video duration or +1s
     """
     
-    topic = PipelineTopics.CROPPING
+    topic = PipelineTopics.CROPPING.value
     consumer_group = "cropping-workers"
     next_stage_topic = None  # Last stage in pipeline
     max_retries = 3

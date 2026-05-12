@@ -199,13 +199,13 @@ class KafkaPipelineWorker(ABC):
     ) -> None:
         """Publish message to next stage topic."""
         try:
-            if self.next_stage_topic == PipelineTopics.ASR:
+            if self.next_stage_topic == PipelineTopics.ASR.value:
                 await pipeline_producer.publish_asr_job(
                     job_id=str(message.job_id),
                     segment_count=result.get("segments_detected", 0),
                     segment_ids=result.get("segment_ids", []),
                 )
-            elif self.next_stage_topic == PipelineTopics.CROPPING:
+            elif self.next_stage_topic == PipelineTopics.CROPPING.value:
                 await pipeline_producer.publish_cropping_job(
                     job_id=str(message.job_id),
                     transcript_count=result.get("transcripts_count"),
@@ -226,7 +226,7 @@ class KafkaPipelineWorker(ABC):
     ) -> None:
         """Ensure next stage is queued for idempotent reprocessing."""
         try:
-            if self.next_stage_topic == PipelineTopics.ASR:
+            if self.next_stage_topic == PipelineTopics.ASR.value:
                 # Check if segments exist but ASR not started
                 async with async_session() as session:
                     from app.repositories.segment_repository import SegmentRepository
@@ -238,7 +238,7 @@ class KafkaPipelineWorker(ABC):
                             segment_count=len(segments),
                             segment_ids=[str(s.id) for s in segments],
                         )
-            elif self.next_stage_topic == PipelineTopics.CROPPING:
+            elif self.next_stage_topic == PipelineTopics.CROPPING.value:
                 # Check if transcripts exist but cropping not started
                 async with async_session() as session:
                     from app.repositories.segment_repository import SegmentRepository

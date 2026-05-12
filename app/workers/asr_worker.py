@@ -33,9 +33,9 @@ class ASRWorker(KafkaPipelineWorker):
     updates segments, and publishes cropping stage to 'pipeline.jobs.crop'.
     """
     
-    topic = PipelineTopics.ASR
+    topic = PipelineTopics.ASR.value
     consumer_group = "asr-workers"
-    next_stage_topic = PipelineTopics.CROPPING
+    next_stage_topic = PipelineTopics.CROPPING.value
     max_retries = 3
     
     async def is_already_processed(self, job_id: str) -> bool:

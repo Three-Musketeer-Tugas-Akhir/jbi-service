@@ -35,9 +35,9 @@ class DetectionWorker(KafkaPipelineWorker):
     creates segments, and publishes next stage to 'pipeline.jobs.asr'.
     """
     
-    topic = PipelineTopics.DETECTION
+    topic = PipelineTopics.DETECTION.value
     consumer_group = "detection-workers"
-    next_stage_topic = PipelineTopics.ASR
+    next_stage_topic = PipelineTopics.ASR.value
     max_retries = 3
     
     def __init__(self):
