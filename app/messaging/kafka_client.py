@@ -34,7 +34,6 @@ class KafkaProducer:
                 key_serializer=lambda k: k.encode("utf-8") if k else None,
                 acks="all",
                 enable_idempotence=True,
-                retries=3,
                 retry_backoff_ms=1000,
             )
             await cls._instance.start()
