@@ -427,6 +427,22 @@ class PipelineTranscript(Base):
         nullable=True,
         comment="MinIO key to WAV audio for this utterance"
     )
+    # Merged video fields (video-editor-sibi style)
+    merged_video_path: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="MinIO key to merged video (utterance N + N+1)"
+    )
+    merged_video_duration: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Duration of merged video in seconds"
+    )
+    video_n_duration: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Duration of original utterance N video (for marker boundary)"
+    )
     status: Mapped[Optional[str]] = mapped_column(
         String(50),
         nullable=True,

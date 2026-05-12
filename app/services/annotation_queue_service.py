@@ -138,7 +138,9 @@ class AnnotationQueueService:
                     "start": t.start,
                     "end": t.end,
                     "confidence": t.confidence,
-                    "video_path": cv2_url
+                    "video_path": cv2_url,
+                    "merged_video_path": t.merged_video_path,
+                    "video_n_duration": t.video_n_duration,
                 })
         
         # Get current utterance corrections from latest edit (if any)

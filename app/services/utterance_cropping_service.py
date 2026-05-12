@@ -5,6 +5,10 @@ Supports Boundary Cross-Cropping & Merging on CV2 Utterance Videos:
 When an utterance's requested end_time exceeds its original CV2 video boundary,
 the service crops the overflow from the NEXT utterance's CV2 video,
 merges both clips, and cascade-updates the next utterance's start time.
+
+VIDEO-EDITOR-SIBI STYLE ADAPTATIONS:
+- start_time must equal orig_start (no trim-in from left)
+- Cascade updates next utterance's merged_video_path so it re-merges on next load
 """
 import logging
 import os
@@ -98,6 +102,16 @@ class UtteranceCroppingService:
                 orig_start = curr_transcript.start
                 orig_end = curr_transcript.end
                 orig_duration = max(0.01, orig_end - orig_start)
+                
+                # VIDEO-EDITOR-SIBI STYLE: start_time must equal orig_start (no trim-in)
+                # Allow tiny tolerance for floating point errors
+                if abs(start_time - orig_start) > 0.01:
+                    logger.warning(
+                        f"Trim-in detected for utt {utterance_index}: "
+                        f"start={start_time:.3f} but orig_start={orig_start:.3f}. "
+                        f"Clamping to orig_start."
+                    )
+                    start_time = orig_start
                 
                 requested_duration = abs(end_time - start_time)
                 relative_start = max(0.0, start_time - orig_start)  # seek into CV2
@@ -300,15 +314,24 @@ class UtteranceCroppingService:
                 except Exception:
                     pass
 
+
 async def _mark_failed(db, edit, utt_list, utt_idx):
     utt_list[utt_idx]["status"] = "FAILED"
     edit.utterance_corrections = utt_list
     flag_modified(edit, "utterance_corrections")
     await db.commit()
 
+
 async def _cascade_update_next_utterance(
     db, segment_id: uuid.UUID, utterance_index: int, right_overlap: float
 ):
+    """Cascade update next utterance after trim — SIBI style.
+    
+    1. Push next utterance's start forward by the overlap amount
+    2. Clear cropped_video_path so next utterance will be re-cropped
+    3. Clear merged_video_path so next utterance will be re-merged
+    """
+    # Update AnnotationEdit (draft corrections)
     edit_result = await db.execute(
         select(AnnotationEdit).where(
             AnnotationEdit.segment_id == segment_id,
@@ -318,35 +341,55 @@ async def _cascade_update_next_utterance(
     )
     next_edit = edit_result.scalars().first()
     
-    if not next_edit or not next_edit.utterance_corrections:
-        return
-    
-    next_utt_list = list(next_edit.utterance_corrections)
-    
-    for i, utt in enumerate(next_utt_list):
-        if utt.get("utterance_index") == utterance_index:
-            old_start = utt.get("start", 0.0)
-            
-            # Get original start from transcript
-            transcript_result = await db.execute(
-                select(PipelineTranscript).where(
-                    PipelineTranscript.segment_id == segment_id,
-                    PipelineTranscript.utterance_index == utterance_index
-                )
-            )
-            transcript = transcript_result.scalar_one_or_none()
-            if transcript:
-                # Add overlap to the ORIGINAL start to push it forward
-                new_start = max(old_start, transcript.start + right_overlap)
+    if next_edit and next_edit.utterance_corrections:
+        next_utt_list = list(next_edit.utterance_corrections)
+        
+        for i, utt in enumerate(next_utt_list):
+            if utt.get("utterance_index") == utterance_index:
+                old_start = utt.get("start", 0.0)
                 
-                if new_start > old_start:
-                    next_utt_list[i]["start"] = new_start
-                    if next_utt_list[i]["start"] >= next_utt_list[i].get("end", 999):
-                        next_utt_list[i]["start"] = next_utt_list[i]["end"] - 0.1
+                # Get original start from transcript
+                transcript_result = await db.execute(
+                    select(PipelineTranscript).where(
+                        PipelineTranscript.segment_id == segment_id,
+                        PipelineTranscript.utterance_index == utterance_index
+                    )
+                )
+                transcript = transcript_result.scalar_one_or_none()
+                if transcript:
+                    # Add overlap to the ORIGINAL start to push it forward
+                    new_start = max(old_start, transcript.start + right_overlap)
                     
-                    next_edit.utterance_corrections = next_utt_list
-                    flag_modified(next_edit, "utterance_corrections")
-            break
+                    if new_start > old_start:
+                        next_utt_list[i]["start"] = new_start
+                        # Clear cropped_video_path so it will be re-cropped
+                        next_utt_list[i]["cropped_video_path"] = None
+                        # Clear status so it can be edited again
+                        if next_utt_list[i].get("status") == "OK":
+                            next_utt_list[i]["status"] = "DRAFT"
+                        
+                        if next_utt_list[i]["start"] >= next_utt_list[i].get("end", 999):
+                            next_utt_list[i]["start"] = next_utt_list[i]["end"] - 0.1
+                        
+                        next_edit.utterance_corrections = next_utt_list
+                        flag_modified(next_edit, "utterance_corrections")
+                break
+    
+    # Also clear merged_video_path in PipelineTranscript so next load re-merges
+    transcript_result = await db.execute(
+        select(PipelineTranscript).where(
+            PipelineTranscript.segment_id == segment_id,
+            PipelineTranscript.utterance_index == utterance_index
+        )
+    )
+    transcript = transcript_result.scalar_one_or_none()
+    if transcript:
+        transcript.merged_video_path = None
+        transcript.merged_video_duration = None
+        transcript.video_n_duration = None
+    
+    await db.commit()
+
 
 def _cleanup_tmp(*paths):
     for path in paths:

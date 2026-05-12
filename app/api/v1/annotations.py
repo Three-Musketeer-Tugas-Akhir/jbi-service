@@ -253,6 +253,59 @@ async def crop_utterance_physically(
     return {"status": "processing", "message": "Physical cropping started in background"}
 
 
+@router.get(
+    "/segments/{segment_id}/utterances/{utterance_index}/merged-video",
+    response_model=dict,
+    summary="Get merged video for utterance",
+    description="Returns a merged video (utterance N + N+1) for seamless annotation. Creates the merge if it doesn't exist."
+)
+async def get_merged_video_for_utterance(
+    segment_id: UUID,
+    utterance_index: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "annotator"))
+):
+    """
+    Get merged video for an utterance (video-editor-sibi style).
+    
+    The merged video concatenates utterance N with utterance N+1 so the annotator
+    can see the transition and decide where utterance N should end.
+    
+    If the merge already exists, returns the cached video.
+    If not, creates the merge on-the-fly and caches it.
+    """
+    from app.services.annotation_queue_service import AnnotationQueueService
+    from app.services.utterance_merge_service import UtteranceMergeService
+    from app.db.models.pipeline import PipelineSegment
+    from sqlalchemy import select
+    
+    # Verify assignment
+    queue_service = AnnotationQueueService(db)
+    queue_entry = await queue_service.queue_repo.get_by_segment(segment_id)
+    if not queue_entry or queue_entry.annotator_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Segment not assigned to you")
+    
+    # Get job_id
+    segment_result = await db.execute(
+        select(PipelineSegment).where(PipelineSegment.id == segment_id)
+    )
+    segment = segment_result.scalar_one_or_none()
+    if not segment:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    
+    # Get or create merged video
+    result = await UtteranceMergeService.get_or_create_merged_video(
+        job_id=segment.job_id,
+        segment_id=segment_id,
+        utterance_index=utterance_index
+    )
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Could not create merged video")
+    
+    return result
+
+
 @router.post(
     "/{segment_id}/draft",
     response_model=SaveDraftResponse,
@@ -285,16 +338,17 @@ async def save_annotation_draft(
     )
     existing_edit = result.scalars().first()
     
-    if existing_edit and existing_edit.utterance_corrections:
-        existing_map = {u.get("utterance_index"): u for u in existing_edit.utterance_corrections}
-        for incoming_utt in draft_data.utterances:
-            ext_utt = existing_map.get(incoming_utt.utterance_index)
-            if ext_utt and ext_utt.get("status") == "OK":
-                if ext_utt.get("start") != incoming_utt.start or ext_utt.get("end") != incoming_utt.end:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Cannot modify utterance {incoming_utt.utterance_index} because it is already locked (OK)."
-                    )
+    # NOTE: Lock removed — annotators can always revise (human error handling)
+    # if existing_edit and existing_edit.utterance_corrections:
+    #     existing_map = {u.get("utterance_index"): u for u in existing_edit.utterance_corrections}
+    #     for incoming_utt in draft_data.utterances:
+    #         ext_utt = existing_map.get(incoming_utt.utterance_index)
+    #         if ext_utt and ext_utt.get("status") == "OK":
+    #             if ext_utt.get("start") != incoming_utt.start or ext_utt.get("end") != incoming_utt.end:
+    #                 raise HTTPException(
+    #                     status_code=400,
+    #                     detail=f"Cannot modify utterance {incoming_utt.utterance_index} because it is already locked (OK)."
+    #                 )
     
     service = AnnotationEditService(db)
     draft = await service.create_draft(
