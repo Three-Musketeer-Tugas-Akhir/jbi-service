@@ -173,27 +173,64 @@ class UtteranceCroppingService:
                     )
                     
                     # Edge case: if remaining Part A is too small to be a valid video,
-                    # skip Part A and pull the full requested duration from next video
+                    # use video-editor-sibi approach: merge full videos first, then crop.
+                    # This avoids concatenating a tiny partial clip which FFmpeg rejects.
                     part_a_duration = orig_duration - relative_start
                     MIN_PART_A_DURATION = 0.05  # ~1.5 frames at 30fps
                     
                     if part_a_duration < MIN_PART_A_DURATION:
                         logger.info(
                             f"Part A too short ({part_a_duration:.3f}s < {MIN_PART_A_DURATION}s), "
-                            f"using next video only for full duration"
+                            f"using merge-then-crop approach (video-editor-sibi style)"
                         )
-                        tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
-                        success = await run_ffmpeg_crop(
-                            input_path=next_video_url,
-                            output_path=tmp_output,
-                            start_time=0.0,
-                            end_time=min(requested_duration, next_duration),
-                            use_input_seeking=True,
+                        
+                        # Approach: concat FULL current + FULL next video, then crop from merged.
+                        # This is how video-editor-sibi handles cross-video trim seamlessly.
+                        tmp_merged = f"/tmp/{segment_id}_utt_{utterance_index}_merged.mp4"
+                        success_merge = await run_ffmpeg_concat(
+                            input_paths=[curr_video_url, next_video_url],
+                            output_path=tmp_merged,
                             config=config
                         )
-                        if not success:
-                            await _mark_failed(db, edit, utt_list, utt_idx_in_array)
-                            return
+                        
+                        tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
+                        if success_merge:
+                            # Crop from the merged file: [relative_start, relative_start + requested]
+                            # Cap at what merged can provide (part_a_duration + next_duration)
+                            crop_end = min(
+                                relative_start + requested_duration,
+                                part_a_duration + next_duration
+                            )
+                            success = await run_ffmpeg_crop(
+                                input_path=tmp_merged,
+                                output_path=tmp_output,
+                                start_time=relative_start,
+                                end_time=crop_end,
+                                use_input_seeking=True,
+                                config=config
+                            )
+                            _cleanup_tmp(tmp_merged)
+                            if not success:
+                                await _mark_failed(db, edit, utt_list, utt_idx_in_array)
+                                return
+                        else:
+                            # Fallback: if even full-video concat fails, use next video only
+                            _cleanup_tmp(tmp_merged)
+                            logger.warning(
+                                "Merge-then-crop failed for tiny Part A, "
+                                "falling back to next video only"
+                            )
+                            success = await run_ffmpeg_crop(
+                                input_path=next_video_url,
+                                output_path=tmp_output,
+                                start_time=0.0,
+                                end_time=min(requested_duration, next_duration),
+                                use_input_seeking=True,
+                                config=config
+                            )
+                            if not success:
+                                await _mark_failed(db, edit, utt_list, utt_idx_in_array)
+                                return
                     else:
                         # Part A: Current video from relative_start to end
                         tmp_part_a = f"/tmp/{segment_id}_utt_{utterance_index}_partA.mp4"
