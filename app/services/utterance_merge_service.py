@@ -199,6 +199,87 @@ class UtteranceMergeService:
                 logger.info(f"Cleared merged video for {segment_id} utt {utterance_index}")
 
 
+    @staticmethod
+    async def premerge_all_for_job(job_id: uuid.UUID) -> dict:
+        """Pre-merge all utterance pairs (N + N+1) for a job after CV2 completes.
+        
+        This is a background task that iterates all utterances in a job
+        and calls get_or_create_merged_video() for each pair.
+        
+        Args:
+            job_id: The pipeline job ID
+            
+        Returns:
+            dict with total, created, skipped counts
+        """
+        logger.info(f"Starting pre-merge for job {job_id}")
+        
+        async with async_session_maker() as db:
+            from app.db.models.pipeline import PipelineSegment, PipelineTranscript
+            
+            # Fetch all segments with transcripts for this job
+            result = await db.execute(
+                select(PipelineSegment)
+                .where(PipelineSegment.job_id == job_id)
+                .order_by(PipelineSegment.segment_index.asc())
+            )
+            segments = result.scalars().all()
+            
+            # Flatten all transcripts ordered by segment_index, utterance_index
+            all_transcripts = []
+            for seg in segments:
+                seg_transcripts = await db.execute(
+                    select(PipelineTranscript)
+                    .where(PipelineTranscript.segment_id == seg.id)
+                    .order_by(PipelineTranscript.utterance_index.asc())
+                )
+                all_transcripts.extend(seg_transcripts.scalars().all())
+            
+            total_pairs = max(0, len(all_transcripts) - 1)
+            created = 0
+            skipped = 0
+            failed = 0
+            
+            logger.info(f"Job {job_id}: {len(all_transcripts)} utterances, {total_pairs} pairs to pre-merge")
+            
+            for i, transcript in enumerate(all_transcripts):
+                # Skip the last utterance (no N+1 to merge with)
+                if i >= len(all_transcripts) - 1:
+                    break
+                    
+                try:
+                    result = await UtteranceMergeService.get_or_create_merged_video(
+                        job_id=job_id,
+                        segment_id=transcript.segment_id,
+                        utterance_index=transcript.utterance_index
+                    )
+                    if result:
+                        if result.get("is_single_video"):
+                            skipped += 1
+                        else:
+                            created += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    logger.warning(
+                        f"Pre-merge failed for job {job_id} utt {transcript.utterance_index}: {e}"
+                    )
+                    failed += 1
+            
+            logger.info(
+                f"Pre-merge complete for job {job_id}: "
+                f"{created} created, {skipped} skipped (single), {failed} failed"
+            )
+            
+            return {
+                "job_id": str(job_id),
+                "total_pairs": total_pairs,
+                "created": created,
+                "skipped": skipped,
+                "failed": failed,
+            }
+
+
 async def _download_file(url: str, dest_path: str) -> None:
     """Download file from URL to local path."""
     async with httpx.AsyncClient() as client:

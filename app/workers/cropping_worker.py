@@ -187,6 +187,22 @@ class CroppingWorker(KafkaPipelineWorker):
                     "Job %s voice annotation init failed (non-blocking): %s",
                     job_id, str(e)
                 )
+            
+            # Pre-merge all utterance pairs (N + N+1) in background.
+            # This ensures merged videos are ready before annotators open the job.
+            # Non-blocking: if it fails, on-demand merge in annotation still works.
+            try:
+                import asyncio
+                from app.services.utterance_merge_service import UtteranceMergeService
+                asyncio.create_task(
+                    UtteranceMergeService.premerge_all_for_job(UUID(job_id))
+                )
+                logger.info("Job %s pre-merge task spawned in background", job_id)
+            except Exception as e:
+                logger.warning(
+                    "Job %s pre-merge spawn failed (non-blocking): %s",
+                    job_id, str(e)
+                )
         
         return {
             "job_id": job_id,
