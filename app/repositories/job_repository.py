@@ -94,6 +94,50 @@ class JobRepository:
             return True
         return False
     
+    async def update_premerge_progress(
+        self,
+        job_id: UUID,
+        status: str,
+        total_pairs: int = 0,
+        completed_pairs: int = 0,
+        failed_pairs: int = 0,
+        batches: Optional[list] = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        """Update pre-merge progress tracking.
+        
+        Args:
+            job_id: Job UUID
+            status: Pre-merge status (PENDING, RUNNING, COMPLETED, FAILED)
+            total_pairs: Total pairs to merge
+            completed_pairs: Pairs successfully merged
+            failed_pairs: Pairs that failed
+            batches: Batch-level detail list
+            error: Error message if failed
+            
+        Returns:
+            True if job was found and updated
+        """
+        from datetime import datetime
+        
+        job = await self.get_by_id(job_id)
+        if job:
+            job.premerge_status = status
+            job.premerge_total_pairs = total_pairs
+            job.premerge_completed_pairs = completed_pairs
+            job.premerge_failed_pairs = failed_pairs
+            if batches is not None:
+                job.premerge_batches = batches
+            if error:
+                job.premerge_error = error
+            if status == "RUNNING" and not job.premerge_started_at:
+                job.premerge_started_at = datetime.utcnow()
+            if status in ("COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED"):
+                job.premerge_completed_at = datetime.utcnow()
+            await self.db.flush()
+            return True
+        return False
+    
     async def update_curation_status(
         self,
         job_id: UUID,

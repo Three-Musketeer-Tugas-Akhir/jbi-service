@@ -127,6 +127,45 @@ class PipelineJob(Base):
         comment="User who cancelled the job"
     )
     
+    # Pre-merge tracking (utterance N + N+1 merge status)
+    premerge_status: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="Pre-merge status: PENDING, RUNNING, COMPLETED, FAILED"
+    )
+    premerge_total_pairs: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Total utterance pairs to pre-merge"
+    )
+    premerge_completed_pairs: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Pairs successfully merged"
+    )
+    premerge_failed_pairs: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="Pairs that failed to merge"
+    )
+    premerge_started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When pre-merge started"
+    )
+    premerge_completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When pre-merge finished"
+    )
+    premerge_batches: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Batch-level detail: [{batch_index, segment_index, status, pairs_count, merged_count, failed_count, errors, started_at, completed_at}]"
+    )
+    premerge_error: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Error message if pre-merge failed"
+    )
+    
     # Relationships
     dataset: Mapped[Optional["Dataset"]] = relationship(
         "Dataset",

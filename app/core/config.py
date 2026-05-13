@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 3
     cleanup_interval_minutes: int = 30
 
+    # --- Pre-merge Configuration ---
+    premerge_max_concurrent_segments: int = 5  # Dev: 5, Prod: 2
+    premerge_segment_interval_seconds: int = 0  # Dev: 0, Prod: 300 (5 min)
+    premerge_large_segment_threshold: int = 50  # Split segment if > 50 utterances
+    premerge_large_segment_subbatch_size: int = 20  # Sub-batch size for large segments
+
     # --- Logging ---
     log_level: str = "INFO"
 

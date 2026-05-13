@@ -10,11 +10,13 @@ When an annotator trims utterance N:
   - Remainder (end_time → end) → overwrite utterance N+1 video
   - Clear merged_video_path from utterance N so next load re-merges
 """
+import asyncio
 import logging
 import os
 import tempfile
 import uuid
-from typing import Optional, Tuple
+from datetime import datetime
+from typing import Optional, Tuple, List, Dict, Any
 
 import httpx
 
@@ -25,6 +27,7 @@ from app.db.session import async_session_maker
 from app.db.models.pipeline import PipelineJob, PipelineSegment, PipelineTranscript
 from app.services.minio_service import get_minio_service
 from app.pipeline.utils.video import run_ffmpeg_concat, FFmpegConfig
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -203,21 +206,44 @@ class UtteranceMergeService:
     async def premerge_all_for_job(job_id: uuid.UUID) -> dict:
         """Pre-merge all utterance pairs (N + N+1) for a job after CV2 completes.
         
-        This is a background task that iterates all utterances in a job
-        and calls get_or_create_merged_video() for each pair.
+        Uses per-segment batching with configurable concurrency:
+        - Each segment = one batch (or sub-batches for large segments)
+        - Process up to N segments concurrently (config: premerge_max_concurrent_segments)
+        - Wait interval between waves (config: premerge_segment_interval_seconds)
+        - Progress tracked in PipelineJob.premerge_* fields
         
         Args:
             job_id: The pipeline job ID
             
         Returns:
-            dict with total, created, skipped counts
+            dict with total, created, skipped, failed counts
         """
         logger.info(f"Starting pre-merge for job {job_id}")
         
+        from app.repositories.job_repository import JobRepository
+        
+        # Config
+        max_concurrent = settings.premerge_max_concurrent_segments
+        interval_seconds = settings.premerge_segment_interval_seconds
+        large_threshold = settings.premerge_large_segment_threshold
+        subbatch_size = settings.premerge_large_segment_subbatch_size
+        
         async with async_session_maker() as db:
-            from app.db.models.pipeline import PipelineSegment, PipelineTranscript
+            job_repo = JobRepository(db)
             
-            # Fetch all segments with transcripts for this job
+            # Initialize premerge status
+            await job_repo.update_premerge_progress(
+                job_id=job_id,
+                status="RUNNING",
+                total_pairs=0,
+                completed_pairs=0,
+                failed_pairs=0,
+                batches=[],
+                error=None,
+            )
+            await db.commit()
+            
+            # Fetch all segments with transcripts
             result = await db.execute(
                 select(PipelineSegment)
                 .where(PipelineSegment.job_id == job_id)
@@ -225,59 +251,237 @@ class UtteranceMergeService:
             )
             segments = result.scalars().all()
             
-            # Flatten all transcripts ordered by segment_index, utterance_index
-            all_transcripts = []
+            # Build batches: each segment = one or more batches
+            # First pass: count pairs per segment to determine total_batches
+            seg_batch_counts: Dict[int, int] = {}  # segment_index -> total_batches
+            
             for seg in segments:
                 seg_transcripts = await db.execute(
                     select(PipelineTranscript)
                     .where(PipelineTranscript.segment_id == seg.id)
                     .order_by(PipelineTranscript.utterance_index.asc())
                 )
-                all_transcripts.extend(seg_transcripts.scalars().all())
-            
-            total_pairs = max(0, len(all_transcripts) - 1)
-            created = 0
-            skipped = 0
-            failed = 0
-            
-            logger.info(f"Job {job_id}: {len(all_transcripts)} utterances, {total_pairs} pairs to pre-merge")
-            
-            for i, transcript in enumerate(all_transcripts):
-                # Skip the last utterance (no N+1 to merge with)
-                if i >= len(all_transcripts) - 1:
-                    break
-                    
-                try:
-                    result = await UtteranceMergeService.get_or_create_merged_video(
-                        job_id=job_id,
-                        segment_id=transcript.segment_id,
-                        utterance_index=transcript.utterance_index
-                    )
-                    if result:
-                        if result.get("is_single_video"):
-                            skipped += 1
-                        else:
-                            created += 1
+                transcripts = seg_transcripts.scalars().all()
+                
+                seg_pairs = []
+                for i in range(len(transcripts)):
+                    if i < len(transcripts) - 1:
+                        seg_pairs.append({
+                            "segment_id": str(transcripts[i].segment_id),
+                            "utterance_index": transcripts[i].utterance_index,
+                        })
+                
+                if seg_pairs:
+                    if len(seg_pairs) > large_threshold:
+                        seg_batch_counts[seg.segment_index] = max(1, (len(seg_pairs) + subbatch_size - 1) // subbatch_size)
                     else:
-                        failed += 1
-                except Exception as e:
-                    logger.warning(
-                        f"Pre-merge failed for job {job_id} utt {transcript.utterance_index}: {e}"
+                        seg_batch_counts[seg.segment_index] = 1
+                else:
+                    seg_batch_counts[seg.segment_index] = 0
+            
+            # Second pass: build batch metadata
+            batches: List[Dict[str, Any]] = []
+            batch_index = 0
+            total_pairs = 0
+            
+            for seg in segments:
+                seg_transcripts = await db.execute(
+                    select(PipelineTranscript)
+                    .where(PipelineTranscript.segment_id == seg.id)
+                    .order_by(PipelineTranscript.utterance_index.asc())
+                )
+                transcripts = seg_transcripts.scalars().all()
+                
+                seg_pairs = []
+                for i in range(len(transcripts)):
+                    if i < len(transcripts) - 1:
+                        seg_pairs.append({
+                            "segment_id": str(transcripts[i].segment_id),
+                            "utterance_index": transcripts[i].utterance_index,
+                        })
+                
+                total_seg_batches = seg_batch_counts.get(seg.segment_index, 0)
+                
+                if len(seg_pairs) > large_threshold:
+                    sub_idx = 0
+                    for start in range(0, len(seg_pairs), subbatch_size):
+                        end = min(start + subbatch_size, len(seg_pairs))
+                        sub_pairs = seg_pairs[start:end]
+                        batches.append({
+                            "segment_id": str(seg.id),
+                            "segment_code": f"S{seg.segment_index + 1}",
+                            "batch_index": sub_idx,
+                            "total_batches": total_seg_batches,
+                            "utterance_indices": [p["utterance_index"] for p in sub_pairs],
+                            "status": "PENDING",
+                            "pairs": sub_pairs,
+                            "pairs_count": len(sub_pairs),
+                            "merged_count": 0,
+                            "failed_count": 0,
+                            "error": None,
+                            "started_at": None,
+                            "completed_at": None,
+                        })
+                        total_pairs += len(sub_pairs)
+                        batch_index += 1
+                        sub_idx += 1
+                else:
+                    if seg_pairs:
+                        batches.append({
+                            "segment_id": str(seg.id),
+                            "segment_code": f"S{seg.segment_index + 1}",
+                            "batch_index": 0,
+                            "total_batches": total_seg_batches,
+                            "utterance_indices": [p["utterance_index"] for p in seg_pairs],
+                            "status": "PENDING",
+                            "pairs": seg_pairs,
+                            "pairs_count": len(seg_pairs),
+                            "merged_count": 0,
+                            "failed_count": 0,
+                            "error": None,
+                            "started_at": None,
+                            "completed_at": None,
+                        })
+                        total_pairs += len(seg_pairs)
+                        batch_index += 1
+            
+            logger.info(
+                f"Job {job_id}: {len(segments)} segments, {total_pairs} pairs, "
+                f"{len(batches)} batches, max_concurrent={max_concurrent}"
+            )
+            
+            # Save initial batch plan
+            await job_repo.update_premerge_progress(
+                job_id=job_id,
+                status="RUNNING",
+                total_pairs=total_pairs,
+                completed_pairs=0,
+                failed_pairs=0,
+                batches=batches,
+            )
+            await db.commit()
+        
+        # Process batches with semaphore-controlled concurrency
+        semaphore = asyncio.Semaphore(max_concurrent)
+        completed_pairs = 0
+        failed_pairs = 0
+        
+        async def process_batch(batch: Dict[str, Any]) -> None:
+            nonlocal completed_pairs, failed_pairs
+            async with semaphore:
+                batch["status"] = "RUNNING"
+                batch["started_at"] = datetime.utcnow().isoformat()
+                
+                merged_count = 0
+                failed_count = 0
+                errors = []
+                
+                for pair in batch["pairs"]:
+                    try:
+                        result = await UtteranceMergeService.get_or_create_merged_video(
+                            job_id=job_id,
+                            segment_id=uuid.UUID(pair["segment_id"]),
+                            utterance_index=pair["utterance_index"],
+                        )
+                        if result:
+                            merged_count += 1
+                        else:
+                            failed_count += 1
+                            errors.append(f"utt_{pair['utterance_index']}: returned None")
+                    except Exception as e:
+                        failed_count += 1
+                        errors.append(f"utt_{pair['utterance_index']}: {str(e)}")
+                        logger.warning(
+                            f"Pre-merge failed for job {job_id} "
+                            f"segment {batch['segment_code']} utt {pair['utterance_index']}: {e}"
+                        )
+                
+                batch["status"] = "COMPLETED" if failed_count == 0 else "FAILED"
+                batch["completed_at"] = datetime.utcnow().isoformat()
+                batch["merged_count"] = merged_count
+                batch["failed_count"] = failed_count
+                batch["error"] = "; ".join(errors) if errors else None
+                
+                completed_pairs += merged_count
+                failed_pairs += failed_count
+                
+                # Update progress in DB
+                async with async_session_maker() as progress_db:
+                    progress_repo = JobRepository(progress_db)
+                    await progress_repo.update_premerge_progress(
+                        job_id=job_id,
+                        status="RUNNING",
+                        total_pairs=total_pairs,
+                        completed_pairs=completed_pairs,
+                        failed_pairs=failed_pairs,
+                        batches=batches,
                     )
-                    failed += 1
+                    await progress_db.commit()
+                
+                logger.info(
+                    f"Job {job_id} batch {batch['batch_index']} (seg {batch['segment_code']}): "
+                    f"{merged_count}/{batch['pairs_count']} done, {failed_count} failed"
+                )
+        
+        try:
+            # Process all batches with optional interval between waves
+            if interval_seconds > 0:
+                # Process in waves of max_concurrent batches
+                for i in range(0, len(batches), max_concurrent):
+                    wave = batches[i:i + max_concurrent]
+                    await asyncio.gather(*[process_batch(b) for b in wave])
+                    if i + max_concurrent < len(batches):
+                        logger.info(
+                            f"Job {job_id}: wave complete, sleeping {interval_seconds}s "
+                            f"before next wave"
+                        )
+                        await asyncio.sleep(interval_seconds)
+            else:
+                # No interval — process all with semaphore limiting
+                await asyncio.gather(*[process_batch(b) for b in batches])
+            
+            # Mark completed
+            async with async_session_maker() as db:
+                job_repo = JobRepository(db)
+                final_status = "COMPLETED" if failed_pairs == 0 else "COMPLETED_WITH_ERRORS"
+                await job_repo.update_premerge_progress(
+                    job_id=job_id,
+                    status=final_status,
+                    total_pairs=total_pairs,
+                    completed_pairs=completed_pairs,
+                    failed_pairs=failed_pairs,
+                    batches=batches,
+                )
+                await db.commit()
             
             logger.info(
                 f"Pre-merge complete for job {job_id}: "
-                f"{created} created, {skipped} skipped (single), {failed} failed"
+                f"{completed_pairs} merged, {failed_pairs} failed"
             )
             
             return {
                 "job_id": str(job_id),
                 "total_pairs": total_pairs,
-                "created": created,
-                "skipped": skipped,
-                "failed": failed,
+                "completed": completed_pairs,
+                "failed": failed_pairs,
+                "batches": len(batches),
             }
+            
+        except Exception as e:
+            logger.exception(f"Pre-merge crashed for job {job_id}: {e}")
+            async with async_session_maker() as db:
+                job_repo = JobRepository(db)
+                await job_repo.update_premerge_progress(
+                    job_id=job_id,
+                    status="FAILED",
+                    total_pairs=total_pairs,
+                    completed_pairs=completed_pairs,
+                    failed_pairs=failed_pairs,
+                    batches=batches,
+                    error=str(e),
+                )
+                await db.commit()
+            raise
 
 
 async def _download_file(url: str, dest_path: str) -> None:
