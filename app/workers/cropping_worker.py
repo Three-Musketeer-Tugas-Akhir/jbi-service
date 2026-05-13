@@ -194,7 +194,6 @@ class CroppingWorker(KafkaPipelineWorker):
             try:
                 import asyncio
                 from app.services.utterance_merge_service import UtteranceMergeService
-                from app.repositories.job_repository import JobRepository
                 
                 # Mark pre-merge as PENDING immediately so it shows up in the queue
                 # even before the background task starts.
