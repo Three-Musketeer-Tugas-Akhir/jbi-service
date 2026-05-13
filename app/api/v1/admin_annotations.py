@@ -52,7 +52,7 @@ async def assign_segments_to_annotator(
             # Check if segment exists
             segment = await segment_repo.get_by_id(segment_id)
             if not segment:
-                errors.append({"segment_id": str(segment_id), "error": "Segment not found"})
+                errors.append({"segment_id": str(segment_id), "error": "Segment tidak ditemukan"})
                 continue
             
             # Check if already in queue
@@ -60,7 +60,7 @@ async def assign_segments_to_annotator(
             if existing:
                 skipped.append({
                     "segment_id": str(segment_id),
-                    "reason": "Already in queue",
+                    "reason": "Sudah ada di antrean",
                     "current_annotator": str(existing.annotator_id),
                     "status": existing.status
                 })
@@ -145,7 +145,7 @@ async def assign_job_to_annotator(
     if not unassigned_segments:
         return {
             "success": False,
-            "message": "No unassigned segments found for this job.",
+            "message": "Tidak ada segment yang belum di-assign untuk job ini.",
             "assigned_count": 0
         }
     
@@ -167,7 +167,7 @@ async def assign_job_to_annotator(
     
     return {
         "success": True,
-        "message": f"Successfully assigned {len(assigned)} segments to annotator.",
+        "message": f"Berhasil meng-assign {len(assigned)} segment ke annotator.",
         "assigned_count": len(assigned),
         "segment_ids": assigned
     }
@@ -252,21 +252,21 @@ async def reassign_job_to_annotator(
     # Verify job exists and is ready for annotation
     job = await db.get(PipelineJob, job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Job tidak ditemukan")
     
     if job.status != JobStatus.READY_FOR_ANNOTATION:
         raise HTTPException(
             status_code=400,
-            detail=f"Job must be in '{JobStatus.READY_FOR_ANNOTATION}' status to reassign. Current status: {job.status}"
+            detail=f"Job harus berstatus '{JobStatus.READY_FOR_ANNOTATION}' untuk di-reassign. Status saat ini: {job.status}"
         )
     
     # Verify annotator exists and has annotator role
     annotator = await db.get(User, annotator_id)
     if not annotator:
-        raise HTTPException(status_code=404, detail="Annotator not found")
+        raise HTTPException(status_code=404, detail="Annotator tidak ditemukan")
     
     if not annotator.has_any_role(["annotator", "admin"]):
-        raise HTTPException(status_code=400, detail="User must be an annotator or admin")
+        raise HTTPException(status_code=400, detail="User harus berperan sebagai annotator atau admin")
     
     # Find all queue entries for this job's segments
     queue_repo = AnnotationQueueRepository(db)
@@ -275,7 +275,7 @@ async def reassign_job_to_annotator(
     if not queue_entries:
         raise HTTPException(
             status_code=400,
-            detail="No assigned segments found for this job. Use /assign-job to assign first."
+            detail="Tidak ada segment yang di-assign untuk job ini. Gunakan /assign-job untuk assign terlebih dahulu."
         )
     
     reassigned = []
@@ -295,7 +295,7 @@ async def reassign_job_to_annotator(
     
     return {
         "success": True,
-        "message": f"Successfully reassigned {len(reassigned)} segments to annotator {annotator.email}.",
+        "message": f"Berhasil meng-reassign {len(reassigned)} segment ke annotator {annotator.email}.",
         "reassigned_count": len(reassigned),
         "job_id": str(job_id),
         "new_annotator_id": str(annotator_id),
