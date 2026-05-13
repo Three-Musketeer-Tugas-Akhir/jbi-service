@@ -936,6 +936,49 @@ async def create_job_from_url_pipeline(
 
 
 @router.get(
+    "/pipeline/jobs/premerge-queue",
+    summary="List jobs in pre-merge queue",
+    tags=["Pipeline Jobs"],
+)
+async def get_premerge_queue(
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository),
+):
+    """List all jobs that are currently being pre-merged or pending pre-merge."""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    from sqlalchemy import select
+    from app.db.models.pipeline import PipelineJob
+    
+    result = await db.execute(
+        select(PipelineJob)
+        .where(PipelineJob.premerge_status.in_(["PENDING", "RUNNING"]))
+        .order_by(PipelineJob.premerge_started_at.desc())
+    )
+    jobs = result.scalars().all()
+    
+    return {
+        "jobs": [
+            {
+                "job_id": str(j.id),
+                "premerge_status": j.premerge_status,
+                "premerge_total_pairs": j.premerge_total_pairs or 0,
+                "premerge_completed_pairs": j.premerge_completed_pairs or 0,
+                "premerge_failed_pairs": j.premerge_failed_pairs or 0,
+                "premerge_started_at": j.premerge_started_at.isoformat() if j.premerge_started_at else None,
+                "premerge_completed_at": j.premerge_completed_at.isoformat() if j.premerge_completed_at else None,
+                "premerge_batches": j.premerge_batches or [],
+                "premerge_error": j.premerge_error,
+            }
+            for j in jobs
+        ],
+        "total": len(jobs),
+    }
+
+
+@router.get(
     "/pipeline/jobs/{job_id}",
     response_model=JobStatusDetailResponse,
     summary="Get job status and details (new pipeline)",
@@ -2244,44 +2287,3 @@ async def trigger_premerge(
     }
 
 
-@router.get(
-    "/pipeline/jobs/premerge-queue",
-    summary="List jobs in pre-merge queue",
-    tags=["Pipeline Jobs"],
-)
-async def get_premerge_queue(
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user),
-    job_repo: JobRepository = Depends(get_job_repository),
-):
-    """List all jobs that are currently being pre-merged or pending pre-merge."""
-    if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    from sqlalchemy import select
-    from app.db.models.pipeline import PipelineJob
-    
-    result = await db.execute(
-        select(PipelineJob)
-        .where(PipelineJob.premerge_status.in_(["PENDING", "RUNNING"]))
-        .order_by(PipelineJob.premerge_started_at.desc())
-    )
-    jobs = result.scalars().all()
-    
-    return {
-        "jobs": [
-            {
-                "job_id": str(j.id),
-                "premerge_status": j.premerge_status,
-                "premerge_total_pairs": j.premerge_total_pairs or 0,
-                "premerge_completed_pairs": j.premerge_completed_pairs or 0,
-                "premerge_failed_pairs": j.premerge_failed_pairs or 0,
-                "premerge_started_at": j.premerge_started_at.isoformat() if j.premerge_started_at else None,
-                "premerge_completed_at": j.premerge_completed_at.isoformat() if j.premerge_completed_at else None,
-                "premerge_batches": j.premerge_batches or [],
-                "premerge_error": j.premerge_error,
-            }
-            for j in jobs
-        ],
-        "total": len(jobs),
-    }

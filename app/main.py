@@ -115,14 +115,27 @@ app.add_middleware(AuditLoggingMiddleware)
 
 # Conditionally add CORS middleware
 if settings.cors_enabled:
+    # Expose Tus protocol headers so the frontend can read them
+    exposed_headers = [
+        "Location",
+        "Upload-Offset",
+        "Upload-Length",
+        "Upload-Metadata",
+        "Tus-Resumable",
+        "Tus-Version",
+        "Tus-Max-Size",
+        "Content-Range",
+        "X-Upload-Id",
+    ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=exposed_headers,
     )
-    logger.info(f"CORS enabled with origins: {settings.cors_origins_list}")
+    logger.info(f"CORS enabled with origins: {settings.cors_origins_list}, exposed_headers: {exposed_headers}")
 else:
     logger.warning("CORS is DISABLED - all origins allowed without CORS checks")
 

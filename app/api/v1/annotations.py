@@ -303,6 +303,15 @@ async def get_merged_video_for_utterance(
     if not result:
         raise HTTPException(status_code=404, detail="Could not create merged video")
     
+    # Convert direct MinIO URL to proxy URL (browser can't access internal MinIO)
+    from app.services.streaming_token_service import streaming_token_service
+    from app.core.config import settings
+    
+    video_path = result.get("merged_video_path")
+    if video_path:
+        token = streaming_token_service.generate_token(str(current_user.id), video_path)
+        result["merged_video_url"] = f"{settings.api_v1_prefix}/assets/{video_path}?token={token}"
+    
     return result
 
 

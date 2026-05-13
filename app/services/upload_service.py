@@ -146,6 +146,15 @@ class UploadService:
                     f"Invalid category '{category}'. Must be one of: {', '.join(valid_values)}"
                 )
         
+        # Parse dataset_id if provided
+        dataset_id_str = parsed_metadata.get("dataset_id")
+        dataset_id = None
+        if dataset_id_str:
+            try:
+                dataset_id = UUID(dataset_id_str)
+            except ValueError:
+                raise ValidationError(f"Invalid dataset_id '{dataset_id_str}'. Must be a valid UUID.")
+        
         # Calculate chunks
         total_chunks = (file_size + self.DEFAULT_CHUNK_SIZE - 1) // self.DEFAULT_CHUNK_SIZE
         
@@ -171,6 +180,7 @@ class UploadService:
             final_key=None,
             category=category,
             user_id=user.id,
+            dataset_id=dataset_id,
             status="pending",
             expires_at=datetime.utcnow() + timedelta(hours=self.UPLOAD_EXPIRY_HOURS),
         )
@@ -217,6 +227,9 @@ class UploadService:
         """
         Get current upload offset for resume.
         
+        Calculates offset from the highest contiguous chunk index starting at 0,
+        so resumable uploads work correctly even when chunks arrive out of order.
+        
         Args:
             upload_id: Tus upload ID
             user_id: User ID
@@ -226,13 +239,19 @@ class UploadService:
         """
         upload = await self.get_upload(upload_id, user_id)
         
-        # Calculate offset from received chunks
         if upload.status == "complete":
             return upload.file_size
         
-        # Count complete chunks
-        received_count = len(upload.chunks_received)
-        offset = received_count * upload.chunk_size
+        # Count contiguous chunks from the start (0, 1, 2, ...)
+        received = set(upload.chunks_received)
+        contiguous_count = 0
+        for i in range(upload.total_chunks):
+            if i in received:
+                contiguous_count += 1
+            else:
+                break
+        
+        offset = contiguous_count * upload.chunk_size
         
         # Handle partial last chunk (shouldn't happen with Tus but be safe)
         if offset > upload.file_size:

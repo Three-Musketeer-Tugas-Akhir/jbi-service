@@ -644,6 +644,15 @@ class Upload(Base):
         index=True
     )
     
+    # Dataset relation
+    dataset_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("datasets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Associated dataset ID (optional)"
+    )
+    
     # Job relation (set after assembly)
     job_id: Mapped[Optional[UUID]] = mapped_column(
         PGUUID(as_uuid=True),

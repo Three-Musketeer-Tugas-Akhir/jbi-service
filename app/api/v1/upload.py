@@ -283,8 +283,10 @@ async def _assemble_and_create_job(
             if not user:
                 raise Exception(f"User {user_id} not found")
             
-            # Create pipeline job
-            job = await pipeline_service.create_pipeline_job(upload, user)
+            # Create pipeline job (pass dataset_id from upload metadata)
+            job = await pipeline_service.create_pipeline_job(
+                upload, user, dataset_id=upload.dataset_id
+            )
             
             await db.commit()
             
