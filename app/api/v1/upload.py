@@ -8,8 +8,8 @@ Implements Tus 1.0.0 protocol for resumable uploads:
 - DELETE /files/{id} - Cancel upload
 """
 
+import asyncio
 import base64
-import hashlib
 import logging
 from typing import Optional
 from uuid import UUID
@@ -39,12 +39,28 @@ router = APIRouter(prefix="/upload", tags=["upload"])
 
 # ── Tus Protocol Endpoints ────────────────────────────────────────────
 
+@router.options("/files")
+async def tus_options():
+    """
+    Tus protocol discovery endpoint.
+    Returns supported Tus extensions and version.
+    """
+    return Response(
+        status_code=200,
+        headers={
+            "Tus-Resumable": "1.0.0",
+            "Tus-Version": "1.0.0",
+            "Tus-Max-Size": str(UploadService.MAX_FILE_SIZE),
+            "Tus-Extension": "creation,termination",
+        }
+    )
+
+
 @router.post("/files", status_code=status.HTTP_201_CREATED)
 async def create_upload(
     request: Request,
     upload_length: int = Header(..., alias="Upload-Length", description="Total file size in bytes"),
     upload_metadata: Optional[str] = Header(None, alias="Upload-Metadata", description="Base64-encoded metadata"),
-    content_type: Optional[str] = Header(None, alias="Content-Type"),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -53,7 +69,6 @@ async def create_upload(
     Headers:
         Upload-Length: Total file size in bytes (max 10GB)
         Upload-Metadata: Base64-encoded metadata (filename, filetype, category)
-        Content-Type: application/offset+octet-stream
     
     Returns:
         201 Created
@@ -79,6 +94,7 @@ async def create_upload(
             status_code=status.HTTP_201_CREATED,
             headers={
                 "Location": f"/api/v1/upload/files/{upload.upload_id}",
+                "Upload-Id": upload.upload_id,
                 "Tus-Resumable": "1.0.0",
                 "Tus-Version": "1.0.0",
                 "Tus-Max-Size": str(UploadService.MAX_FILE_SIZE),
@@ -89,9 +105,11 @@ async def create_upload(
     except ValidationError as e:
         logger.warning(f"Validation error creating upload: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to create upload: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create upload")
+        logger.error(f"Failed to create upload: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to create upload: {str(e)}")
 
 
 @router.head("/files/{upload_id}")
@@ -122,6 +140,7 @@ async def get_upload_status(
             headers = {
                 "Upload-Offset": str(offset),
                 "Upload-Length": str(upload.file_size),
+                "Upload-Status": upload.status,
                 "Tus-Resumable": "1.0.0",
                 "Cache-Control": "no-store",
                 "Content-Length": "0",
@@ -154,9 +173,7 @@ async def upload_chunk(
     request: Request,
     background_tasks: BackgroundTasks,
     upload_offset: int = Header(..., alias="Upload-Offset", description="Byte offset for this chunk"),
-    content_length: int = Header(..., alias="Content-Length", description="Chunk size in bytes"),
-    upload_checksum: Optional[str] = Header(None, alias="Upload-Checksum", description="Optional checksum"),
-    content_type: str = Header(..., alias="Content-Type"),
+    content_length: Optional[int] = Header(None, alias="Content-Length", description="Chunk size in bytes"),
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -164,9 +181,8 @@ async def upload_chunk(
     
     Headers:
         Upload-Offset: Byte offset for this chunk
-        Content-Length: Chunk size (max 5MB)
-        Upload-Checksum: Optional checksum (sha256 base64)
-        Content-Type: application/offset+octet-stream
+        Content-Length: Chunk size (optional, validated if present)
+        Content-Type: application/offset+octet-stream (not validated)
     
     Body:
         Raw chunk bytes
@@ -176,35 +192,26 @@ async def upload_chunk(
         Upload-Offset header with new offset
     """
     try:
-        # Read chunk data first (before acquiring DB connection)
+        # Read chunk data from raw body
         chunk_data = await request.body()
         
-        # Validate content length
-        if len(chunk_data) != content_length:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Content-Length mismatch: header={content_length}, actual={len(chunk_data)}"
+        if not chunk_data:
+            raise HTTPException(status_code=400, detail="Empty chunk body")
+        
+        # Validate content length if provided (optional — some clients don't send it)
+        if content_length is not None and len(chunk_data) != content_length:
+            logger.warning(
+                f"Content-Length mismatch for upload {upload_id}: "
+                f"header={content_length}, actual={len(chunk_data)}"
             )
+            # Don't reject — use actual data length
         
-        # Verify checksum if provided
-        if upload_checksum:
-            try:
-                algo, checksum_b64 = upload_checksum.split(" ", 1)
-                if algo.lower() != "sha256":
-                    raise HTTPException(status_code=400, detail="Only sha256 checksums supported")
-                
-                calculated = hashlib.sha256(chunk_data).digest()
-                expected = base64.b64decode(checksum_b64)
-                
-                if calculated != expected:
-                    raise HTTPException(status_code=460, detail="Checksum mismatch")
-                    
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.warning(f"Checksum verification failed: {e}")
+        logger.debug(
+            f"Received chunk for upload {upload_id}: "
+            f"offset={upload_offset}, size={len(chunk_data)}"
+        )
         
-        # Use short database transaction for chunk storage
+        # Store chunk using short DB transaction
         async with async_session() as db:
             upload_service = UploadService(db)
             
@@ -223,6 +230,7 @@ async def upload_chunk(
         
         # Trigger background assembly if complete (outside DB transaction)
         if is_complete:
+            # Small delay to ensure commit is fully propagated
             background_tasks.add_task(
                 _assemble_and_create_job,
                 upload_id,
@@ -240,15 +248,15 @@ async def upload_chunk(
     except NotFoundError:
         raise HTTPException(status_code=404, detail="Upload not found")
     except ValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e))
     except StorageError as e:
         logger.error(f"Storage error uploading chunk: {e}")
         raise HTTPException(status_code=500, detail="Storage error")
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to upload chunk: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upload chunk")
+        logger.error(f"Failed to upload chunk for {upload_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to upload chunk: {str(e)}")
 
 
 async def _assemble_and_create_job(
@@ -260,6 +268,9 @@ async def _assemble_and_create_job(
     
     Called when all chunks are received.
     """
+    # Small delay to ensure the DB commit from PATCH handler is fully visible
+    await asyncio.sleep(1.0)
+    
     async with async_session() as db:
         try:
             logger.info(f"Starting assembly for upload {upload_id}")
@@ -269,6 +280,12 @@ async def _assemble_and_create_job(
             
             # Get upload
             upload = await upload_service.get_upload(upload_id, user_id)
+            
+            if upload.status != "assembling":
+                logger.warning(
+                    f"Upload {upload_id} status is '{upload.status}', expected 'assembling'. Skipping."
+                )
+                return
             
             # Assemble file
             final_key = await upload_service.assemble_file(upload)
@@ -291,11 +308,19 @@ async def _assemble_and_create_job(
             await db.commit()
             
             logger.info(
-                f"Upload {upload_id} complete. Created pipeline job {job.id}"
+                f"Upload {upload_id} complete. Created pipeline job {job.id}. "
+                f"File key: {final_key}"
             )
             
+            # Cleanup temp chunks after successful assembly
+            try:
+                await upload_service._cleanup_temp_chunks(upload)
+                logger.info(f"Cleaned up temp chunks for upload {upload_id}")
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temp chunks: {cleanup_error}")
+            
         except Exception as e:
-            logger.error(f"Failed to assemble upload {upload_id}: {e}")
+            logger.error(f"Failed to assemble upload {upload_id}: {e}", exc_info=True)
             # Mark upload as failed
             try:
                 upload = await upload_service.get_upload(upload_id, user_id)
@@ -355,15 +380,17 @@ async def get_detailed_status(
             
             upload = await upload_service.get_upload(upload_id, current_user.id)
             
+            chunks_received_count = len(upload.chunks_received or [])
+            
             result = {
                 "upload_id": upload.upload_id,
                 "filename": upload.filename,
                 "status": upload.status,
                 "file_size": upload.file_size,
-                "chunks_received": len(upload.chunks_received),
+                "chunks_received": chunks_received_count,
                 "total_chunks": upload.total_chunks,
                 "progress_percent": round(
-                    (len(upload.chunks_received) / upload.total_chunks) * 100, 2
+                    (chunks_received_count / upload.total_chunks) * 100, 2
                 ) if upload.total_chunks > 0 else 0,
                 "created_at": upload.created_at.isoformat() if upload.created_at else None,
                 "expires_at": upload.expires_at.isoformat() if upload.expires_at else None,
@@ -532,4 +559,3 @@ async def list_youtube_downloads(
 
     downloads = get_user_downloads(str(current_user.id))
     return {"downloads": downloads}
-

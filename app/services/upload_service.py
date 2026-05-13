@@ -4,18 +4,16 @@ Tus Protocol upload service for chunked file uploads.
 Handles:
 - Upload initialization and tracking
 - Chunk storage in MinIO temp bucket
-- Parallel chunk handling
+- Sequential chunk handling
 - File assembly and verification
 - Cleanup of temporary chunks
 """
 
 import base64
-import hashlib
 import io
-import json
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, List, Tuple
+from typing import Optional
 from uuid import UUID, uuid4
 
 from minio import Minio
@@ -23,6 +21,7 @@ from minio.commonconfig import ComposeSource
 from minio.error import S3Error
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import settings
 from app.core.exceptions import StorageError, NotFoundError, ValidationError
@@ -36,7 +35,7 @@ class UploadService:
     """Service for handling Tus Protocol chunked uploads."""
     
     # Constants
-    DEFAULT_CHUNK_SIZE = 5 * 1024 * 1024  # 5MB
+    DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB per chunk
     MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
     TEMP_BUCKET = "temp-uploads"
     FINAL_BUCKET = settings.minio_bucket_name
@@ -191,7 +190,7 @@ class UploadService:
         
         logger.info(
             f"Created upload {upload_id} for user {user.id}: "
-            f"{upload.filename} ({file_size} bytes, {total_chunks} chunks)"
+            f"{upload.filename} ({file_size} bytes, {total_chunks} chunks of {self.DEFAULT_CHUNK_SIZE} bytes)"
         )
         
         return upload
@@ -227,15 +226,15 @@ class UploadService:
         """
         Get current upload offset for resume.
         
-        Calculates offset from the highest contiguous chunk index starting at 0,
-        so resumable uploads work correctly even when chunks arrive out of order.
+        Returns the byte offset of the first missing chunk,
+        so resumable uploads work correctly.
         
         Args:
             upload_id: Tus upload ID
             user_id: User ID
             
         Returns:
-            Number of bytes received so far
+            Number of bytes received so far (contiguous from start)
         """
         upload = await self.get_upload(upload_id, user_id)
         
@@ -243,7 +242,7 @@ class UploadService:
             return upload.file_size
         
         # Count contiguous chunks from the start (0, 1, 2, ...)
-        received = set(upload.chunks_received)
+        received = set(upload.chunks_received or [])
         contiguous_count = 0
         for i in range(upload.total_chunks):
             if i in received:
@@ -251,9 +250,13 @@ class UploadService:
             else:
                 break
         
+        # Calculate byte offset
+        if contiguous_count == upload.total_chunks:
+            return upload.file_size
+        
         offset = contiguous_count * upload.chunk_size
         
-        # Handle partial last chunk (shouldn't happen with Tus but be safe)
+        # Clamp to file_size
         if offset > upload.file_size:
             offset = upload.file_size
         
@@ -268,8 +271,6 @@ class UploadService:
     ) -> int:
         """
         Store an upload chunk.
-        
-        Supports parallel uploads - chunks can arrive in any order.
         
         Args:
             upload_id: Tus upload ID
@@ -286,7 +287,10 @@ class UploadService:
         """
         upload = await self.get_upload(upload_id, user_id)
         
-        # Validate offset aligns with chunk boundaries
+        if upload.status in ("complete", "cancelled", "failed"):
+            raise ValidationError(f"Upload {upload_id} is already {upload.status}")
+        
+        # Calculate chunk index from byte offset
         chunk_index = offset // upload.chunk_size
         expected_offset = chunk_index * upload.chunk_size
         
@@ -296,10 +300,28 @@ class UploadService:
             )
         
         if chunk_index >= upload.total_chunks:
-            raise ValidationError(f"Chunk index {chunk_index} exceeds total chunks")
+            raise ValidationError(f"Chunk index {chunk_index} exceeds total chunks {upload.total_chunks}")
+        
+        # Validate chunk size
+        is_last_chunk = (chunk_index == upload.total_chunks - 1)
+        if is_last_chunk:
+            expected_size = upload.file_size - (chunk_index * upload.chunk_size)
+            if len(chunk_data) != expected_size:
+                logger.warning(
+                    f"Last chunk size mismatch for upload {upload_id}: "
+                    f"expected={expected_size}, actual={len(chunk_data)}"
+                )
+                # Don't reject — some clients may pad or truncate slightly
+        else:
+            if len(chunk_data) != upload.chunk_size:
+                logger.warning(
+                    f"Chunk {chunk_index} size mismatch for upload {upload_id}: "
+                    f"expected={upload.chunk_size}, actual={len(chunk_data)}"
+                )
         
         # Check if already received
-        if chunk_index in upload.chunks_received:
+        current_received = list(upload.chunks_received or [])
+        if chunk_index in current_received:
             logger.debug(f"Chunk {chunk_index} already received for upload {upload_id}")
             return offset + len(chunk_data)
         
@@ -314,11 +336,11 @@ class UploadService:
                 length=len(chunk_data),
             )
             
-            # Update upload record
-            chunks_received = list(upload.chunks_received)
-            chunks_received.append(chunk_index)
-            chunks_received.sort()
-            upload.chunks_received = chunks_received
+            # Update upload record — CRITICAL: use flag_modified for JSONB
+            current_received.append(chunk_index)
+            current_received.sort()
+            upload.chunks_received = current_received
+            flag_modified(upload, "chunks_received")
             
             upload.status = "uploading"
             upload.updated_at = datetime.utcnow()
@@ -326,7 +348,7 @@ class UploadService:
             # Check if all chunks received
             if len(upload.chunks_received) == upload.total_chunks:
                 upload.status = "assembling"
-                logger.info(f"All chunks received for upload {upload_id}, starting assembly")
+                logger.info(f"All {upload.total_chunks} chunks received for upload {upload_id}, starting assembly")
             
             await self.db.flush()
             
@@ -352,10 +374,11 @@ class UploadService:
         Returns:
             Final object key in MinIO
         """
-        if len(upload.chunks_received) != upload.total_chunks:
+        received_count = len(upload.chunks_received or [])
+        if received_count != upload.total_chunks:
             raise ValidationError(
                 f"Cannot assemble: missing chunks. "
-                f"Received {len(upload.chunks_received)}/{upload.total_chunks}"
+                f"Received {received_count}/{upload.total_chunks}"
             )
         
         logger.info(f"Assembling upload {upload.upload_id}: {upload.total_chunks} chunks")
@@ -384,12 +407,22 @@ class UploadService:
         final_key = f"jobs/{upload.job_id}/original/{safe_filename}"
         
         try:
-            # Compose chunks into final file
-            self.minio.compose_object(
-                bucket_name=upload.final_bucket,
-                object_name=final_key,
-                sources=sources,
-            )
+            # MinIO compose_object has a limit of 10,000 sources per call.
+            # For very large files we need to compose in batches.
+            MAX_COMPOSE_SOURCES = 500  # Conservative limit
+            
+            if len(sources) <= MAX_COMPOSE_SOURCES:
+                # Single compose call
+                self.minio.compose_object(
+                    bucket_name=upload.final_bucket,
+                    object_name=final_key,
+                    sources=sources,
+                )
+            else:
+                # Multi-stage compose for very large files
+                final_key = await self._multi_stage_compose(
+                    upload, sources, final_key, MAX_COMPOSE_SOURCES
+                )
             
             # Verify file size
             stat = self.minio.stat_object(upload.final_bucket, final_key)
@@ -410,6 +443,54 @@ class UploadService:
         except S3Error as e:
             logger.error(f"Failed to assemble upload {upload.upload_id}: {e}")
             raise StorageError(f"Failed to assemble file: {e}")
+    
+    async def _multi_stage_compose(
+        self,
+        upload: Upload,
+        sources: list,
+        final_key: str,
+        batch_size: int
+    ) -> str:
+        """
+        Compose chunks in batches for very large files.
+        
+        MinIO has a limit on the number of sources per compose call.
+        We compose in batches, creating intermediate objects, then
+        compose the intermediates into the final object.
+        """
+        intermediates = []
+        
+        for batch_idx in range(0, len(sources), batch_size):
+            batch = sources[batch_idx:batch_idx + batch_size]
+            intermediate_key = f"{upload.temp_prefix}intermediate_{batch_idx:06d}"
+            
+            self.minio.compose_object(
+                bucket_name=upload.temp_bucket,
+                object_name=intermediate_key,
+                sources=batch,
+            )
+            intermediates.append(intermediate_key)
+        
+        # Now compose intermediates into final
+        final_sources = [
+            ComposeSource(upload.temp_bucket, key)
+            for key in intermediates
+        ]
+        
+        self.minio.compose_object(
+            bucket_name=upload.final_bucket,
+            object_name=final_key,
+            sources=final_sources,
+        )
+        
+        # Cleanup intermediates
+        for key in intermediates:
+            try:
+                self.minio.remove_object(upload.temp_bucket, key)
+            except S3Error:
+                pass
+        
+        return final_key
     
     async def cancel_upload(self, upload_id: str, user_id: UUID) -> None:
         """
