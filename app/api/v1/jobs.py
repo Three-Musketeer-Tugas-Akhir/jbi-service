@@ -945,7 +945,7 @@ async def get_premerge_queue(
     current_user = Depends(get_current_user),
     job_repo: JobRepository = Depends(get_job_repository),
 ):
-    """List all jobs that are currently being pre-merged or pending pre-merge."""
+    """List all jobs that have pre-merge data (pending, running, completed, or failed)."""
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Admin access required")
     
@@ -954,8 +954,11 @@ async def get_premerge_queue(
     
     result = await db.execute(
         select(PipelineJob)
-        .where(PipelineJob.premerge_status.in_(["PENDING", "RUNNING"]))
-        .order_by(PipelineJob.premerge_started_at.desc())
+        .where(PipelineJob.premerge_status.isnot(None))
+        .order_by(
+            # PENDING/RUNNING first, then COMPLETED/FAILED
+            PipelineJob.premerge_started_at.desc().nullslast()
+        )
     )
     jobs = result.scalars().all()
     
@@ -963,6 +966,7 @@ async def get_premerge_queue(
         "jobs": [
             {
                 "job_id": str(j.id),
+                "original_filename": j.original_filename,
                 "premerge_status": j.premerge_status,
                 "premerge_total_pairs": j.premerge_total_pairs or 0,
                 "premerge_completed_pairs": j.premerge_completed_pairs or 0,

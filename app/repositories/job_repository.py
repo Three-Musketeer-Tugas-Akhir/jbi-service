@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.pipeline import PipelineJob
 from app.db.session import get_db
+from sqlalchemy.orm.attributes import flag_modified
 
 
 class JobRepository:
@@ -128,6 +129,7 @@ class JobRepository:
             job.premerge_failed_pairs = failed_pairs
             if batches is not None:
                 job.premerge_batches = batches
+                flag_modified(job, "premerge_batches")
             if error:
                 job.premerge_error = error
             if status == "RUNNING" and not job.premerge_started_at:

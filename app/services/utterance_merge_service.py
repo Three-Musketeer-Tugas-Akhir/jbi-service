@@ -509,9 +509,10 @@ class UtteranceMergeService:
 
 
 async def _download_file(url: str, dest_path: str) -> None:
-    """Download file from URL to local path."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, follow_redirects=True)
-        response.raise_for_status()
-        with open(dest_path, "wb") as f:
-            f.write(response.content)
+    """Download file from URL to local path using streaming to avoid OOM."""
+    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+        async with client.stream("GET", url, follow_redirects=True) as response:
+            response.raise_for_status()
+            with open(dest_path, "wb") as f:
+                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    f.write(chunk)
