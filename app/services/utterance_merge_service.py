@@ -220,6 +220,30 @@ class UtteranceMergeService:
         """
         logger.info(f"Starting pre-merge for job {job_id}")
         
+        try:
+            return await UtteranceMergeService._premerge_all_for_job_impl(job_id)
+        except Exception as e:
+            logger.exception(f"Pre-merge fatal error for job {job_id}: {e}")
+            # Ensure status is FAILED even if the crash happened before RUNNING was set
+            try:
+                async with async_session_maker() as db:
+                    from app.repositories.job_repository import JobRepository
+                    job_repo = JobRepository(db)
+                    await job_repo.update_premerge_progress(
+                        job_id=job_id,
+                        status="FAILED",
+                        error=str(e),
+                    )
+                    await db.commit()
+            except Exception as cleanup_err:
+                logger.error(
+                    f"Job {job_id} failed to write pre-merge failure status: {cleanup_err}"
+                )
+            raise
+
+    @staticmethod
+    async def _premerge_all_for_job_impl(job_id: uuid.UUID) -> dict:
+        
         from app.repositories.job_repository import JobRepository
         
         # Config

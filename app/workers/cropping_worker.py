@@ -194,9 +194,49 @@ class CroppingWorker(KafkaPipelineWorker):
             try:
                 import asyncio
                 from app.services.utterance_merge_service import UtteranceMergeService
-                asyncio.create_task(
-                    UtteranceMergeService.premerge_all_for_job(UUID(job_id))
-                )
+                from app.repositories.job_repository import JobRepository
+                
+                # Mark pre-merge as PENDING immediately so it shows up in the queue
+                # even before the background task starts.
+                async with async_session() as pm_session:
+                    pm_repo = JobRepository(pm_session)
+                    await pm_repo.update_premerge_progress(
+                        job_id=UUID(job_id),
+                        status="PENDING",
+                        total_pairs=0,
+                        completed_pairs=0,
+                        failed_pairs=0,
+                        batches=[],
+                        error=None,
+                    )
+                    await pm_session.commit()
+                    logger.info("Job %s pre-merge marked PENDING", job_id)
+                
+                async def _premerge_with_cleanup():
+                    try:
+                        await UtteranceMergeService.premerge_all_for_job(UUID(job_id))
+                    except Exception as exc:
+                        logger.exception(
+                            "Job %s pre-merge background task failed: %s",
+                            job_id, exc
+                        )
+                        # Mark as failed so admin can see it
+                        try:
+                            async with async_session() as fail_session:
+                                fail_repo = JobRepository(fail_session)
+                                await fail_repo.update_premerge_progress(
+                                    job_id=UUID(job_id),
+                                    status="FAILED",
+                                    error=str(exc),
+                                )
+                                await fail_session.commit()
+                        except Exception as cleanup_err:
+                            logger.warning(
+                                "Job %s failed to write pre-merge failure status: %s",
+                                job_id, cleanup_err
+                            )
+                
+                asyncio.create_task(_premerge_with_cleanup())
                 logger.info("Job %s pre-merge task spawned in background", job_id)
             except Exception as e:
                 logger.warning(

@@ -448,7 +448,7 @@ async def update_job_category(
 # ── POST /pipeline/jobs/{job_id}/start ───────────────────────────────────
 
 @router.post(
-    "/pipeline/jobs/{job_id}/start",
+    "/pipeline/jobs/{job_id:uuid}/start",
     responses={
         404: {"model": ErrorResponse},
         400: {"model": ErrorResponse},
@@ -936,7 +936,7 @@ async def create_job_from_url_pipeline(
 
 
 @router.get(
-    "/pipeline/jobs/{job_id}",
+    "/pipeline/jobs/{job_id:uuid}",
     response_model=JobStatusDetailResponse,
     summary="Get job status and details (new pipeline)",
     tags=["Pipeline Jobs"],
@@ -1135,7 +1135,7 @@ def _get_media_type(filename: str) -> str:
 
 
 @router.get(
-    "/pipeline/jobs/{job_id}/original",
+    "/pipeline/jobs/{job_id:uuid}/original",
     summary="Download original video file (new pipeline)",
     tags=["Pipeline Jobs"],
     responses={
@@ -1268,7 +1268,7 @@ async def download_original_video_pipeline(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id}/stage1/results",
+    "/pipeline/jobs/{job_id:uuid}/stage1/results",
     response_model=Stage1ResultsResponse,
     summary="Get Stage 1 (detection) results",
     tags=["Pipeline Jobs"],
@@ -1417,7 +1417,7 @@ async def get_stage1_results(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id}/stage2/results",
+    "/pipeline/jobs/{job_id:uuid}/stage2/results",
     response_model=Stage2ResultsResponse,
     summary="Get Stage 2 (ASR) results",
     tags=["Pipeline Jobs"],
@@ -1594,7 +1594,7 @@ async def get_stage2_results(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id}/stage3/results",
+    "/pipeline/jobs/{job_id:uuid}/stage3/results",
     response_model=Stage3ResultsResponse,
     summary="Get Stage 3 (cropping) results",
     tags=["Pipeline Jobs"],
@@ -1808,7 +1808,7 @@ async def get_stage3_results(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id}/dataset/explorer",
+    "/pipeline/jobs/{job_id:uuid}/dataset/explorer",
     response_model=DatasetExplorerResponse,
     summary="Get hierarchical dataset for explorer UI",
     tags=["Pipeline Jobs"],
@@ -1917,7 +1917,7 @@ async def get_dataset_explorer(
 
 
 @router.get(
-    "/pipeline/jobs/{job_id}/dataset/download",
+    "/pipeline/jobs/{job_id:uuid}/dataset/download",
     summary="Download dataset as ZIP",
     tags=["Pipeline Jobs"],
     responses={
@@ -2126,7 +2126,7 @@ async def download_dataset_zip(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id}/premerge-status",
+    "/pipeline/jobs/{job_id:uuid}/premerge-status",
     summary="Get pre-merge status for a job",
     tags=["Pipeline Jobs"],
 )
@@ -2159,6 +2159,88 @@ async def get_premerge_status(
         "premerge_completed_at": job.premerge_completed_at.isoformat() if job.premerge_completed_at else None,
         "premerge_batches": job.premerge_batches or [],
         "premerge_error": job.premerge_error,
+    }
+
+
+@router.post(
+    "/pipeline/jobs/{job_id:uuid}/premerge",
+    summary="Trigger pre-merge for a job manually",
+    tags=["Pipeline Jobs"],
+    responses={
+        404: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+    },
+)
+async def trigger_premerge(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user = Depends(get_current_user),
+    job_repo: JobRepository = Depends(get_job_repository),
+):
+    """Manually trigger pre-merge for a job.
+    
+    Only admins can trigger. Pre-merge can be re-triggered if it failed or never started.
+    """
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = await job_repo.get_by_id(job_uuid)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Only allow pre-merge for jobs that have completed cropping (CV2)
+    allowed_statuses = {JobStatus.NEEDS_VOICE_ANNOTATION, JobStatus.VOICE_ANNOTATION_IN_PROGRESS, JobStatus.READY_FOR_ANNOTATION}
+    if job.status not in allowed_statuses:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pre-merge can only be triggered for jobs that have completed cropping. Current status: {job.status}"
+        )
+    
+    # Mark as PENDING and spawn background task
+    await job_repo.update_premerge_progress(
+        job_id=job_uuid,
+        status="PENDING",
+        total_pairs=0,
+        completed_pairs=0,
+        failed_pairs=0,
+        batches=[],
+        error=None,
+    )
+    await db.commit()
+    
+    import asyncio
+    from app.services.utterance_merge_service import UtteranceMergeService
+    
+    async def _premerge_with_cleanup():
+        try:
+            await UtteranceMergeService.premerge_all_for_job(job_uuid)
+        except Exception as exc:
+            logger.exception("Job %s manual pre-merge failed: %s", job_id, exc)
+            try:
+                async with async_session() as fail_session:
+                    fail_repo = JobRepository(fail_session)
+                    await fail_repo.update_premerge_progress(
+                        job_id=job_uuid,
+                        status="FAILED",
+                        error=str(exc),
+                    )
+                    await fail_session.commit()
+            except Exception as cleanup_err:
+                logger.warning("Job %s failed to write pre-merge failure status: %s", job_id, cleanup_err)
+    
+    asyncio.create_task(_premerge_with_cleanup())
+    logger.info("Job %s pre-merge manually triggered by admin %s", job_id, current_user.id)
+    
+    return {
+        "job_id": job_id,
+        "premerge_status": "PENDING",
+        "message": "Pre-merge triggered successfully",
     }
 
 
