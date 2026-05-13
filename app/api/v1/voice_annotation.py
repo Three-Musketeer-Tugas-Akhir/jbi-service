@@ -82,7 +82,7 @@ async def list_utterances(
     "/utterances/{voice_annotation_id}",
     response_model=UpdateGroundTruthResponse,
     summary="Update ground truth text",
-    description="Save corrected ground truth, re-run Sastrawi validation, recalculate job status.",
+    description="Save corrected ground truth, re-run KBBI exact-match validation, recalculate job status.",
 )
 async def update_ground_truth(
     voice_annotation_id: UUID,
@@ -94,7 +94,7 @@ async def update_ground_truth(
 
     This triggers:
     1. Save new ground_truth_text
-    2. Re-run Sastrawi OOV validation
+    2. Re-run KBBI exact-match OOV validation
     3. Recalculate job clean/flagged counters
     4. Update job status (NEEDS_VOICE_ANNOTATION or READY_FOR_ANNOTATION)
     """

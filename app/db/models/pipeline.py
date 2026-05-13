@@ -83,7 +83,7 @@ class PipelineJob(Base):
     # Voice annotation counters (populated by VoiceAnnotationService)
     clean_utterance_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0",
-        comment="Number of utterances that passed Sastrawi validation"
+        comment="Number of utterances that passed KBBI exact-match validation"
     )
     flagged_utterance_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0",

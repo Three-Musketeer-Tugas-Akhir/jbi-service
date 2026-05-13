@@ -22,7 +22,7 @@ class VoiceAnnotation(Base):
     """Per-utterance voice annotation record.
 
     One row per pipeline_transcript utterance. Stores the immutable ASR
-    text alongside the editable ground-truth text and Sastrawi-based
+    text alongside the editable ground-truth text and KBBI exact-match
     word-level validation flags.
     """
     __tablename__ = "voice_annotations"

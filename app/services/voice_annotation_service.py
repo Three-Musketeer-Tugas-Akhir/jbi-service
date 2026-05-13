@@ -33,7 +33,7 @@ class VoiceAnnotationService:
 
         For each PipelineTranscript belonging to this job:
         1. Copy asr_text → ground_truth_text
-        2. Run Sastrawi validation
+        2. Run KBBI exact-match validation
         3. Set per-utterance status (FLAGGED / CLEAN)
         4. Aggregate job-level counters and set job status.
 
@@ -72,7 +72,7 @@ class VoiceAnnotationService:
                 continue
 
             asr_text = transcript.text or ""
-            flagged_words = validate_text(asr_text)
+            flagged_words = await validate_text(asr_text)
             has_flag = len(flagged_words) > 0
 
             status = VoiceAnnotation.STATUS_FLAGGED if has_flag else VoiceAnnotation.STATUS_CLEAN
@@ -255,7 +255,7 @@ class VoiceAnnotationService:
 
         This is the core annotator action per the PRD:
         1. Save new ground_truth_text
-        2. Re-run Sastrawi validation (unless is_unflagged is true)
+        2. Re-run KBBI exact-match validation (unless is_unflagged is true)
         3. Update per-utterance flag status
         4. Recalculate job-level counters and status
         """
@@ -280,7 +280,7 @@ class VoiceAnnotationService:
             flagged_words = []
             has_flag = False
         else:
-            flagged_words = validate_text(new_text)
+            flagged_words = await validate_text(new_text)
             has_flag = len(flagged_words) > 0
 
         va.flagged_words = flagged_words

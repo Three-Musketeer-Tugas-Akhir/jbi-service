@@ -166,7 +166,7 @@ class CroppingWorker(KafkaPipelineWorker):
             await session.commit()
         
         # After CV2 is committed successfully, initialize voice annotations
-        # (Sastrawi KBBI validation). This runs separately so it NEVER blocks
+        # (KBBI exact-match validation). This runs separately so it NEVER blocks
         # or fails the CV2 pipeline. If it crashes, job stays in
         # NEEDS_VOICE_ANNOTATION and admin can re-trigger via API.
         if failure_count == 0:
