@@ -448,7 +448,7 @@ async def update_job_category(
 # ── POST /pipeline/jobs/{job_id}/start ───────────────────────────────────
 
 @router.post(
-    "/pipeline/jobs/{job_id:uuid}/start",
+    "/pipeline/jobs/{job_id}/start",
     responses={
         404: {"model": ErrorResponse},
         400: {"model": ErrorResponse},
@@ -936,7 +936,7 @@ async def create_job_from_url_pipeline(
 
 
 @router.get(
-    "/pipeline/jobs/{job_id:uuid}",
+    "/pipeline/jobs/{job_id}",
     response_model=JobStatusDetailResponse,
     summary="Get job status and details (new pipeline)",
     tags=["Pipeline Jobs"],
@@ -1135,7 +1135,7 @@ def _get_media_type(filename: str) -> str:
 
 
 @router.get(
-    "/pipeline/jobs/{job_id:uuid}/original",
+    "/pipeline/jobs/{job_id}/original",
     summary="Download original video file (new pipeline)",
     tags=["Pipeline Jobs"],
     responses={
@@ -1268,7 +1268,7 @@ async def download_original_video_pipeline(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id:uuid}/stage1/results",
+    "/pipeline/jobs/{job_id}/stage1/results",
     response_model=Stage1ResultsResponse,
     summary="Get Stage 1 (detection) results",
     tags=["Pipeline Jobs"],
@@ -1417,7 +1417,7 @@ async def get_stage1_results(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id:uuid}/stage2/results",
+    "/pipeline/jobs/{job_id}/stage2/results",
     response_model=Stage2ResultsResponse,
     summary="Get Stage 2 (ASR) results",
     tags=["Pipeline Jobs"],
@@ -1594,7 +1594,7 @@ async def get_stage2_results(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id:uuid}/stage3/results",
+    "/pipeline/jobs/{job_id}/stage3/results",
     response_model=Stage3ResultsResponse,
     summary="Get Stage 3 (cropping) results",
     tags=["Pipeline Jobs"],
@@ -1808,7 +1808,7 @@ async def get_stage3_results(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id:uuid}/dataset/explorer",
+    "/pipeline/jobs/{job_id}/dataset/explorer",
     response_model=DatasetExplorerResponse,
     summary="Get hierarchical dataset for explorer UI",
     tags=["Pipeline Jobs"],
@@ -1917,7 +1917,7 @@ async def get_dataset_explorer(
 
 
 @router.get(
-    "/pipeline/jobs/{job_id:uuid}/dataset/download",
+    "/pipeline/jobs/{job_id}/dataset/download",
     summary="Download dataset as ZIP",
     tags=["Pipeline Jobs"],
     responses={
@@ -2126,7 +2126,7 @@ async def download_dataset_zip(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @router.get(
-    "/pipeline/jobs/{job_id:uuid}/premerge-status",
+    "/pipeline/jobs/{job_id}/premerge-status",
     summary="Get pre-merge status for a job",
     tags=["Pipeline Jobs"],
 )
@@ -2163,7 +2163,7 @@ async def get_premerge_status(
 
 
 @router.post(
-    "/pipeline/jobs/{job_id:uuid}/premerge",
+    "/pipeline/jobs/{job_id}/premerge",
     summary="Trigger pre-merge for a job manually",
     tags=["Pipeline Jobs"],
     responses={
