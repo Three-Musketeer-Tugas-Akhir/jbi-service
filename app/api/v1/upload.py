@@ -178,65 +178,71 @@ async def upload_chunk(
 ):
     """
     Upload a file chunk (Tus Protocol).
-    
-    Headers:
-        Upload-Offset: Byte offset for this chunk
-        Content-Length: Chunk size (optional, validated if present)
-        Content-Type: application/offset+octet-stream (not validated)
-    
-    Body:
-        Raw chunk bytes
-    
-    Returns:
-        204 No Content on success
-        Upload-Offset header with new offset
+
+    Performance: streams body to a temp file instead of buffering
+    the entire chunk in RAM, then uploads from disk to MinIO via
+    the thread-pooled ``store_chunk_streaming`` path.
     """
+    import tempfile, os
+
+    tmp_path: str | None = None
     try:
-        # Read chunk data from raw body
-        chunk_data = await request.body()
-        
-        if not chunk_data:
+        # ── Stream body to temp file (avoids 50 MB+ in RAM) ─────────
+        chunk_size = 0
+        fd, tmp_path = tempfile.mkstemp(prefix="tus_chunk_", suffix=".bin")
+        try:
+            with os.fdopen(fd, "wb") as tmp_fh:
+                async for body_chunk in request.stream():
+                    tmp_fh.write(body_chunk)
+                    chunk_size += len(body_chunk)
+        except Exception:
+            # If streaming fails, close fd if still open
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+
+        if chunk_size == 0:
             raise HTTPException(status_code=400, detail="Empty chunk body")
-        
-        # Validate content length if provided (optional — some clients don't send it)
-        if content_length is not None and len(chunk_data) != content_length:
+
+        if content_length is not None and chunk_size != content_length:
             logger.warning(
                 f"Content-Length mismatch for upload {upload_id}: "
-                f"header={content_length}, actual={len(chunk_data)}"
+                f"header={content_length}, actual={chunk_size}"
             )
-            # Don't reject — use actual data length
-        
+
         logger.debug(
             f"Received chunk for upload {upload_id}: "
-            f"offset={upload_offset}, size={len(chunk_data)}"
+            f"offset={upload_offset}, size={chunk_size}"
         )
-        
-        # Store chunk using short DB transaction
+
+        # ── Store chunk via streaming path ──────────────────────────
         async with async_session() as db:
             upload_service = UploadService(db)
-            
-            new_offset = await upload_service.store_chunk(
+
+            new_offset = await upload_service.store_chunk_streaming(
                 upload_id=upload_id,
                 user_id=current_user.id,
-                chunk_data=chunk_data,
-                offset=upload_offset
+                chunk_path=tmp_path,
+                chunk_size=chunk_size,
+                offset=upload_offset,
             )
-            
+
             # Check if upload is complete
             upload = await upload_service.get_upload(upload_id, current_user.id)
             is_complete = upload.status == "assembling"
-            
+
             await db.commit()
-        
+
         # Trigger background assembly if complete (outside DB transaction)
         if is_complete:
-            # Small delay to ensure commit is fully propagated
             background_tasks.add_task(
                 _assemble_and_create_job,
                 upload_id,
                 current_user.id,
             )
-        
+
         return Response(
             status_code=status.HTTP_204_NO_CONTENT,
             headers={
@@ -244,7 +250,7 @@ async def upload_chunk(
                 "Tus-Resumable": "1.0.0",
             }
         )
-        
+
     except NotFoundError:
         raise HTTPException(status_code=404, detail="Upload not found")
     except ValidationError as e:
@@ -257,6 +263,13 @@ async def upload_chunk(
     except Exception as e:
         logger.error(f"Failed to upload chunk for {upload_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to upload chunk: {str(e)}")
+    finally:
+        # Always cleanup temp file
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 async def _assemble_and_create_job(

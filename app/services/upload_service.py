@@ -4,15 +4,24 @@ Tus Protocol upload service for chunked file uploads.
 Handles:
 - Upload initialization and tracking
 - Chunk storage in MinIO temp bucket
-- Sequential chunk handling
+- Parallel chunk handling with streaming I/O
 - File assembly and verification
 - Cleanup of temporary chunks
+
+Performance optimisations:
+- All MinIO calls run in asyncio thread pool (non-blocking)
+- Chunk data streamed via temp files (no double-buffering in RAM)
+- 50 MB default chunk size (fewer HTTP round-trips)
 """
 
+import asyncio
 import base64
 import io
 import logging
+import os
+import tempfile
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -35,7 +44,7 @@ class UploadService:
     """Service for handling Tus Protocol chunked uploads."""
     
     # Constants
-    DEFAULT_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB per chunk
+    DEFAULT_CHUNK_SIZE = 50 * 1024 * 1024  # 50MB per chunk (5× fewer round-trips for 1GB files)
     MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
     TEMP_BUCKET = "temp-uploads"
     FINAL_BUCKET = settings.minio_bucket_name
@@ -270,109 +279,182 @@ class UploadService:
         offset: int
     ) -> int:
         """
-        Store an upload chunk.
+        Store an upload chunk (legacy in-memory path).
         
+        For the streaming path see ``store_chunk_streaming``.
+        """
+        upload = await self.get_upload(upload_id, user_id)
+        chunk_size = len(chunk_data)
+        chunk_index, is_complete = self._validate_chunk(
+            upload, offset, chunk_size,
+        )
+
+        if chunk_index is None:
+            # Already received — return next offset
+            return offset + chunk_size
+
+        chunk_key = f"{upload.temp_prefix}chunk_{chunk_index:08d}"
+
+        try:
+            # Run blocking MinIO put in thread pool → unblock event loop
+            await asyncio.to_thread(
+                self.minio.put_object,
+                bucket_name=upload.temp_bucket,
+                object_name=chunk_key,
+                data=io.BytesIO(chunk_data),
+                length=chunk_size,
+            )
+
+            self._mark_chunk_received(upload, chunk_index)
+            await self.db.flush()
+
+            new_offset = offset + chunk_size
+            logger.debug(
+                f"Stored chunk {chunk_index} for upload {upload_id}: "
+                f"{chunk_size} bytes, progress {len(upload.chunks_received)}/{upload.total_chunks}"
+            )
+            return new_offset
+
+        except S3Error as e:
+            logger.error(f"Failed to store chunk {chunk_index} for upload {upload_id}: {e}")
+            raise StorageError(f"Failed to store chunk: {e}")
+
+    async def store_chunk_streaming(
+        self,
+        upload_id: str,
+        user_id: UUID,
+        chunk_path: str,
+        chunk_size: int,
+        offset: int,
+    ) -> int:
+        """
+        Store an upload chunk from a temp file (streaming path).
+
+        This avoids loading the entire chunk into Python memory by
+        reading directly from the file on disk.
+
         Args:
             upload_id: Tus upload ID
             user_id: User ID
-            chunk_data: Raw chunk bytes
+            chunk_path: Path to temporary file containing chunk data
+            chunk_size: Size of the chunk in bytes
             offset: Byte offset for this chunk
-            
+
         Returns:
             New offset after storing this chunk
-            
-        Raises:
-            NotFoundError: If upload not found
-            ValidationError: If chunk is invalid
         """
         upload = await self.get_upload(upload_id, user_id)
-        
+        chunk_index, is_complete = self._validate_chunk(
+            upload, offset, chunk_size,
+        )
+
+        if chunk_index is None:
+            return offset + chunk_size
+
+        chunk_key = f"{upload.temp_prefix}chunk_{chunk_index:08d}"
+
+        try:
+            # Upload from file handle in thread pool — zero RAM copy
+            def _upload_from_file():
+                with open(chunk_path, "rb") as fh:
+                    self.minio.put_object(
+                        bucket_name=upload.temp_bucket,
+                        object_name=chunk_key,
+                        data=fh,
+                        length=chunk_size,
+                    )
+
+            await asyncio.to_thread(_upload_from_file)
+
+            self._mark_chunk_received(upload, chunk_index)
+            await self.db.flush()
+
+            new_offset = offset + chunk_size
+            logger.debug(
+                f"Stored chunk (streaming) {chunk_index} for upload {upload_id}: "
+                f"{chunk_size} bytes, progress {len(upload.chunks_received)}/{upload.total_chunks}"
+            )
+            return new_offset
+
+        except S3Error as e:
+            logger.error(f"Failed to store chunk {chunk_index} for upload {upload_id}: {e}")
+            raise StorageError(f"Failed to store chunk: {e}")
+
+    # ── Internal helpers ────────────────────────────────────────────
+
+    def _validate_chunk(
+        self, upload, offset: int, chunk_size: int,
+    ) -> tuple:
+        """
+        Validate a chunk and return (chunk_index, is_complete).
+        Returns (None, False) if the chunk was already received.
+        """
         if upload.status in ("complete", "cancelled", "failed"):
-            raise ValidationError(f"Upload {upload_id} is already {upload.status}")
-        
-        # Calculate chunk index from byte offset
+            raise ValidationError(f"Upload {upload.upload_id} is already {upload.status}")
+
         chunk_index = offset // upload.chunk_size
         expected_offset = chunk_index * upload.chunk_size
-        
+
         if offset != expected_offset:
             raise ValidationError(
                 f"Invalid offset {offset}. Expected {expected_offset} for chunk {chunk_index}"
             )
-        
+
         if chunk_index >= upload.total_chunks:
-            raise ValidationError(f"Chunk index {chunk_index} exceeds total chunks {upload.total_chunks}")
-        
-        # Validate chunk size
+            raise ValidationError(
+                f"Chunk index {chunk_index} exceeds total chunks {upload.total_chunks}"
+            )
+
+        # Size validation (warning only — don't reject)
         is_last_chunk = (chunk_index == upload.total_chunks - 1)
         if is_last_chunk:
             expected_size = upload.file_size - (chunk_index * upload.chunk_size)
-            if len(chunk_data) != expected_size:
+            if chunk_size != expected_size:
                 logger.warning(
-                    f"Last chunk size mismatch for upload {upload_id}: "
-                    f"expected={expected_size}, actual={len(chunk_data)}"
+                    f"Last chunk size mismatch for upload {upload.upload_id}: "
+                    f"expected={expected_size}, actual={chunk_size}"
                 )
-                # Don't reject — some clients may pad or truncate slightly
         else:
-            if len(chunk_data) != upload.chunk_size:
+            if chunk_size != upload.chunk_size:
                 logger.warning(
-                    f"Chunk {chunk_index} size mismatch for upload {upload_id}: "
-                    f"expected={upload.chunk_size}, actual={len(chunk_data)}"
+                    f"Chunk {chunk_index} size mismatch for upload {upload.upload_id}: "
+                    f"expected={upload.chunk_size}, actual={chunk_size}"
                 )
-        
-        # Check if already received
+
+        # Duplicate check
         current_received = list(upload.chunks_received or [])
         if chunk_index in current_received:
-            logger.debug(f"Chunk {chunk_index} already received for upload {upload_id}")
-            return offset + len(chunk_data)
-        
-        # Store chunk in MinIO temp bucket
-        chunk_key = f"{upload.temp_prefix}chunk_{chunk_index:08d}"
-        
-        try:
-            self.minio.put_object(
-                bucket_name=upload.temp_bucket,
-                object_name=chunk_key,
-                data=io.BytesIO(chunk_data),
-                length=len(chunk_data),
-            )
-            
-            # Update upload record — CRITICAL: use flag_modified for JSONB
-            current_received.append(chunk_index)
-            current_received.sort()
-            upload.chunks_received = current_received
-            flag_modified(upload, "chunks_received")
-            
-            upload.status = "uploading"
-            upload.updated_at = datetime.utcnow()
-            
-            # Check if all chunks received
-            if len(upload.chunks_received) == upload.total_chunks:
-                upload.status = "assembling"
-                logger.info(f"All {upload.total_chunks} chunks received for upload {upload_id}, starting assembly")
-            
-            await self.db.flush()
-            
-            new_offset = offset + len(chunk_data)
             logger.debug(
-                f"Stored chunk {chunk_index} for upload {upload_id}: "
-                f"{len(chunk_data)} bytes, progress {len(upload.chunks_received)}/{upload.total_chunks}"
+                f"Chunk {chunk_index} already received for upload {upload.upload_id}"
             )
-            
-            return new_offset
-            
-        except S3Error as e:
-            logger.error(f"Failed to store chunk {chunk_index} for upload {upload_id}: {e}")
-            raise StorageError(f"Failed to store chunk: {e}")
+            return None, False
+
+        return chunk_index, False
+
+    def _mark_chunk_received(self, upload, chunk_index: int) -> None:
+        """Update the upload record after a chunk is stored."""
+        current_received = list(upload.chunks_received or [])
+        current_received.append(chunk_index)
+        current_received.sort()
+        upload.chunks_received = current_received
+        flag_modified(upload, "chunks_received")
+
+        upload.status = "uploading"
+        upload.updated_at = datetime.utcnow()
+
+        if len(upload.chunks_received) == upload.total_chunks:
+            upload.status = "assembling"
+            logger.info(
+                f"All {upload.total_chunks} chunks received for upload "
+                f"{upload.upload_id}, starting assembly"
+            )
     
     async def assemble_file(self, upload: Upload) -> str:
         """
         Assemble all chunks into final file.
         
-        Args:
-            upload: Upload record with all chunks received
-            
-        Returns:
-            Final object key in MinIO
+        All MinIO operations run in the thread pool to avoid blocking
+        the async event loop during potentially long compose operations.
         """
         received_count = len(upload.chunks_received or [])
         if received_count != upload.total_chunks:
@@ -396,39 +478,37 @@ class UploadService:
         if not upload.job_id:
             upload.job_id = uuid4()
             
-        # Basic sanitization for filename
-        import os
-        import re
+        import re as _re
         basename = os.path.basename(upload.filename)
-        safe_filename = re.sub(r'[^\w\s\-\.\[\]]', '_', basename)
+        safe_filename = _re.sub(r'[^\w\s\-\.\[\]]', '_', basename)
         if not safe_filename:
             safe_filename = "video.mp4"
             
         final_key = f"jobs/{upload.job_id}/original/{safe_filename}"
         
         try:
-            # MinIO compose_object has a limit of 10,000 sources per call.
-            # For very large files we need to compose in batches.
-            MAX_COMPOSE_SOURCES = 500  # Conservative limit
+            MAX_COMPOSE_SOURCES = 500
             
             if len(sources) <= MAX_COMPOSE_SOURCES:
-                # Single compose call
-                self.minio.compose_object(
+                await asyncio.to_thread(
+                    self.minio.compose_object,
                     bucket_name=upload.final_bucket,
                     object_name=final_key,
                     sources=sources,
                 )
             else:
-                # Multi-stage compose for very large files
                 final_key = await self._multi_stage_compose(
                     upload, sources, final_key, MAX_COMPOSE_SOURCES
                 )
             
-            # Verify file size
-            stat = self.minio.stat_object(upload.final_bucket, final_key)
+            # Verify file size (thread pool)
+            stat = await asyncio.to_thread(
+                self.minio.stat_object, upload.final_bucket, final_key
+            )
             if stat.size != upload.file_size:
-                # Delete corrupted file
-                self.minio.remove_object(upload.final_bucket, final_key)
+                await asyncio.to_thread(
+                    self.minio.remove_object, upload.final_bucket, final_key
+                )
                 raise StorageError(
                     f"Size mismatch after assembly: {stat.size} != {upload.file_size}"
                 )
@@ -453,10 +533,7 @@ class UploadService:
     ) -> str:
         """
         Compose chunks in batches for very large files.
-        
-        MinIO has a limit on the number of sources per compose call.
-        We compose in batches, creating intermediate objects, then
-        compose the intermediates into the final object.
+        All MinIO calls run in the thread pool.
         """
         intermediates = []
         
@@ -464,20 +541,21 @@ class UploadService:
             batch = sources[batch_idx:batch_idx + batch_size]
             intermediate_key = f"{upload.temp_prefix}intermediate_{batch_idx:06d}"
             
-            self.minio.compose_object(
+            await asyncio.to_thread(
+                self.minio.compose_object,
                 bucket_name=upload.temp_bucket,
                 object_name=intermediate_key,
                 sources=batch,
             )
             intermediates.append(intermediate_key)
         
-        # Now compose intermediates into final
         final_sources = [
             ComposeSource(upload.temp_bucket, key)
             for key in intermediates
         ]
         
-        self.minio.compose_object(
+        await asyncio.to_thread(
+            self.minio.compose_object,
             bucket_name=upload.final_bucket,
             object_name=final_key,
             sources=final_sources,
@@ -486,7 +564,9 @@ class UploadService:
         # Cleanup intermediates
         for key in intermediates:
             try:
-                self.minio.remove_object(upload.temp_bucket, key)
+                await asyncio.to_thread(
+                    self.minio.remove_object, upload.temp_bucket, key
+                )
             except S3Error:
                 pass
         
@@ -512,11 +592,13 @@ class UploadService:
         logger.info(f"Cancelled upload {upload_id}")
     
     async def _cleanup_temp_chunks(self, upload: Upload) -> None:
-        """Delete temporary chunk files from MinIO."""
+        """Delete temporary chunk files from MinIO (thread-pooled)."""
         for i in range(upload.total_chunks):
             chunk_key = f"{upload.temp_prefix}chunk_{i:08d}"
             try:
-                self.minio.remove_object(upload.temp_bucket, chunk_key)
+                await asyncio.to_thread(
+                    self.minio.remove_object, upload.temp_bucket, chunk_key
+                )
             except S3Error as e:
                 logger.warning(f"Failed to delete chunk {chunk_key}: {e}")
     
