@@ -389,6 +389,7 @@ class UtteranceMergeService:
         semaphore = asyncio.Semaphore(max_concurrent)
         completed_pairs = 0
         failed_pairs = 0
+        progress_lock = asyncio.Lock()  # Guards counter updates + DB writes
         
         async def process_batch(batch: Dict[str, Any]) -> None:
             nonlocal completed_pairs, failed_pairs
@@ -419,6 +420,31 @@ class UtteranceMergeService:
                             f"Pre-merge failed for job {job_id} "
                             f"segment {batch['segment_code']} utt {pair['utterance_index']}: {e}"
                         )
+                    
+                    # Update batch-level counts after each pair (for live polling)
+                    batch["merged_count"] = merged_count
+                    batch["failed_count"] = failed_count
+                    
+                    # Write per-pair progress to DB under lock
+                    async with progress_lock:
+                        completed_pairs_snapshot = completed_pairs + merged_count
+                        failed_pairs_snapshot = failed_pairs + failed_count
+                        try:
+                            async with async_session_maker() as pair_db:
+                                pair_repo = JobRepository(pair_db)
+                                await pair_repo.update_premerge_progress(
+                                    job_id=job_id,
+                                    status="RUNNING",
+                                    total_pairs=total_pairs,
+                                    completed_pairs=completed_pairs_snapshot,
+                                    failed_pairs=failed_pairs_snapshot,
+                                    batches=batches,
+                                )
+                                await pair_db.commit()
+                        except Exception as db_err:
+                            logger.warning(
+                                f"Job {job_id} per-pair progress write failed (non-critical): {db_err}"
+                            )
                 
                 batch["status"] = "COMPLETED" if failed_count == 0 else "FAILED"
                 batch["completed_at"] = datetime.utcnow().isoformat()
@@ -426,21 +452,27 @@ class UtteranceMergeService:
                 batch["failed_count"] = failed_count
                 batch["error"] = "; ".join(errors) if errors else None
                 
-                completed_pairs += merged_count
-                failed_pairs += failed_count
-                
-                # Update progress in DB
-                async with async_session_maker() as progress_db:
-                    progress_repo = JobRepository(progress_db)
-                    await progress_repo.update_premerge_progress(
-                        job_id=job_id,
-                        status="RUNNING",
-                        total_pairs=total_pairs,
-                        completed_pairs=completed_pairs,
-                        failed_pairs=failed_pairs,
-                        batches=batches,
-                    )
-                    await progress_db.commit()
+                # Finalize counters under lock
+                async with progress_lock:
+                    completed_pairs += merged_count
+                    failed_pairs += failed_count
+                    
+                    try:
+                        async with async_session_maker() as progress_db:
+                            progress_repo = JobRepository(progress_db)
+                            await progress_repo.update_premerge_progress(
+                                job_id=job_id,
+                                status="RUNNING",
+                                total_pairs=total_pairs,
+                                completed_pairs=completed_pairs,
+                                failed_pairs=failed_pairs,
+                                batches=batches,
+                            )
+                            await progress_db.commit()
+                    except Exception as db_err:
+                        logger.warning(
+                            f"Job {job_id} batch-final progress write failed (non-critical): {db_err}"
+                        )
                 
                 logger.info(
                     f"Job {job_id} batch {batch['batch_index']} (seg {batch['segment_code']}): "

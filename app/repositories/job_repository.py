@@ -130,8 +130,7 @@ class JobRepository:
             if batches is not None:
                 job.premerge_batches = batches
                 flag_modified(job, "premerge_batches")
-            if error:
-                job.premerge_error = error
+            job.premerge_error = error  # Always set — None clears previous error
             if status == "RUNNING" and not job.premerge_started_at:
                 job.premerge_started_at = datetime.utcnow()
             if status in ("COMPLETED", "COMPLETED_WITH_ERRORS", "FAILED"):

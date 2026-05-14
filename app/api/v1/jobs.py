@@ -2249,6 +2249,13 @@ async def trigger_premerge(
             detail=f"Pre-merge can only be triggered for jobs that have completed cropping. Current status: {job.status}"
         )
     
+    # Guard against double-trigger — reject if already running or queued
+    if job.premerge_status in ("RUNNING", "PENDING"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Pre-merge is already {job.premerge_status} for this job. Wait for it to finish or fail before re-triggering."
+        )
+    
     # Mark as PENDING and spawn background task
     await job_repo.update_premerge_progress(
         job_id=job_uuid,
