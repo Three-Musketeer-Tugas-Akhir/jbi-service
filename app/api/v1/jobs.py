@@ -591,7 +591,7 @@ async def retry_job(
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
         
-    if job.status not in {JobStatus.FAILED.value, JobStatus.CROPPING_FAILED.value}:
+    if job.status not in {JobStatus.FAILED, JobStatus.CROPPING_FAILED}:
         raise HTTPException(
             status_code=400, 
             detail=f"Cannot retry job in state '{job.status}'. Only failed jobs can be retried."
