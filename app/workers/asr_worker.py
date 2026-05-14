@@ -117,10 +117,10 @@ class ASRWorker(KafkaPipelineWorker):
                 await job_repo.update_status(
                     job_id, 
                     JobStatus.FAILED, 
-                    error_message=f"ASR failed for all {len(results)} segments"
+                    error_message=f"ASR (Transkripsi) gagal pada seluruh {len(results)} segmen"
                 )
                 await session.commit()
-            raise ProcessingError(f"ASR failed for all {len(results)} segments")
+            raise ProcessingError(f"Proses ASR gagal pada semua {len(results)} segmen")
         
         if failed_segments:
             logger.warning(

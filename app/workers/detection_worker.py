@@ -108,10 +108,9 @@ class DetectionWorker(KafkaPipelineWorker):
             logger.info(f"Cropping {len(segments)} segments for job {job_id}")
             cropped_segments = await self._crop_segments(video_path, job_id, segments)
             
-            # Validate that at least some segments were cropped successfully
             successful_crops = [p for p in cropped_segments if p is not None]
             if not successful_crops:
-                raise ProcessingError(f"All {len(segments)} segments failed to crop")
+                raise ProcessingError(f"Proses CV-1 gagal: seluruh {len(segments)} segmen tidak berhasil dipotong")
             
             failed_count = len(cropped_segments) - len(successful_crops)
             if failed_count > 0:
@@ -148,7 +147,7 @@ class DetectionWorker(KafkaPipelineWorker):
             logger.error(f"Detection failed for job {job_id}: {e}")
             async with async_session() as session:
                 job_repo = JobRepository(session)
-                await job_repo.update_status(job_id, JobStatus.FAILED, error_message=str(e))
+                await job_repo.update_status(job_id, JobStatus.FAILED, error_message=f"CV-1 (Deteksi & Ekstraksi) gagal: {str(e)}")
                 await session.commit()
             # Re-raise to trigger retry mechanism
             raise

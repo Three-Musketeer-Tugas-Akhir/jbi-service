@@ -156,7 +156,7 @@ class CroppingWorker(KafkaPipelineWorker):
                 await job_repo.update_status(
                     UUID(job_id), 
                     JobStatus.CROPPING_FAILED,
-                    error_message=f"Cropping failed for {failure_count} utterances"
+                    error_message=f"CV-2 (Video Cropping) gagal pada {failure_count} utterance"
                 )
                 logger.error(
                     "Job %s cropping failed: %d/%d utterances failed",
