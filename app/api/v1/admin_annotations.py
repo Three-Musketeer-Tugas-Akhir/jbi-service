@@ -1,4 +1,5 @@
 """Admin endpoints for annotation management."""
+import uuid as _uuid
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime, timedelta
@@ -180,6 +181,7 @@ async def assign_job_to_annotator(
 )
 async def get_unassigned_segments(
     job_id: Optional[UUID] = None,
+    dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
     limit: int = Query(50, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = Depends(require_admin)
@@ -191,6 +193,7 @@ async def get_unassigned_segments(
     These are segments ready to be assigned for annotation.
     """
     from sqlalchemy import select, not_, exists
+    from app.db.models.pipeline import PipelineJob
     
     # Query segments that don't have a queue entry
     query = select(PipelineSegment).where(
@@ -203,6 +206,17 @@ async def get_unassigned_segments(
     
     if job_id:
         query = query.where(PipelineSegment.job_id == job_id)
+    
+    if dataset_id:
+        try:
+            dataset_uuid = _uuid.UUID(dataset_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
+        query = (
+            query
+            .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
+            .where(PipelineJob.dataset_id == dataset_uuid)
+        )
     
     query = query.limit(limit)
     
@@ -311,6 +325,7 @@ async def reassign_job_to_annotator(
 )
 async def get_job_assignments(
     status: Optional[str] = Query(None, description="Filter by job status"),
+    dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -326,20 +341,22 @@ async def get_job_assignments(
     from app.db.models.auth import User
     from app.db.models.pipeline import PipelineJob, JobStatus
     
-    # Base query: jobs that are ready for annotation
-    base_query = select(PipelineJob).where(
-        PipelineJob.status == JobStatus.READY_FOR_ANNOTATION
-    )
-    
+    # Build base filters
+    base_filters = [PipelineJob.status == JobStatus.READY_FOR_ANNOTATION]
     if status:
-        base_query = base_query.where(PipelineJob.status == status)
+        base_filters.append(PipelineJob.status == status)
+    if dataset_id:
+        try:
+            dataset_uuid = _uuid.UUID(dataset_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
+        base_filters.append(PipelineJob.dataset_id == dataset_uuid)
+    
+    # Base query: jobs that are ready for annotation
+    base_query = select(PipelineJob).where(*base_filters)
     
     # Count total
-    count_query = select(func.count(PipelineJob.id)).where(
-        PipelineJob.status == JobStatus.READY_FOR_ANNOTATION
-    )
-    if status:
-        count_query = count_query.where(PipelineJob.status == status)
+    count_query = select(func.count(PipelineJob.id)).where(*base_filters)
     
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
@@ -427,32 +444,59 @@ async def get_job_assignments(
     description="Overview of annotation queue status across all annotators."
 )
 async def get_queue_status(
+    dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
     db: AsyncSession = Depends(get_db),
     current_user: CurrentUser = Depends(require_admin)
 ):
     """Get statistics about the annotation queue."""
     from sqlalchemy import func, select
     from app.db.models.auth import User
+    from app.db.models.pipeline import PipelineJob
+    
+    # Build dataset filter join if needed
+    dataset_uuid = None
+    if dataset_id:
+        try:
+            dataset_uuid = _uuid.UUID(dataset_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
     
     # Count by status
-    status_counts = await db.execute(
+    status_query = (
         select(AnnotationQueue.status, func.count(AnnotationQueue.id))
-        .group_by(AnnotationQueue.status)
     )
+    if dataset_uuid:
+        status_query = (
+            status_query
+            .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
+            .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
+            .where(PipelineJob.dataset_id == dataset_uuid)
+        )
+    status_query = status_query.group_by(AnnotationQueue.status)
+    status_counts = await db.execute(status_query)
+    status_rows = status_counts.fetchall()
     
     # Count by annotator
-    annotator_counts = await db.execute(
+    annotator_query = (
         select(
             User.email,
             AnnotationQueue.status,
             func.count(AnnotationQueue.id)
         )
         .join(AnnotationQueue, AnnotationQueue.annotator_id == User.id)
-        .group_by(User.email, AnnotationQueue.status)
     )
+    if dataset_uuid:
+        annotator_query = (
+            annotator_query
+            .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
+            .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
+            .where(PipelineJob.dataset_id == dataset_uuid)
+        )
+    annotator_query = annotator_query.group_by(User.email, AnnotationQueue.status)
+    annotator_counts = await db.execute(annotator_query)
     
     return {
-        "by_status": {row[0]: row[1] for row in status_counts.fetchall()},
+        "by_status": {row[0]: row[1] for row in status_rows},
         "by_annotator": [
             {
                 "annotator_email": row[0],
@@ -461,5 +505,5 @@ async def get_queue_status(
             }
             for row in annotator_counts.fetchall()
         ],
-        "total_in_queue": sum(row[1] for row in status_counts.fetchall())
+        "total_in_queue": sum(row[1] for row in status_rows)
     }

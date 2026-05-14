@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from uuid import UUID
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, func, case, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,14 +54,15 @@ CURATION_STATUS_LABEL: Dict[str, str] = {
 
 # ── Annotator Dashboard ───────────────────────────────────────────────────────
 
-async def get_annotator_dashboard(db: AsyncSession, user_id: UUID) -> Dict[str, Any]:
+async def get_annotator_dashboard(db: AsyncSession, user_id: UUID, dataset_id: Optional[UUID] = None) -> Dict[str, Any]:
     """
     Returns dashboard data for an annotator.
     Queries annotation_queue for segments assigned to this user,
     groups by job, and computes progress stats.
+    Optionally filtered by dataset_id.
     """
     # Fetch all queue entries for this annotator, joined to segment + job
-    result = await db.execute(
+    query = (
         select(
             PipelineJob.id.label("job_id"),
             PipelineJob.original_filename,
@@ -77,8 +78,12 @@ async def get_annotator_dashboard(db: AsyncSession, user_id: UUID) -> Dict[str, 
         .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
         .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
         .where(AnnotationQueue.annotator_id == user_id)
-        .order_by(PipelineJob.id, PipelineSegment.segment_index)
     )
+    if dataset_id:
+        query = query.where(PipelineJob.dataset_id == dataset_id)
+    query = query.order_by(PipelineJob.id, PipelineSegment.segment_index)
+
+    result = await db.execute(query)
     rows = result.mappings().all()
 
     # Group by job
@@ -164,11 +169,12 @@ async def get_annotator_dashboard(db: AsyncSession, user_id: UUID) -> Dict[str, 
 
 # ── Curator Dashboard ─────────────────────────────────────────────────────────
 
-async def get_curator_dashboard(db: AsyncSession, user_id: UUID) -> Dict[str, Any]:
+async def get_curator_dashboard(db: AsyncSession, user_id: UUID, dataset_id: Optional[UUID] = None) -> Dict[str, Any]:
     """
     Returns dashboard data for a curator.
     Shows all jobs that are in curation-relevant statuses.
     Curators are not assigned to specific jobs — they see the full queue.
+    Optionally filtered by dataset_id.
     """
     CURATION_STATUSES = [
         "ANNOTATED",
@@ -178,7 +184,7 @@ async def get_curator_dashboard(db: AsyncSession, user_id: UUID) -> Dict[str, An
         "READY_TO_EXPORT",
     ]
 
-    result = await db.execute(
+    query = (
         select(
             PipelineJob.id.label("job_id"),
             PipelineJob.original_filename,
@@ -190,6 +196,11 @@ async def get_curator_dashboard(db: AsyncSession, user_id: UUID) -> Dict[str, An
         )
         .outerjoin(PipelineSegment, PipelineJob.id == PipelineSegment.job_id)
         .where(PipelineJob.curation_status.in_(CURATION_STATUSES))
+    )
+    if dataset_id:
+        query = query.where(PipelineJob.dataset_id == dataset_id)
+    query = (
+        query
         .group_by(PipelineJob.id)
         .order_by(
             # ANNOTATED (needs action) first, then NORMALIZING, then rest
@@ -203,6 +214,7 @@ async def get_curator_dashboard(db: AsyncSession, user_id: UUID) -> Dict[str, An
             PipelineJob.updated_at.desc(),
         )
     )
+    result = await db.execute(query)
     rows = result.mappings().all()
 
     job_list = []

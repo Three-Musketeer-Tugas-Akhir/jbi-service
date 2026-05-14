@@ -19,16 +19,27 @@ class AnnotationQueueRepository:
         self,
         annotator_id: UUID,
         status: Optional[str] = None,
+        dataset_id: Optional[UUID] = None,
         limit: int = 20,
         offset: int = 0
     ) -> List[AnnotationQueue]:
-        """Get queue entries for an annotator."""
+        """Get queue entries for an annotator, optionally filtered by dataset."""
+        from app.db.models.pipeline import PipelineSegment, PipelineJob
+
         query = select(AnnotationQueue).where(
             AnnotationQueue.annotator_id == annotator_id
         )
         
         if status:
             query = query.where(AnnotationQueue.status == status)
+        
+        if dataset_id:
+            query = (
+                query
+                .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
+                .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
+                .where(PipelineJob.dataset_id == dataset_id)
+            )
         
         query = query.order_by(
             AnnotationQueue.priority.desc(),
@@ -99,15 +110,26 @@ class AnnotationQueueRepository:
     async def count_by_annotator(
         self,
         annotator_id: UUID,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        dataset_id: Optional[UUID] = None,
     ) -> int:
-        """Count queue entries for an annotator."""
+        """Count queue entries for an annotator, optionally filtered by dataset."""
+        from app.db.models.pipeline import PipelineSegment, PipelineJob
+
         query = select(func.count(AnnotationQueue.id)).where(
             AnnotationQueue.annotator_id == annotator_id
         )
         
         if status:
             query = query.where(AnnotationQueue.status == status)
+        
+        if dataset_id:
+            query = (
+                query
+                .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
+                .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
+                .where(PipelineJob.dataset_id == dataset_id)
+            )
         
         result = await self.db.execute(query)
         return result.scalar()

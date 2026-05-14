@@ -4,6 +4,8 @@ Provides the quality gate UI with endpoints to list jobs needing
 voice annotation, view utterance-level flag data, and update
 ground-truth text with automatic re-validation.
 """
+import uuid as _uuid
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -34,12 +36,21 @@ router = APIRouter()
 async def list_voice_annotation_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "annotator")),
 ):
     """Get paginated list of jobs available for voice annotation."""
+    dataset_uuid = None
+    if dataset_id:
+        try:
+            dataset_uuid = _uuid.UUID(dataset_id)
+        except ValueError:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
+
     service = VoiceAnnotationService(db)
-    return await service.get_jobs_needing_annotation(page=page, page_size=page_size)
+    return await service.get_jobs_needing_annotation(page=page, page_size=page_size, dataset_id=dataset_uuid)
 
 
 @router.get(

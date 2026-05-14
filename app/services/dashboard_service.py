@@ -2,7 +2,8 @@
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from uuid import UUID
 
 from sqlalchemy import select, func, and_, text, exists
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,10 +22,10 @@ class DashboardService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_dashboard_data(self) -> Dict[str, Any]:
+    async def get_dashboard_data(self, dataset_id: Optional[UUID] = None) -> Dict[str, Any]:
         """Get all dashboard data in a single aggregated response."""
-        stats = await self._get_stats()
-        pipeline_progress = await self._get_pipeline_progress()
+        stats = await self._get_stats(dataset_id)
+        pipeline_progress = await self._get_pipeline_progress(dataset_id)
         conversion_rates = self._calculate_conversion_rates(pipeline_progress)
         system_activities = await self._get_system_activities()
 
@@ -35,12 +36,19 @@ class DashboardService:
             "system_activities": system_activities,
         }
 
-    async def _get_stats(self) -> List[Dict[str, Any]]:
+    def _dataset_filter(self, dataset_id: Optional[UUID] = None):
+        """Return a list of SQLAlchemy filter conditions for dataset scoping."""
+        if dataset_id:
+            return [PipelineJob.dataset_id == dataset_id]
+        return []
+
+    async def _get_stats(self, dataset_id: Optional[UUID] = None) -> List[Dict[str, Any]]:
         """Get top-level statistics cards."""
+        ds = self._dataset_filter(dataset_id)
         try:
             # Total SIBI videos
             total_videos_result = await self.db.execute(
-                select(func.count(PipelineJob.id)).where(PipelineJob.category == "SIBI")
+                select(func.count(PipelineJob.id)).where(PipelineJob.category == "SIBI", *ds)
             )
             total_videos = total_videos_result.scalar() or 0
 
@@ -51,6 +59,7 @@ class DashboardService:
                     and_(
                         PipelineJob.category == "SIBI",
                         PipelineJob.created_at >= twelve_weeks_ago,
+                        *ds,
                     )
                 )
             )
@@ -60,7 +69,7 @@ class DashboardService:
             total_chunks_result = await self.db.execute(
                 select(func.count(PipelineSegment.id))
                 .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
-                .where(PipelineJob.category == "SIBI")
+                .where(PipelineJob.category == "SIBI", *ds)
             )
             total_chunks = total_chunks_result.scalar() or 0
 
@@ -73,6 +82,7 @@ class DashboardService:
                     and_(
                         PipelineJob.category == "SIBI",
                         func.date(PipelineJob.created_at) == today,
+                        *ds,
                     )
                 )
             )
@@ -87,6 +97,7 @@ class DashboardService:
                     and_(
                         PipelineJob.category == "SIBI",
                         AnnotationEdit.is_deleted == False,
+                        *ds,
                     )
                 )
             )
@@ -104,6 +115,7 @@ class DashboardService:
                                 PipelineTranscript.segment_id == PipelineSegment.id
                             )
                         ),
+                        *ds,
                     )
                 )
             )
@@ -123,6 +135,7 @@ class DashboardService:
                         PipelineJob.curation_status.in_(
                             ["READY_TO_EXPORT", "NORMALIZED", "READY_TO_BE_NORMALIZED"]
                         ),
+                        *ds,
                     )
                 )
             )
@@ -162,12 +175,13 @@ class DashboardService:
             logger.error(f"Error getting dashboard stats: {e}")
             return []
 
-    async def _get_pipeline_progress(self) -> List[Dict[str, Any]]:
+    async def _get_pipeline_progress(self, dataset_id: Optional[UUID] = None) -> List[Dict[str, Any]]:
         """Get pipeline progress tracker stages."""
+        ds = self._dataset_filter(dataset_id)
         try:
             # Base: total SIBI videos
             total_videos_result = await self.db.execute(
-                select(func.count(PipelineJob.id)).where(PipelineJob.category == "SIBI")
+                select(func.count(PipelineJob.id)).where(PipelineJob.category == "SIBI", *ds)
             )
             total_videos = total_videos_result.scalar() or 0
 
@@ -181,6 +195,7 @@ class DashboardService:
                                 PipelineSegment.job_id == PipelineJob.id
                             )
                         ),
+                        *ds,
                     )
                 )
             )
@@ -203,6 +218,7 @@ class DashboardService:
                                 )
                             )
                         ),
+                        *ds,
                     )
                 )
             )
@@ -225,6 +241,7 @@ class DashboardService:
                                 )
                             )
                         ),
+                        *ds,
                     )
                 )
             )
@@ -249,6 +266,7 @@ class DashboardService:
                                 )
                             )
                         ),
+                        *ds,
                     )
                 )
             )
@@ -262,6 +280,7 @@ class DashboardService:
                         PipelineJob.curation_status.in_(
                             ["READY_TO_EXPORT", "NORMALIZED", "READY_TO_BE_NORMALIZED"]
                         ),
+                        *ds,
                     )
                 )
             )

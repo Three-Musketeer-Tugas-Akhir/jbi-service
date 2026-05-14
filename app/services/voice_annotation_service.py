@@ -187,20 +187,25 @@ class VoiceAnnotationService:
 
         return result
 
-    async def get_jobs_needing_annotation(self, page: int = 1, page_size: int = 50) -> dict:
-        """List jobs that need voice annotation."""
+    async def get_jobs_needing_annotation(self, page: int = 1, page_size: int = 50, dataset_id: Optional[UUID] = None) -> dict:
+        """List jobs that need voice annotation, optionally filtered by dataset."""
         statuses = [
             JobStatus.NEEDS_VOICE_ANNOTATION,
             JobStatus.VOICE_ANNOTATION_IN_PROGRESS,
             JobStatus.READY_FOR_ANNOTATION,
         ]
 
+        # Build base filters
+        filters = [
+            PipelineJob.status.in_(statuses),
+            PipelineJob.is_cancelled == False,
+        ]
+        if dataset_id:
+            filters.append(PipelineJob.dataset_id == dataset_id)
+
         # Count total
         total_q = await self.db.execute(
-            select(func.count(PipelineJob.id)).where(
-                PipelineJob.status.in_(statuses),
-                PipelineJob.is_cancelled == False,
-            )
+            select(func.count(PipelineJob.id)).where(*filters)
         )
         total = total_q.scalar() or 0
 
@@ -209,10 +214,7 @@ class VoiceAnnotationService:
         rows = (
             await self.db.execute(
                 select(PipelineJob)
-                .where(
-                    PipelineJob.status.in_(statuses),
-                    PipelineJob.is_cancelled == False,
-                )
+                .where(*filters)
                 .order_by(PipelineJob.created_at.desc())
                 .offset(offset)
                 .limit(page_size)

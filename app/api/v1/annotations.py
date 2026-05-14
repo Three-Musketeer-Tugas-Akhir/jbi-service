@@ -1,4 +1,5 @@
 """Annotation API endpoints."""
+import uuid as _uuid
 from typing import Optional, List
 from uuid import UUID
 
@@ -50,6 +51,7 @@ async def get_annotation_queue(
         None,
         description="Filter by status: ASSIGNED, IN_PROGRESS, COMPLETED"
     ),
+    dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
@@ -61,10 +63,18 @@ async def get_annotation_queue(
     Returns segments assigned to the annotator with metadata
     and pre-signed URLs for video access.
     """
+    dataset_uuid = None
+    if dataset_id:
+        try:
+            dataset_uuid = _uuid.UUID(dataset_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
+
     service = AnnotationQueueService(db)
     result = await service.get_annotator_queue(
         annotator_id=current_user.id,
         status=status,
+        dataset_id=dataset_uuid,
         page=page,
         page_size=page_size
     )

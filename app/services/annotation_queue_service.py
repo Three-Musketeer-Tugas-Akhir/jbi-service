@@ -33,16 +33,18 @@ class AnnotationQueueService:
         self,
         annotator_id: UUID,
         status: Optional[str] = None,
+        dataset_id: Optional[UUID] = None,
         page: int = 1,
         page_size: int = 20
     ) -> dict:
-        """Get paginated queue for an annotator."""
+        """Get paginated queue for an annotator, optionally filtered by dataset."""
         offset = (page - 1) * page_size
         
         # Get queue entries
         entries = await self.queue_repo.get_by_annotator(
             annotator_id=annotator_id,
             status=status,
+            dataset_id=dataset_id,
             limit=page_size,
             offset=offset
         )
@@ -50,7 +52,8 @@ class AnnotationQueueService:
         # Get total count
         total = await self.queue_repo.count_by_annotator(
             annotator_id=annotator_id,
-            status=status
+            status=status,
+            dataset_id=dataset_id,
         )
         
         # Build response items
