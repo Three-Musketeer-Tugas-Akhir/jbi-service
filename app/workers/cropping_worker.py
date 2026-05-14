@@ -188,58 +188,47 @@ class CroppingWorker(KafkaPipelineWorker):
                     job_id, str(e)
                 )
             
-            # Pre-merge all utterance pairs (N + N+1) in background.
-            # This ensures merged videos are ready before annotators open the job.
-            # Non-blocking: if it fails, on-demand merge in annotation still works.
+            # On-demand merge: only pre-merge the FIRST utterance (index 0)
+            # so it's ready when annotator opens the job. All subsequent
+            # utterances are merged lazily when the annotator navigates to them
+            # (human-loop, no bulk background processing).
             try:
                 import asyncio
                 from app.services.utterance_merge_service import UtteranceMergeService
                 
-                # Mark pre-merge as PENDING immediately so it shows up in the queue
-                # even before the background task starts.
-                async with async_session() as pm_session:
-                    pm_repo = JobRepository(pm_session)
-                    await pm_repo.update_premerge_progress(
-                        job_id=UUID(job_id),
-                        status="PENDING",
-                        total_pairs=0,
-                        completed_pairs=0,
-                        failed_pairs=0,
-                        batches=[],
-                        error=None,
-                    )
-                    await pm_session.commit()
-                    logger.info("Job %s pre-merge marked PENDING", job_id)
-                
-                async def _premerge_with_cleanup():
+                async def _premerge_first_utterance():
                     try:
-                        await UtteranceMergeService.premerge_all_for_job(UUID(job_id))
+                        # Find the first segment and merge utterance 0
+                        async with async_session() as pm_session:
+                            from sqlalchemy import select
+                            seg_result = await pm_session.execute(
+                                select(PipelineSegment)
+                                .where(PipelineSegment.job_id == UUID(job_id))
+                                .order_by(PipelineSegment.segment_index.asc())
+                                .limit(1)
+                            )
+                            first_segment = seg_result.scalar_one_or_none()
+                            if first_segment:
+                                await UtteranceMergeService.get_or_create_merged_video(
+                                    job_id=UUID(job_id),
+                                    segment_id=first_segment.id,
+                                    utterance_index=0
+                                )
+                                logger.info(
+                                    "Job %s first utterance pre-merged for instant annotation start",
+                                    job_id
+                                )
                     except Exception as exc:
-                        logger.exception(
-                            "Job %s pre-merge background task failed: %s",
+                        logger.warning(
+                            "Job %s first-utterance pre-merge failed (non-blocking): %s",
                             job_id, exc
                         )
-                        # Mark as failed so admin can see it
-                        try:
-                            async with async_session() as fail_session:
-                                fail_repo = JobRepository(fail_session)
-                                await fail_repo.update_premerge_progress(
-                                    job_id=UUID(job_id),
-                                    status="FAILED",
-                                    error=str(exc),
-                                )
-                                await fail_session.commit()
-                        except Exception as cleanup_err:
-                            logger.warning(
-                                "Job %s failed to write pre-merge failure status: %s",
-                                job_id, cleanup_err
-                            )
                 
-                asyncio.create_task(_premerge_with_cleanup())
-                logger.info("Job %s pre-merge task spawned in background", job_id)
+                asyncio.create_task(_premerge_first_utterance())
+                logger.info("Job %s first-utterance merge task spawned", job_id)
             except Exception as e:
                 logger.warning(
-                    "Job %s pre-merge spawn failed (non-blocking): %s",
+                    "Job %s first-utterance merge spawn failed (non-blocking): %s",
                     job_id, str(e)
                 )
         

@@ -6,13 +6,16 @@ When an utterance's requested end_time exceeds its original CV2 video boundary,
 the service crops the overflow from the NEXT utterance's CV2 video,
 merges both clips, and cascade-updates the next utterance's start time.
 
-VIDEO-EDITOR-SIBI STYLE ADAPTATIONS:
-- start_time must equal orig_start (no trim-in from left)
-- Cascade updates next utterance's merged_video_path so it re-merges on next load
+IMPROVEMENTS OVER VIDEO-EDITOR-SIBI:
+1. Pre-trim snapshot stored per-utterance for granular undo/revert
+2. Deep cascade invalidation (N+1, N+2, ... merged videos cleared)
+3. Cascade audit trail (cascade_info on AnnotationEdit)
+4. Trim-in supported (start_time can differ from orig_start)
 """
 import logging
 import os
 import uuid
+from datetime import datetime
 
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import select
@@ -39,6 +42,12 @@ class UtteranceCroppingService:
         
         Uses the CV2 utterance video (PipelineTranscript.video_path) as the source.
         If end_time > original_end, it overlaps into the next utterance.
+        
+        IMPROVEMENTS:
+        - Saves pre_trim_snapshot before cropping (for granular undo)
+        - Supports trim-in (start_time != orig_start)
+        - Records cascade_info audit trail
+        - Deep cascade invalidation beyond N+1
         """
         minio_service = get_minio_service()
         
@@ -88,6 +97,29 @@ class UtteranceCroppingService:
                 if utt_idx_in_array is None:
                     return
                 
+                # ══════════════════════════════════════════════════════════
+                # IMPROVEMENT 1: Save pre-trim snapshot for granular undo
+                # ══════════════════════════════════════════════════════════
+                # Find next utterance info for snapshot
+                next_utt_snapshot = None
+                for utt in utt_list:
+                    if utt.get("utterance_index") == utterance_index + 1:
+                        next_utt_snapshot = {
+                            "start": utt.get("start"),
+                            "end": utt.get("end"),
+                            "cropped_video_path": utt.get("cropped_video_path"),
+                            "status": utt.get("status"),
+                        }
+                        break
+                
+                utt_list[utt_idx_in_array]["pre_trim_snapshot"] = {
+                    "start": utt_list[utt_idx_in_array].get("start"),
+                    "end": utt_list[utt_idx_in_array].get("end"),
+                    "cropped_video_path": utt_list[utt_idx_in_array].get("cropped_video_path"),
+                    "next_utterance": next_utt_snapshot,
+                    "trimmed_at": datetime.utcnow().isoformat(),
+                }
+                
                 curr_video_url = await minio_service.generate_presigned_url(curr_transcript.video_path, expiry=3600)
                 
                 # 4. Calculate crop parameters.
@@ -103,11 +135,14 @@ class UtteranceCroppingService:
                 orig_end = curr_transcript.end
                 orig_duration = max(0.01, orig_end - orig_start)
                 
-                # VIDEO-EDITOR-SIBI STYLE: start_time must equal orig_start (no trim-in)
-                # Allow tiny tolerance for floating point errors
-                if abs(start_time - orig_start) > 0.01:
+                # ══════════════════════════════════════════════════════════
+                # IMPROVEMENT 4: Allow trim-in (start_time != orig_start)
+                # No longer clamp start_time to orig_start. Instead, compute
+                # relative_start naturally so FFmpeg seeks into the video.
+                # ══════════════════════════════════════════════════════════
+                if start_time < orig_start:
                     logger.warning(
-                        f"Trim-in detected for utt {utterance_index}: "
+                        f"Trim-in before orig_start for utt {utterance_index}: "
                         f"start={start_time:.3f} but orig_start={orig_start:.3f}. "
                         f"Clamping to orig_start."
                     )
@@ -131,6 +166,8 @@ class UtteranceCroppingService:
                 # Edge case: if relative_start already at or past the end of the CV2 video,
                 # we need to pull everything from the next video (skip Part A)
                 skip_part_a = relative_start >= orig_duration - 0.001
+                
+                cascade_affected = []  # Track affected utterances for audit trail
                 
                 if right_overlap <= 0 and not skip_part_a:
                     # ══════════════════════════════════════════════
@@ -287,9 +324,12 @@ class UtteranceCroppingService:
                             await _mark_failed(db, edit, utt_list, utt_idx_in_array)
                             return
                     
-                    # Cascade update the next utterance
-                    await _cascade_update_next_utterance(
-                        db, next_transcript.segment_id, next_transcript.utterance_index, clamped_overlap
+                    # ══════════════════════════════════════════════════════════
+                    # IMPROVEMENT 2 + 3: Deep cascade + audit trail
+                    # ══════════════════════════════════════════════════════════
+                    cascade_affected = await _cascade_update_next_utterance(
+                        db, segment, next_transcript.segment_id, 
+                        next_transcript.utterance_index, clamped_overlap
                     )
                 
                 # Upload video
@@ -304,6 +344,26 @@ class UtteranceCroppingService:
                 
                 edit.utterance_corrections = utt_list
                 flag_modified(edit, "utterance_corrections")
+                
+                # ══════════════════════════════════════════════════════════
+                # IMPROVEMENT 3: Record cascade audit trail
+                # ══════════════════════════════════════════════════════════
+                if cascade_affected:
+                    cascade_entry = {
+                        "source_utterance": utterance_index,
+                        "source_segment_id": str(segment_id),
+                        "affected_utterances": cascade_affected,
+                        "shift_amount": right_overlap if right_overlap > 0 else 0,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "action": "trim_crop",
+                    }
+                    # Append to existing cascade_info or create new
+                    existing_cascade = edit.cascade_info or {}
+                    history = existing_cascade.get("history", [])
+                    history.append(cascade_entry)
+                    edit.cascade_info = {"history": history}
+                    flag_modified(edit, "cascade_info")
+                
                 await db.commit()
                 
             except Exception as e:
@@ -314,6 +374,117 @@ class UtteranceCroppingService:
                 except Exception:
                     pass
 
+    @staticmethod
+    async def revert_utterance(
+        segment_id: uuid.UUID,
+        utterance_index: int
+    ) -> dict:
+        """
+        IMPROVEMENT 1: Revert a previously-trimmed utterance to its pre-trim state.
+        
+        Reads the pre_trim_snapshot stored in utterance_corrections and restores:
+        1. The current utterance's start/end/cropped_video_path/status
+        2. The next utterance's start (if it was shifted by cascade)
+        3. Clears merged_video_path for both utterances
+        
+        Returns dict with revert details.
+        """
+        async with async_session_maker() as db:
+            # 1. Fetch active edit
+            edit_result = await db.execute(
+                select(AnnotationEdit).where(
+                    AnnotationEdit.segment_id == segment_id,
+                    AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+                    AnnotationEdit.is_deleted == False
+                ).order_by(AnnotationEdit.edited_at.desc())
+            )
+            edit = edit_result.scalars().first()
+            if not edit or not edit.utterance_corrections:
+                return {"error": "No active edit found"}
+            
+            utt_list = list(edit.utterance_corrections)
+            
+            # Find the target utterance
+            target_idx = None
+            target_utt = None
+            for i, utt in enumerate(utt_list):
+                if utt.get("utterance_index") == utterance_index:
+                    target_idx = i
+                    target_utt = utt
+                    break
+            
+            if target_utt is None:
+                return {"error": "Utterance not found"}
+            
+            snapshot = target_utt.get("pre_trim_snapshot")
+            if not snapshot:
+                return {"error": "No pre-trim snapshot available for this utterance"}
+            
+            # 2. Restore current utterance from snapshot
+            old_start = target_utt.get("start")
+            old_end = target_utt.get("end")
+            
+            utt_list[target_idx]["start"] = snapshot["start"]
+            utt_list[target_idx]["end"] = snapshot["end"]
+            utt_list[target_idx]["cropped_video_path"] = snapshot.get("cropped_video_path")
+            utt_list[target_idx]["status"] = "DRAFT"
+            # Remove the snapshot after using it
+            utt_list[target_idx].pop("pre_trim_snapshot", None)
+            
+            # 3. Restore next utterance if it was affected
+            next_snapshot = snapshot.get("next_utterance")
+            if next_snapshot:
+                for i, utt in enumerate(utt_list):
+                    if utt.get("utterance_index") == utterance_index + 1:
+                        utt_list[i]["start"] = next_snapshot["start"]
+                        # Clear the next utterance's cropped video since its start changed
+                        utt_list[i]["cropped_video_path"] = None
+                        if utt_list[i].get("status") == "OK":
+                            utt_list[i]["status"] = "DRAFT"
+                        break
+            
+            edit.utterance_corrections = utt_list
+            flag_modified(edit, "utterance_corrections")
+            
+            # 4. Record revert in cascade_info audit trail
+            revert_entry = {
+                "source_utterance": utterance_index,
+                "source_segment_id": str(segment_id),
+                "action": "revert",
+                "reverted_from": {"start": old_start, "end": old_end},
+                "reverted_to": {"start": snapshot["start"], "end": snapshot["end"]},
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            existing_cascade = edit.cascade_info or {}
+            history = existing_cascade.get("history", [])
+            history.append(revert_entry)
+            edit.cascade_info = {"history": history}
+            flag_modified(edit, "cascade_info")
+            
+            # 5. Clear merged videos for affected utterances
+            for utt_index in [utterance_index, utterance_index + 1]:
+                transcript_result = await db.execute(
+                    select(PipelineTranscript).where(
+                        PipelineTranscript.segment_id == segment_id,
+                        PipelineTranscript.utterance_index == utt_index
+                    )
+                )
+                transcript = transcript_result.scalar_one_or_none()
+                if transcript and transcript.merged_video_path:
+                    transcript.merged_video_path = None
+                    transcript.merged_video_duration = None
+                    transcript.video_n_duration = None
+            
+            await db.commit()
+            
+            return {
+                "status": "reverted",
+                "utterance_index": utterance_index,
+                "reverted_start": snapshot["start"],
+                "reverted_end": snapshot["end"],
+                "message": f"Kalimat {utterance_index + 1} berhasil dikembalikan ke kondisi sebelum trim."
+            }
+
 
 async def _mark_failed(db, edit, utt_list, utt_idx):
     utt_list[utt_idx]["status"] = "FAILED"
@@ -323,24 +494,32 @@ async def _mark_failed(db, edit, utt_list, utt_idx):
 
 
 async def _cascade_update_next_utterance(
-    db, segment_id: uuid.UUID, utterance_index: int, right_overlap: float
-):
-    """Cascade update next utterance after trim — SIBI style.
+    db, segment: PipelineSegment, next_segment_id: uuid.UUID, 
+    next_utterance_index: int, right_overlap: float
+) -> list:
+    """Cascade update next utterance after trim — IMPROVED.
+    
+    IMPROVEMENT 2: Deep cascade invalidation.
+    After updating N+1, continues to invalidate merged videos for N+2, N+3, etc.
+    
+    IMPROVEMENT 3: Returns list of affected utterances for audit trail.
     
     1. Push next utterance's start forward by the overlap amount
     2. Clear cropped_video_path so next utterance will be re-cropped
-    3. Clear merged_video_path so next utterance will be re-merged
+    3. Clear merged_video_path for N+1, N+2, ... (deep cascade)
     """
+    affected = []
+    
     # Get the transcript for next utterance
     transcript_result = await db.execute(
         select(PipelineTranscript).where(
-            PipelineTranscript.segment_id == segment_id,
-            PipelineTranscript.utterance_index == utterance_index
+            PipelineTranscript.segment_id == next_segment_id,
+            PipelineTranscript.utterance_index == next_utterance_index
         )
     )
     transcript = transcript_result.scalar_one_or_none()
     if not transcript:
-        return
+        return affected
     
     # Push start forward
     old_start = transcript.start
@@ -355,11 +534,19 @@ async def _cascade_update_next_utterance(
         transcript.merged_video_path = None
         transcript.merged_video_duration = None
         transcript.video_n_duration = None
+        
+        affected.append({
+            "utterance_index": next_utterance_index,
+            "segment_id": str(next_segment_id),
+            "old_start": old_start,
+            "new_start": float(transcript.start),
+            "action": "start_shifted",
+        })
     
     # Also update AnnotationEdit (draft corrections) if exists
     edit_result = await db.execute(
         select(AnnotationEdit).where(
-            AnnotationEdit.segment_id == segment_id,
+            AnnotationEdit.segment_id == next_segment_id,
             AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
             AnnotationEdit.is_deleted == False
         ).order_by(AnnotationEdit.edited_at.desc())
@@ -370,7 +557,7 @@ async def _cascade_update_next_utterance(
         next_utt_list = list(next_edit.utterance_corrections)
         
         for i, utt in enumerate(next_utt_list):
-            if utt.get("utterance_index") == utterance_index:
+            if utt.get("utterance_index") == next_utterance_index:
                 old_start_edit = utt.get("start", 0.0)
                 new_start_edit = max(old_start_edit, transcript.start)
                 
@@ -389,7 +576,38 @@ async def _cascade_update_next_utterance(
                     flag_modified(next_edit, "utterance_corrections")
                 break
     
+    # ══════════════════════════════════════════════════════════════════
+    # IMPROVEMENT 2: Deep cascade — invalidate merged videos for
+    # N+2, N+3, ... because their cached merge may contain stale data
+    # from the video that just changed.
+    # ══════════════════════════════════════════════════════════════════
+    deep_result = await db.execute(
+        select(PipelineTranscript)
+        .join(PipelineSegment, PipelineTranscript.segment_id == PipelineSegment.id)
+        .where(PipelineSegment.job_id == segment.job_id)
+        .where(
+            (PipelineSegment.segment_index > segment.segment_index) |
+            ((PipelineSegment.segment_index == segment.segment_index) & 
+             (PipelineTranscript.utterance_index > next_utterance_index))
+        )
+        .order_by(PipelineSegment.segment_index.asc(), PipelineTranscript.utterance_index.asc())
+        .limit(5)  # Invalidate up to 5 downstream merges
+    )
+    downstream_transcripts = deep_result.scalars().all()
+    
+    for dt in downstream_transcripts:
+        if dt.merged_video_path:
+            dt.merged_video_path = None
+            dt.merged_video_duration = None
+            dt.video_n_duration = None
+            affected.append({
+                "utterance_index": dt.utterance_index,
+                "segment_id": str(dt.segment_id),
+                "action": "merged_video_invalidated",
+            })
+    
     await db.commit()
+    return affected
 
 
 def _cleanup_tmp(*paths):

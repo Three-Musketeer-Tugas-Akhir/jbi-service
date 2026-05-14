@@ -57,6 +57,13 @@ class AnnotationEdit(Base):
         comment="List of corrected utterances: [{utterance_index, text, start, end}]"
     )
     
+    # Trim cascade audit trail (Improvement 3)
+    cascade_info: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Audit trail of cascade effects from trim operations: {source_utterance, affected_utterances, shift_amount, timestamp}"
+    )
+    
     # Curation fields
     normalized_text: Mapped[Optional[str]] = mapped_column(
         Text,

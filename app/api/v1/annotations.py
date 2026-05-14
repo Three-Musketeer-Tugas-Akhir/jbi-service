@@ -253,6 +253,34 @@ async def crop_utterance_physically(
     return {"status": "processing", "message": "Physical cropping started in background"}
 
 
+@router.post("/{segment_id}/utterances/{utterance_index}/revert")
+async def revert_utterance_trim(
+    segment_id: UUID,
+    utterance_index: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin", "annotator"))
+):
+    """
+    IMPROVEMENT 1: Revert a previously-trimmed utterance to its pre-trim state.
+    
+    Reads the pre_trim_snapshot stored during the crop operation and restores:
+    1. The current utterance's start/end/status back to DRAFT
+    2. The next utterance's start (if it was shifted by cascade)
+    3. Clears merged_video_path for both utterances
+    """
+    from app.services.utterance_cropping_service import UtteranceCroppingService
+    
+    result = await UtteranceCroppingService.revert_utterance(
+        segment_id=segment_id,
+        utterance_index=utterance_index
+    )
+    
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    
+    return result
+
+
 @router.get(
     "/segments/{segment_id}/utterances/{utterance_index}/merged-video",
     response_model=dict,
