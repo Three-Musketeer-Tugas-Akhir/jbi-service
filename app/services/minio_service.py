@@ -269,6 +269,57 @@ class MinIOService:
             raise StorageError(
                 f"Failed to delete object {object_name}: {e}"
             )
+            
+    def _delete_objects_by_prefix_sync(self, prefix: str) -> int:
+        """Synchronous bulk delete implementation."""
+        from minio.deleteobjects import DeleteObject
+        
+        objects_to_delete = self._client.list_objects(
+            bucket_name=self._bucket_name,
+            prefix=prefix,
+            recursive=True
+        )
+        
+        delete_object_list = [DeleteObject(obj.object_name) for obj in objects_to_delete]
+        
+        if not delete_object_list:
+            return 0
+            
+        errors = self._client.remove_objects(
+            bucket_name=self._bucket_name,
+            delete_object_list=delete_object_list
+        )
+        
+        error_count = 0
+        for error in errors:
+            error_count += 1
+            import logging
+            logging.getLogger(__name__).error(f"Error deleting object {error.object_name}: {error.message}")
+            
+        return len(delete_object_list) - error_count
+
+    async def delete_objects_by_prefix(self, prefix: str) -> int:
+        """
+        Delete all objects matching a prefix from MinIO.
+        
+        Args:
+            prefix: Prefix to match objects against
+            
+        Returns:
+            Number of objects successfully deleted
+            
+        Raises:
+            StorageError: If deletion fails
+        """
+        try:
+            return await asyncio.to_thread(
+                self._delete_objects_by_prefix_sync,
+                prefix
+            )
+        except (S3Error, MaxRetryError) as e:
+            raise StorageError(
+                f"Failed to delete objects with prefix {prefix}: {e}"
+            )
     
     def _object_exists_sync(self, object_name: str) -> bool:
         """Synchronous exists check - only returns False for NoSuchKey."""

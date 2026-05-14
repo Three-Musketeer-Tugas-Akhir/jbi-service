@@ -61,6 +61,8 @@ from app.schemas.job import (
     DatasetExplorerResponse,
     DatasetExplorerSegment,
     DatasetExplorerUtterance,
+    JobRetryRequest,
+    JobRetryResponse,
 )
 from app.repositories.segment_repository import SegmentRepository
 from app.repositories.annotation_edit_repository import AnnotationEditRepository
@@ -551,6 +553,89 @@ async def start_all_classified(
         "errors": errors,
         "message": f"{started} job(s) started for processing",
     }
+
+
+# ── POST /pipeline/jobs/{job_id}/retry ───────────────────────────────────
+
+@router.post(
+    "/pipeline/jobs/{job_id}/retry",
+    response_model=JobRetryResponse,
+    responses={
+        404: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+    },
+)
+async def retry_job(
+    job_id: str,
+    request: JobRetryRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Retry a failed pipeline job.
+    
+    Modes:
+    - full: deletes all data and restarts from detection stage.
+    - from_failed_stage: deletes data only for the failed stage and restarts from there.
+    """
+    from app.services.retry_service import RetryService
+    
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid job ID: {job_id}")
+    
+    # Validation: Ensure job is in a failed state
+    job_repo = JobRepository(session)
+    job = await job_repo.get_by_id(job_uuid)
+    
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+        
+    if job.status not in {JobStatus.FAILED.value, JobStatus.CROPPING_FAILED.value}:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot retry job in state '{job.status}'. Only failed jobs can be retried."
+        )
+
+    # Need current stage to determine where to retry from
+    failed_stage = job.current_stage
+    if request.mode == "from_failed_stage" and not failed_stage:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot determine failed stage. Please use full retry."
+        )
+
+    retry_service = RetryService(session)
+    try:
+        if request.mode == "full":
+            retried_job = await retry_service.retry_full(job_uuid)
+            message = "Pipeline full retry started"
+        elif request.mode == "from_failed_stage":
+            retried_job = await retry_service.retry_from_stage(job_uuid, failed_stage)
+            message = f"Pipeline partial retry started from stage '{failed_stage}'"
+        else:
+             raise HTTPException(status_code=400, detail="Invalid retry mode")
+             
+        await session.commit()
+        
+        logger.info(
+            "Pipeline retry (%s): job_id=%s, user=%s", 
+            request.mode, job_id, current_user.id
+        )
+        
+        return JobRetryResponse(
+            id=str(retried_job.id),
+            status=retried_job.status,
+            retry_mode=request.mode,
+            failed_stage=failed_stage if request.mode == "from_failed_stage" else None,
+            message=message
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to retry pipeline job %s (%s): %s", job_id, request.mode, e)
+        raise HTTPException(status_code=500, detail="Failed to start retry")
 
 
 # ── DELETE /jobs/{job_id} ────────────────────────────────────────────────

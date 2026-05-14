@@ -200,6 +200,17 @@ class JobCancelResponse(BaseModel):
     queue_jobs_cancelled: int = Field(..., description="Number of queue jobs cancelled")
     message: str = Field(..., description="Success message")
 
+class JobRetryRequest(BaseModel):
+    """Request body for job retry endpoint."""
+    mode: str = Field(..., pattern="^(full|from_failed_stage)$", description="Retry mode: 'full' or 'from_failed_stage'")
+
+class JobRetryResponse(BaseModel):
+    """Response for job retry endpoint."""
+    id: str = Field(..., description="Job UUID")
+    status: str = Field(..., description="New job status")
+    retry_mode: str = Field(..., description="The retry mode executed")
+    failed_stage: Optional[str] = Field(None, description="The stage that was retried (if partial)")
+    message: str = Field(..., description="Success message")
 
 class HealthResponse(BaseModel):
     """Response for GET /api/v1/health."""
