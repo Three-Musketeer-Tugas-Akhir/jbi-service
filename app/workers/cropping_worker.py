@@ -88,8 +88,6 @@ class CroppingWorker(KafkaPipelineWorker):
         job_id = payload.get("job_id")
         if not job_id:
             raise ValueError("Missing job_id in payload")
-            
-        raise RuntimeError("SIMULASI ERROR UNTUK TESTING RETRY! Fitur CV-2 sengaja digagalkan.")
         
         logger.info("Starting cropping stage for job %s", job_id)
         
@@ -108,6 +106,19 @@ class CroppingWorker(KafkaPipelineWorker):
                     "Job %s has status %s, expected ASR_COMPLETED",
                     job_id, job.status
                 )
+            
+            # ── SIMULASI ERROR UNTUK TESTING RETRY ──────────────────
+            # Ini sengaja digagalkan. Hapus blok ini setelah selesai testing.
+            await job_repo.update_status(
+                UUID(job_id),
+                JobStatus.CROPPING_FAILED,
+                error_message="SIMULASI ERROR: CV-2 sengaja digagalkan untuk testing retry.",
+                current_stage="cropping",
+            )
+            await session.commit()
+            logger.error("Job %s [SIMULASI] sengaja digagalkan untuk testing retry", job_id)
+            return None  # returning None signals kafka_base to NOT publish next stage
+            # ────────────────────────────────────────────────────────
             
             # Get all segments with transcripts
             segments = await segment_repo.get_by_job_id(UUID(job_id))
