@@ -88,6 +88,8 @@ class CroppingWorker(KafkaPipelineWorker):
         job_id = payload.get("job_id")
         if not job_id:
             raise ValueError("Missing job_id in payload")
+            
+        raise RuntimeError("SIMULASI ERROR UNTUK TESTING RETRY! Fitur CV-2 sengaja digagalkan.")
         
         logger.info("Starting cropping stage for job %s", job_id)
         
