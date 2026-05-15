@@ -85,7 +85,7 @@ class ASRWorker(KafkaPipelineWorker):
             segments = await segment_repo.get_by_job_id(job_id)
             
             # Update status
-            await job_repo.update_status(job_id, JobStatus.TRANSCRIBING)
+            await job_repo.update_status(job_id, JobStatus.TRANSCRIBING, current_stage="asr")
             await session.commit()
         
         # Prepare inputs for pipeline stage
@@ -117,7 +117,8 @@ class ASRWorker(KafkaPipelineWorker):
                 await job_repo.update_status(
                     job_id, 
                     JobStatus.FAILED, 
-                    error_message=f"ASR (Transkripsi) gagal pada seluruh {len(results)} segmen"
+                    error_message=f"ASR (Transkripsi) gagal pada seluruh {len(results)} segmen",
+                    current_stage="asr",
                 )
                 await session.commit()
             raise ProcessingError(f"Proses ASR gagal pada semua {len(results)} segmen")
@@ -206,7 +207,7 @@ class ASRWorker(KafkaPipelineWorker):
         # Update job status to ASR_COMPLETED
         async with async_session() as session:
             job_repo = JobRepository(session)
-            await job_repo.update_status(job_id, JobStatus.ASR_COMPLETED)
+            await job_repo.update_status(job_id, JobStatus.ASR_COMPLETED, current_stage="asr")
             await session.commit()
         
         total_utterances = sum(len(r.utterances) for r in results)

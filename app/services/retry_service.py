@@ -98,7 +98,8 @@ class RetryService:
         try:
             await pipeline_producer.publish_detection_job(
                 job_id=str(job_id),
-                video_url=job.video_path
+                video_key=job.video_path,
+                category=job.category or "SIBI",
             )
             logger.info(f"Published detection job for retry {job_id}")
         except Exception as e:
@@ -185,7 +186,12 @@ class RetryService:
                 await self.db.execute(
                     update(PipelineTranscript)
                     .where(PipelineTranscript.segment_id.in_(segment_ids))
-                    .values(status="pending", video_path=None)
+                    .values(
+                        status="pending",
+                        video_path=None,
+                        merged_video_path=None,
+                        merged_video_duration=None,
+                    )
                 )
             
             # Reset Job State

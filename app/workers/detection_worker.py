@@ -75,7 +75,7 @@ class DetectionWorker(KafkaPipelineWorker):
         # Update status to DETECTING
         async with async_session() as session:
             job_repo = JobRepository(session)
-            await job_repo.update_status(job_id, JobStatus.DETECTING)
+            await job_repo.update_status(job_id, JobStatus.DETECTING, current_stage="detection")
             await session.commit()
         
         # Download video from MinIO
@@ -100,7 +100,7 @@ class DetectionWorker(KafkaPipelineWorker):
                 # Update job status and complete
                 async with async_session() as session:
                     job_repo = JobRepository(session)
-                    await job_repo.update_status(job_id, JobStatus.READY_FOR_ANNOTATION)
+                    await job_repo.update_status(job_id, JobStatus.READY_FOR_ANNOTATION, current_stage="detection")
                     await session.commit()
                 return {"segments_detected": 0, "confidence": 0, "segment_ids": []}
             
@@ -147,7 +147,7 @@ class DetectionWorker(KafkaPipelineWorker):
             logger.error(f"Detection failed for job {job_id}: {e}")
             async with async_session() as session:
                 job_repo = JobRepository(session)
-                await job_repo.update_status(job_id, JobStatus.FAILED, error_message=f"CV-1 (Deteksi & Ekstraksi) gagal: {str(e)}")
+                await job_repo.update_status(job_id, JobStatus.FAILED, error_message=f"CV-1 (Deteksi & Ekstraksi) gagal: {str(e)}", current_stage="detection")
                 await session.commit()
             # Re-raise to trigger retry mechanism
             raise

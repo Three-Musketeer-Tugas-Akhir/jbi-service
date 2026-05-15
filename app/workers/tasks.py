@@ -54,7 +54,7 @@ async def _process_job_async(job_id: str, video_path: str) -> None:
             logger.info("Job %s already in terminal state — skipping", job_id)
             return
 
-        await repo.update_status(job_id, JobStatus.DETECTING)
+        await repo.update_status(job_id, JobStatus.DETECTING, current_stage="detection")
         await session.commit()
 
     logger.info("Starting job %s", job_id)
@@ -86,7 +86,7 @@ async def _process_job_async(job_id: str, video_path: str) -> None:
         async with async_session() as session:
             repo = JobRepository(session)
             await repo.set_result(job_id, result_data)
-            await repo.update_status(job_id, JobStatus.READY_FOR_ANNOTATION)
+            await repo.update_status(job_id, JobStatus.READY_FOR_ANNOTATION, current_stage="detection")
             await session.commit()
 
         logger.info(
@@ -102,14 +102,14 @@ async def _process_job_async(job_id: str, video_path: str) -> None:
         logger.exception("Job %s failed at phase %s", job_id, exc.phase)
         async with async_session() as session:
             repo = JobRepository(session)
-            await repo.update_status(job_id, JobStatus.FAILED, error=str(exc))
+            await repo.update_status(job_id, JobStatus.FAILED, error=str(exc), current_stage="detection")
             await session.commit()
 
     except Exception as exc:
         logger.exception("Job %s failed with unexpected error", job_id)
         async with async_session() as session:
             repo = JobRepository(session)
-            await repo.update_status(job_id, JobStatus.FAILED, error=str(exc))
+            await repo.update_status(job_id, JobStatus.FAILED, error=str(exc), current_stage="detection")
             await session.commit()
 
 

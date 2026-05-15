@@ -68,7 +68,8 @@ class JobRepository:
         self,
         job_id: UUID,
         status: str,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
+        current_stage: Optional[str] = None,
     ) -> bool:
         """
         Update job status.
@@ -77,6 +78,7 @@ class JobRepository:
             job_id: Job UUID
             status: New status
             error_message: Optional error message for FAILED status
+            current_stage: Optional current processing stage
             
         Returns:
             True if job was found and updated, False otherwise
@@ -86,6 +88,8 @@ class JobRepository:
         job = await self.get_by_id(job_id)
         if job:
             job.status = status
+            if current_stage is not None:
+                job.current_stage = current_stage
             if error_message:
                 job.error_message = error_message
             # Set completion timestamp for terminal states

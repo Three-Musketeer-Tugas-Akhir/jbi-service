@@ -128,7 +128,7 @@ class CroppingWorker(KafkaPipelineWorker):
             )
             
             # Update job status
-            await job_repo.update_status(UUID(job_id), JobStatus.CROPPING_IN_PROGRESS)
+            await job_repo.update_status(UUID(job_id), JobStatus.CROPPING_IN_PROGRESS, current_stage="cropping")
             await session.commit()
         
         # Process utterances outside transaction
@@ -147,7 +147,7 @@ class CroppingWorker(KafkaPipelineWorker):
             
             if failure_count == 0:
                 # CV2 complete — move to voice annotation (human loop).
-                await job_repo.update_status(UUID(job_id), JobStatus.NEEDS_VOICE_ANNOTATION)
+                await job_repo.update_status(UUID(job_id), JobStatus.NEEDS_VOICE_ANNOTATION, current_stage="cropping")
                 logger.info(
                     "Job %s cropping complete: %d/%d utterances → NEEDS_VOICE_ANNOTATION",
                     job_id, success_count, len(results)
@@ -156,7 +156,8 @@ class CroppingWorker(KafkaPipelineWorker):
                 await job_repo.update_status(
                     UUID(job_id), 
                     JobStatus.CROPPING_FAILED,
-                    error_message=f"CV-2 (Video Cropping) gagal pada {failure_count} utterance"
+                    error_message=f"CV-2 (Video Cropping) gagal pada {failure_count} utterance",
+                    current_stage="cropping",
                 )
                 logger.error(
                     "Job %s cropping failed: %d/%d utterances failed",
@@ -556,7 +557,8 @@ class CroppingWorker(KafkaPipelineWorker):
         await job_repo.update_status(
             job.id,
             JobStatus.CROPPING_FAILED,
-            error_message="No transcripts found for cropping"
+            error_message="No transcripts found for cropping",
+            current_stage="cropping",
         )
         await session.commit()
         
