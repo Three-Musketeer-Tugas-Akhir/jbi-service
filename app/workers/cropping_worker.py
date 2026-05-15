@@ -107,20 +107,7 @@ class CroppingWorker(KafkaPipelineWorker):
                     job_id, job.status
                 )
             
-            # ── SIMULASI ERROR UNTUK TESTING RETRY ──────────────────
-            # Ini sengaja digagalkan. Hapus blok ini setelah selesai testing.
-            await job_repo.update_status(
-                UUID(job_id),
-                JobStatus.CROPPING_FAILED,
-                error_message="SIMULASI ERROR: CV-2 sengaja digagalkan untuk testing retry.",
-                current_stage="cropping",
-            )
-            await session.commit()
-            logger.error("Job %s [SIMULASI] sengaja digagalkan untuk testing retry", job_id)
-            # PENTING: return dict (bukan None) agar kafka_base commit offset-nya.
-            # Jika return None → offset tidak di-commit → message di-redeliver terus (infinite loop).
-            return {"job_id": job_id, "success": False, "simulated_failure": True}
-            # ────────────────────────────────────────────────────────
+
             
             # Get all segments with transcripts
             segments = await segment_repo.get_by_job_id(UUID(job_id))
