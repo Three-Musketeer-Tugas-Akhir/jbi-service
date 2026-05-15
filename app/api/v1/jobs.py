@@ -626,8 +626,10 @@ async def retry_job(
             message = f"Pipeline partial retry started from stage '{failed_stage}'"
         else:
              raise HTTPException(status_code=400, detail="Invalid retry mode")
-             
-        await session.commit()
+        
+        # NOTE: RetryService already commits DB changes before publishing
+        # to Kafka. Do NOT add session.commit() here — it could overwrite
+        # status changes made by the worker that picked up the Kafka message.
         
         logger.info(
             "Pipeline retry (%s): job_id=%s, user=%s", 
