@@ -90,7 +90,7 @@ class RetryService:
         job.total_segments = 0
         job.completed_segments = 0
 
-        await self.db.flush()
+        await self.db.commit()
         
         logger.info(f"Job {job_id} reset to QUEUED for full retry")
         
@@ -150,7 +150,7 @@ class RetryService:
             job.completed_at = None
             job.is_cancelled = False
             
-            await self.db.flush()
+            await self.db.commit()
             
             # Trigger ASR stage
             if segments:
@@ -202,7 +202,7 @@ class RetryService:
             job.completed_at = None
             job.is_cancelled = False
             
-            await self.db.flush()
+            await self.db.commit()
             
             # Count total transcripts to queue
             from sqlalchemy import select, func
