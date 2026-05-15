@@ -119,8 +119,9 @@ class RetryService:
 
         logger.info(f"Starting partial retry from stage '{failed_stage}' for job {job_id}")
 
-        if failed_stage == "detection":
-            # Detection failure means we have no segments anyway, just do a full retry
+        if failed_stage in ("detection", "upload"):
+            # Detection failure (or job never started) means we have no
+            # pipeline-stage data, so just do a full retry.
             return await self.retry_full(job_id)
             
         elif failed_stage == "asr":

@@ -597,13 +597,24 @@ async def retry_job(
             detail=f"Cannot retry job in state '{job.status}'. Only failed jobs can be retried."
         )
 
-    # Need current stage to determine where to retry from
+    # Need current stage to determine where to retry from.
+    # For legacy jobs created before current_stage tracking was added,
+    # derive the stage from the job status when possible.
     failed_stage = job.current_stage
-    if request.mode == "from_failed_stage" and not failed_stage:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot determine failed stage. Please use full retry."
-        )
+    if request.mode == "from_failed_stage":
+        if job.status == JobStatus.CROPPING_FAILED:
+            failed_stage = "cropping"
+        elif failed_stage == "upload":
+            # Job never entered pipeline workers (legacy or pre-processing failure)
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot determine the failed processing stage. Please use full retry."
+            )
+        elif not failed_stage:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot determine failed stage. Please use full retry."
+            )
 
     retry_service = RetryService(session)
     try:
