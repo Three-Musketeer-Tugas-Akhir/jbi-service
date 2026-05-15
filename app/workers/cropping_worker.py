@@ -117,7 +117,9 @@ class CroppingWorker(KafkaPipelineWorker):
             )
             await session.commit()
             logger.error("Job %s [SIMULASI] sengaja digagalkan untuk testing retry", job_id)
-            return None  # returning None signals kafka_base to NOT publish next stage
+            # PENTING: return dict (bukan None) agar kafka_base commit offset-nya.
+            # Jika return None → offset tidak di-commit → message di-redeliver terus (infinite loop).
+            return {"job_id": job_id, "success": False, "simulated_failure": True}
             # ────────────────────────────────────────────────────────
             
             # Get all segments with transcripts
