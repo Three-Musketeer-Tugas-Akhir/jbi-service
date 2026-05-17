@@ -131,7 +131,7 @@ def _download_sync(download_id: str, url: str, temp_dir: str, output_template: s
     # ── Step 1: Extract video info ───────────────────────────
     logger.info(f"[YT-DL {download_id}] Extracting info for: {url}")
 
-    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True, "js_runtimes": {"node": {}}}) as ydl:
         info = ydl.extract_info(url, download=False)
         if info is None:
             raise ValueError("Could not extract video info from URL")
@@ -183,6 +183,7 @@ def _download_sync(download_id: str, url: str, temp_dir: str, output_template: s
         "progress_hooks": [_progress_hook],
         "merge_output_format": "mp4",
         "socket_timeout": 30,
+        "js_runtimes": {"node": {}},
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
