@@ -22,16 +22,17 @@ from app.services.user_service import UserService
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-def _current_user_to_profile_response(user: CurrentUser) -> UserProfileResponse:
-    """Convert CurrentUser DTO to UserProfileResponse."""
+def _user_to_profile_response(user) -> UserProfileResponse:
+    """Convert DB User model to UserProfileResponse."""
     return UserProfileResponse(
         id=str(user.id),
         email=user.email,
-        roles=user.roles,
+        roles=[r.name for r in user.roles],
         is_active=user.is_active,
-        email_verified=user.email_verified,
+        email_verified=user.email_verified_at is not None,
+        must_change_password=user.must_change_password,
         created_at=user.created_at.isoformat(),
-        updated_at=user.updated_at.isoformat()
+        updated_at=user.updated_at.isoformat() if user.updated_at else user.created_at.isoformat()
     )
 
 
@@ -44,6 +45,7 @@ def _current_user_to_profile_response(user: CurrentUser) -> UserProfileResponse:
 )
 async def get_current_user_profile(
     current_user: CurrentUser = Depends(get_current_user),
+    db_session: AsyncSession = Depends(get_async_session),
 ):
     """
     Get the current authenticated user's profile.
@@ -51,7 +53,16 @@ async def get_current_user_profile(
     Returns user details including id, email, roles, and verification status.
     Requires valid JWT access token.
     """
-    return _current_user_to_profile_response(current_user)
+    user_service = UserService(db_session)
+    user = await user_service.get_user_by_id(current_user.id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+        
+    return _user_to_profile_response(user)
 
 
 @router.patch(

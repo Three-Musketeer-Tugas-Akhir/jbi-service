@@ -305,6 +305,129 @@ class UserService:
                 "success": False,
                 "message": "An error occurred while changing your password."
             }
+
+    async def force_change_password(
+        self,
+        user_id: UUID,
+        current_password: str,
+        new_password: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None
+    ) -> dict:
+        """
+        Force change user password (used for first-login flow).
+        
+        Args:
+            user_id: User UUID
+            current_password: Current password
+            new_password: New password
+            ip_address: IP address of requester
+            user_agent: User agent string
+            
+        Returns:
+            Dict with success status and message
+        """
+        try:
+            # Get user
+            user = await self.repository.get_by_id(user_id)
+            if user is None:
+                return {
+                    "success": False,
+                    "message": "User not found."
+                }
+            
+            if not user.must_change_password:
+                return {
+                    "success": False,
+                    "message": "User is not required to change password."
+                }
+            
+            # Validate current password
+            password_bytes = current_password.encode('utf-8')
+            stored_hash = user.password_hash.encode('utf-8')
+            
+            if not bcrypt.checkpw(password_bytes, stored_hash):
+                return {
+                    "success": False,
+                    "message": "Current password is incorrect."
+                }
+            
+            # Validate new password
+            error = self._validate_new_password(new_password)
+            if error:
+                return {
+                    "success": False,
+                    "message": error
+                }
+                
+            # Prevent using the default format (e.g. Budi123!)
+            if new_password.endswith("123!") and len(new_password) > 4:
+                # Weak check: if it matches the pattern we generate
+                return {
+                    "success": False,
+                    "message": "You cannot use the default temporary password format. Please choose a different password."
+                }
+            
+            # Hash and update new password
+            from datetime import datetime, timezone
+            new_password_hash = self.hash_password(new_password)
+            user.password_hash = new_password_hash
+            user.must_change_password = False
+            user.password_changed_at = datetime.now(timezone.utc)
+            
+            await self.session.flush()
+            
+            # Log the password change
+            await self.repository.log_password_change(
+                user_id=user_id,
+                change_type="FIRST_LOGIN",
+                ip_address=ip_address,
+                user_agent=user_agent,
+                was_temporary=True
+            )
+            
+            await self.session.commit()
+            
+            logger = __import__('logging').getLogger(__name__)
+            logger.info(f"Forced password change successful for user: {user.email}")
+            
+            return {
+                "success": True,
+                "message": "Password changed successfully."
+            }
+            
+        except Exception as e:
+            await self.session.rollback()
+            logger = __import__('logging').getLogger(__name__)
+            logger.exception("Error in force changing password")
+            return {
+                "success": False,
+                "message": "An error occurred while changing your password."
+            }
+            
+    async def get_password_change_history(self, user_id: UUID) -> dict:
+        """
+        Get password change history for a user.
+        
+        Args:
+            user_id: User UUID
+            
+        Returns:
+            Dict with success status and history list
+        """
+        try:
+            history = await self.repository.get_password_change_history(user_id)
+            return {
+                "success": True,
+                "history": history
+            }
+        except Exception as e:
+            logger = __import__('logging').getLogger(__name__)
+            logger.exception("Error getting password change history")
+            return {
+                "success": False,
+                "message": "An error occurred while fetching password change history."
+            }
     
     def _validate_new_password(self, password: str) -> Optional[str]:
         """
@@ -431,7 +554,9 @@ class UserService:
         password: Optional[str] = None,
         roles: Optional[list] = None,
         is_active: bool = True,
-        email_verified: bool = False
+        email_verified: bool = False,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None
     ) -> dict:
         """
         Create a new user (admin only).
@@ -440,16 +565,39 @@ class UserService:
         auto-generated and returned in the response.
         
         Args:
-            email: User email
+            email: User email (optional if first_name and last_name are provided)
             password: Plain text password (optional, auto-generated if not provided)
             roles: List of role names (default: ["annotator"])
             is_active: Whether user is active
             email_verified: Whether email is pre-verified
+            first_name: User first name for auto-generation
+            last_name: User last name for auto-generation
             
         Returns:
             Dict with success status, user, message, and temporary_password if generated
         """
         try:
+            # Auto-generate credentials if names are provided
+            must_change_password = False
+            generated_password = None
+            is_temporary_password = False
+            
+            if first_name and last_name:
+                first_name_clean = first_name.strip()
+                last_name_clean = last_name.strip()
+                
+                # Auto-generate email if not provided
+                if not email:
+                    email = f"{first_name_clean.lower()}.{last_name_clean.lower()}@anotasi.ai"
+                
+                # Auto-generate password if not provided
+                if not password:
+                    # e.g. "Budi123!"
+                    generated_password = f"{first_name_clean.capitalize()}123!"
+                    password = generated_password
+                    must_change_password = True
+                    is_temporary_password = True
+
             # Validate email
             error = self._validate_email(email)
             if error:
@@ -460,13 +608,14 @@ class UserService:
             
             email = email.lower().strip()
             
-            # Generate or validate password
-            generated_password = None
+            # Validate provided password, unless it's auto-generated
             if password is None:
-                # Auto-generate temporary password
+                # Auto-generate random temporary password if no names provided
                 generated_password = generate_temporary_password()
                 password = generated_password
-            else:
+                must_change_password = True
+                is_temporary_password = True
+            elif not is_temporary_password:
                 # Validate provided password
                 error = self._validate_new_password(password)
                 if error:
@@ -504,7 +653,8 @@ class UserService:
                 password_hash=password_hash,
                 roles=roles,
                 is_active=is_active,
-                email_verified=email_verified
+                email_verified=email_verified,
+                must_change_password=must_change_password
             )
             
             # Send invitation email

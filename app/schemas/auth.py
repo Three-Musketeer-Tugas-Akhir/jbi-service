@@ -25,6 +25,7 @@ class LoginResponse(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int  # Seconds until access token expires
+    must_change_password: bool = False  # True if user must change password
 
 
 class AuthErrorResponse(BaseModel):
@@ -78,6 +79,17 @@ class ResetPasswordResponse(BaseModel):
     message: str
 
 
+class ForceChangePasswordRequest(BaseModel):
+    """Request body for POST /api/v1/auth/force-change-password."""
+    current_password: str
+    new_password: str
+
+
+class ForceChangePasswordResponse(BaseModel):
+    """Response for successful forced password change."""
+    message: str
+
+
 # =============================================================================
 # Email Verification Schemas
 # =============================================================================
@@ -127,6 +139,7 @@ class UserProfileResponse(BaseModel):
     roles: list[str]
     is_active: bool
     email_verified: bool
+    must_change_password: bool = False
     created_at: str  # ISO format datetime
     updated_at: str  # ISO format datetime
 
@@ -180,8 +193,10 @@ class AdminUserListResponse(BaseModel):
 
 class AdminCreateUserRequest(BaseModel):
     """Request body for POST /api/v1/admin/users."""
-    email: str
+    email: Optional[str] = None  # Optional if first_name and last_name provided
     password: Optional[str] = None  # Optional, auto-generated if not provided
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     roles: list[str] = ["annotator"]  # Default roles
     is_active: bool = True
     email_verified: bool = False
@@ -205,6 +220,20 @@ class AdminUserDetailResponse(BaseModel):
     email_verified: bool
     created_at: str
     updated_at: str
+
+
+class PasswordChangeLogItem(BaseModel):
+    """Item for password change history."""
+    id: str
+    changed_at: str
+    change_type: str
+    ip_address: Optional[str] = None
+    was_temporary: bool
+
+
+class PasswordChangeHistoryResponse(BaseModel):
+    """Response for GET /api/v1/admin/users/{id}/password-history."""
+    history: list[PasswordChangeLogItem]
 
 
 class AdminUpdateUserRequest(BaseModel):

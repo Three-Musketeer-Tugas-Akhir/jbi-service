@@ -12,6 +12,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.auth import User, Role
+from app.db.models.password_change_log import PasswordChangeLog
 
 
 class UserRepository:
@@ -201,7 +202,8 @@ class UserRepository:
         password_hash: str,
         roles: Optional[List[str]] = None,
         is_active: bool = True,
-        email_verified: bool = False
+        email_verified: bool = False,
+        must_change_password: bool = False
     ) -> User:
         """
         Create a new user with roles.
@@ -212,6 +214,7 @@ class UserRepository:
             roles: List of role names (default: ["annotator"])
             is_active: Whether user is active (default: True)
             email_verified: Whether email is verified (default: False)
+            must_change_password: Set to True to force password change on next login (default: False)
             
         Returns:
             Created User instance
@@ -220,7 +223,8 @@ class UserRepository:
         user = User(
             email=email.lower(),
             password_hash=password_hash,
-            is_active=is_active
+            is_active=is_active,
+            must_change_password=must_change_password
         )
         
         # Set email_verified_at if email_verified is True
@@ -330,3 +334,56 @@ class UserRepository:
             True if user was found and deactivated, False otherwise
         """
         return await self.update_user(user_id, is_active=False)
+
+    async def log_password_change(
+        self,
+        user_id: UUID,
+        change_type: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        was_temporary: bool = False
+    ) -> PasswordChangeLog:
+        """
+        Log a password change.
+        
+        Args:
+            user_id: User UUID
+            change_type: Type of change (FIRST_LOGIN, SELF_CHANGE, ADMIN_RESET)
+            ip_address: IP address of requester
+            user_agent: User agent string
+            was_temporary: Whether the previous password was a temporary one
+            
+        Returns:
+            Created log entry
+        """
+        log_entry = PasswordChangeLog(
+            user_id=user_id,
+            change_type=change_type,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            was_temporary=was_temporary
+        )
+        self.session.add(log_entry)
+        await self.session.flush()
+        return log_entry
+        
+    async def get_password_change_history(self, user_id: UUID) -> List[PasswordChangeLog]:
+        """
+        Get password change history for a user.
+        
+        Args:
+            user_id: User UUID
+            
+        Returns:
+            List of log entries ordered by most recent first
+        """
+        from sqlalchemy import desc
+        
+        stmt = select(PasswordChangeLog).where(
+            PasswordChangeLog.user_id == user_id
+        ).order_by(
+            desc(PasswordChangeLog.changed_at)
+        )
+        
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())

@@ -16,6 +16,7 @@ from app.schemas import (
     LogoutRequest, LogoutResponse, AuthErrorResponse,
     ForgotPasswordRequest, ForgotPasswordResponse,
     ResetPasswordRequest, ResetPasswordResponse,
+    ForceChangePasswordRequest, ForceChangePasswordResponse,
     VerifyEmailRequest, VerifyEmailResponse,
     ResendVerificationRequest, ResendVerificationResponse,
     EmailVerificationStatusResponse,
@@ -111,6 +112,7 @@ async def login(
             refresh_token=refresh_token,
             token_type="bearer",
             expires_in=settings.jwt_access_token_expire_minutes * 60,
+            must_change_password=user.must_change_password
         )
     except HTTPException:
         raise
@@ -334,6 +336,80 @@ async def reset_password(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while resetting your password. Please try again."
+        )
+
+
+@router.post(
+    "/force-change-password",
+    response_model=ForceChangePasswordResponse,
+    responses={
+        400: {"model": AuthErrorResponse, "description": "Invalid input or weak password"},
+        401: {"model": AuthErrorResponse, "description": "Not authenticated or wrong current password"},
+        422: {"description": "Validation error"},
+    },
+)
+async def force_change_password(
+    request: Request,
+    password_data: ForceChangePasswordRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db_session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Force change password on first login.
+    
+    - **current_password**: The temporary password provided by admin
+    - **new_password**: New password (min 8 chars, must include uppercase, lowercase, digit, special char)
+    
+    Requires valid JWT token from initial login.
+    """
+    try:
+        user_service = UserService(db_session)
+        
+        # Extract IP address for audit logging
+        x_forwarded_for = request.headers.get("X-Forwarded-For")
+        if x_forwarded_for:
+            ip_address = x_forwarded_for.split(",")[0].strip()
+        elif request.client:
+            ip_address = request.client.host
+        else:
+            ip_address = None
+            
+        user_agent = request.headers.get("User-Agent")
+        
+        result = await user_service.force_change_password(
+            user_id=current_user.id,
+            current_password=password_data.current_password,
+            new_password=password_data.new_password,
+            ip_address=ip_address,
+            user_agent=user_agent
+        )
+        
+        if not result["success"]:
+            # Determine appropriate status code
+            error_msg = result["message"].lower()
+            
+            if "incorrect" in error_msg:
+                status_code = status.HTTP_401_UNAUTHORIZED
+            else:
+                status_code = status.HTTP_400_BAD_REQUEST
+            
+            raise HTTPException(
+                status_code=status_code,
+                detail=result["message"],
+            )
+        
+        return ForceChangePasswordResponse(
+            message=result["message"]
+        )
+        
+    except HTTPException:
+        raise
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Force change password error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while changing your password. Please try again."
         )
 
 

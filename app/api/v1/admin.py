@@ -83,6 +83,8 @@ class UserDetailResponse(BaseModel):
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+from app.schemas.auth import AdminCreateUserRequest, PasswordChangeHistoryResponse
+
 @router.post(
     "/users",
     status_code=status.HTTP_201_CREATED,
@@ -93,16 +95,15 @@ router = APIRouter(prefix="/admin", tags=["admin"])
     },
 )
 async def create_user(
-    user_data: dict,
+    user_data: AdminCreateUserRequest,
     current_user: CurrentUser = Depends(require_admin),
     db_session: AsyncSession = Depends(get_async_session),
 ):
     """
     Create a new user account (Admin only).
     
-    - **email**: User email address (must be unique)
-    - **role**: User role (admin, annotator, curator)
-    - **temporary_password**: Optional temporary password (auto-generated if not provided)
+    Can either provide exact email and temporary_password, or provide first_name
+    and last_name to auto-generate the email and password.
     
     Returns created user details. If password was auto-generated, it's included in response.
     An invitation email is sent to the new user.
@@ -110,15 +111,17 @@ async def create_user(
     user_service = UserService(db_session)
     
     # Extract values from request
-    email = user_data.get("email")
-    role = user_data.get("role")
-    temporary_password = user_data.get("temporary_password")
+    email = user_data.email
+    role = user_data.roles[0] if user_data.roles else "annotator"
+    temporary_password = user_data.password
+    first_name = user_data.first_name
+    last_name = user_data.last_name
     
     # Validate required fields
-    if not email:
+    if not email and not (first_name and last_name):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Email is required"
+            detail="Either email or both first_name and last_name are required"
         )
     
     if not role:
@@ -133,7 +136,9 @@ async def create_user(
             password=temporary_password,
             roles=[role],
             is_active=True,
-            email_verified=False
+            email_verified=False,
+            first_name=first_name,
+            last_name=last_name
         )
         
         if not result["success"]:
@@ -453,6 +458,58 @@ async def get_user(
         updated_at=user.updated_at.isoformat() if user.updated_at else None
     )
 
+
+@router.get(
+    "/users/{user_id}/password-history",
+    response_model=PasswordChangeHistoryResponse,
+    responses={
+        403: {"description": "Admin access required"},
+        404: {"description": "User not found"},
+    },
+)
+async def get_user_password_history(
+    user_id: UUID,
+    current_user: CurrentUser = Depends(require_admin),
+    db_session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Get a user's password change history (Admin only).
+    
+    - **user_id**: UUID of user to retrieve history for
+    
+    Returns a list of password change events.
+    """
+    user_service = UserService(db_session)
+    
+    # Ensure user exists
+    user = await user_service.get_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+        
+    result = await user_service.get_password_change_history(user_id)
+    
+    if not result["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get("message", "Error fetching history")
+        )
+        
+    history = result["history"]
+    
+    return PasswordChangeHistoryResponse(
+        history=[
+            {
+                "id": str(item.id),
+                "changed_at": item.changed_at.isoformat(),
+                "change_type": item.change_type,
+                "ip_address": item.ip_address,
+                "was_temporary": item.was_temporary
+            } for item in history
+        ]
+    )
 
 # ============================================================================
 # System Monitoring Endpoints (Story 2.10)

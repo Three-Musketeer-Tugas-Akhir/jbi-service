@@ -26,6 +26,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.db.models.annotation import AnnotationEdit, AnnotationReview, AnnotationComment, ASRReview, AnnotationQueue
+    from app.db.models.password_change_log import PasswordChangeLog
 
 
 class User(Base):
@@ -80,6 +81,17 @@ class User(Base):
         nullable=True,
         comment="When email was verified (NULL if not verified)"
     )
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment="Whether user must change password on next login (first-login flow)"
+    )
+    password_changed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When password was last changed by the user"
+    )
     
     # Relationships
     roles: Mapped[List["Role"]] = relationship(
@@ -102,6 +114,12 @@ class User(Base):
     )
     email_verification_tokens: Mapped[List["EmailVerificationToken"]] = relationship(
         "EmailVerificationToken",
+        back_populates="user",
+        lazy="selectin",
+        cascade="all, delete-orphan"
+    )
+    password_change_logs: Mapped[List["PasswordChangeLog"]] = relationship(
+        "PasswordChangeLog",
         back_populates="user",
         lazy="selectin",
         cascade="all, delete-orphan"
