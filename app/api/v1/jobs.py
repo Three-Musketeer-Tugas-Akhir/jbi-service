@@ -2159,7 +2159,7 @@ async def download_dataset_zip(
                         AnnotationEdit.STATUS_SUBMITTED,
                         AnnotationEdit.STATUS_APPROVED,
                     ):
-                        if latest_edit is None or edit.created_at > latest_edit.created_at:
+                        if latest_edit is None or edit.edited_at > latest_edit.edited_at:
                             latest_edit = edit
 
                 if not latest_edit or not latest_edit.utterance_corrections:
