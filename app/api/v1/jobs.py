@@ -2045,6 +2045,7 @@ async def get_dataset_explorer(
 )
 async def download_dataset_zip(
     job_id: str,
+    layout: str = Query("file", description="ZIP folder layout: 'file' (group by file type) or 'sentence' (group by sentence)"),
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user),
     job_repo: JobRepository = Depends(get_job_repository),
@@ -2190,12 +2191,38 @@ async def download_dataset_zip(
                     norm_glosa = u_corr.get("normalized_glosa", "")
 
                     prefix = f"{base_prefix}_{global_idx:04d}"
+                    sentence_folder = f"kalimat_{global_idx:04d}"
+
+                    if layout == "sentence":
+                        # ── Layout: Sentence-focused ──
+                        # NamaVideo/kalimat_0001/video.mp4
+                        # NamaVideo/kalimat_0001/audio.wav
+                        # NamaVideo/kalimat_0001/transkripsi.txt
+                        # NamaVideo/kalimat_0001/glosa.txt
+                        video_path = f"{sentence_folder}/video.mp4"
+                        audio_path = f"{sentence_folder}/audio.wav"
+                        trans_path = f"{sentence_folder}/transkripsi.txt"
+                        trans_norm_path = f"{sentence_folder}/transkripsi_normalized.txt"
+                        glosa_path = f"{sentence_folder}/glosa.txt"
+                        glosa_norm_path = f"{sentence_folder}/glosa_normalized.txt"
+                    else:
+                        # ── Layout: File-focused (default) ──
+                        # NamaVideo/video/INEWS_SB_250511_0001.mp4
+                        # NamaVideo/audio/INEWS_SB_250511_0001.wav
+                        # NamaVideo/transkripsi/INEWS_SB_250511_0001.txt
+                        # NamaVideo/glosa/INEWS_SB_250511_0001.txt
+                        video_path = f"video/{prefix}.mp4"
+                        audio_path = f"audio/{prefix}.wav"
+                        trans_path = f"transkripsi/{prefix}.txt"
+                        trans_norm_path = f"transkripsi/{prefix}_normalized.txt"
+                        glosa_path = f"glosa/{prefix}.txt"
+                        glosa_norm_path = f"glosa/{prefix}_normalized.txt"
 
                     # Write Video
                     if cv_path:
                         try:
                             video_data = await minio_service.download_file(cv_path)
-                            zf.writestr(f"{prefix}.mp4", video_data)
+                            zf.writestr(video_path, video_data)
                             files_added += 1
                         except Exception as e:
                             logger.warning(f"Failed to add video to ZIP: {cv_path} - {e}")
@@ -2204,16 +2231,16 @@ async def download_dataset_zip(
                     if wav_path:
                         try:
                             audio_data = await minio_service.download_file(wav_path)
-                            zf.writestr(f"{prefix}.wav", audio_data)
+                            zf.writestr(audio_path, audio_data)
                             files_added += 1
                         except Exception as e:
                             logger.warning(f"Failed to add audio to ZIP: {wav_path} - {e}")
 
                     # Write Texts (always included)
-                    zf.writestr(f"{prefix}_transkripsi.txt", gt_text.encode("utf-8"))
-                    zf.writestr(f"{prefix}_transkripsi_normalized.txt", norm_transcript.encode("utf-8"))
-                    zf.writestr(f"{prefix}_glosa.txt", glosa.encode("utf-8"))
-                    zf.writestr(f"{prefix}_glosa_normalized.txt", norm_glosa.encode("utf-8"))
+                    zf.writestr(trans_path, gt_text.encode("utf-8"))
+                    zf.writestr(trans_norm_path, norm_transcript.encode("utf-8"))
+                    zf.writestr(glosa_path, glosa.encode("utf-8"))
+                    zf.writestr(glosa_norm_path, norm_glosa.encode("utf-8"))
                     files_added += 4
 
                     global_idx += 1
@@ -2221,7 +2248,7 @@ async def download_dataset_zip(
 
                 logger.info(f"ZIP segment {segment.segment_index}: added {utt_count} utterances")
 
-        logger.info(f"ZIP total: {files_added} files added for job {job_id}")
+        logger.info(f"ZIP total: {files_added} files added for job {job_id} (layout={layout})")
 
         zip_buffer.seek(0)
         safe_name = (job.original_filename or "dataset").rsplit(".", 1)[0]
