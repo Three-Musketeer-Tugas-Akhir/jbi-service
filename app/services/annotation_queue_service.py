@@ -154,13 +154,19 @@ class AnnotationQueueService:
             for u in latest_edit.utterance_corrections:
                 # Return raw MinIO path — frontend must not send this back on save
                 cv_path = u.get("cropped_video_path")
-                # Sanitize: if it's already a full URL (legacy corrupted data),
-                # extract just the path portion
-                if cv_path and cv_path.startswith("/api/v1/assets/"):
-                    cv_path = cv_path.replace("/api/v1/assets/", "", 1).split("?")[0]
-                # Also handle recursive duplication without leading slash
-                while cv_path and cv_path.startswith("api/v1/assets/"):
-                    cv_path = cv_path.replace("api/v1/assets/", "", 1).split("?")[0]
+                # Sanitize: legacy corrupted data may contain recursive URLs
+                # Repeatedly strip ALL /api/v1/assets/ prefixes until only MinIO path remains
+                if cv_path:
+                    while True:
+                        stripped = False
+                        if cv_path.startswith("/api/v1/assets/"):
+                            cv_path = cv_path.replace("/api/v1/assets/", "", 1).split("?")[0]
+                            stripped = True
+                        elif cv_path.startswith("api/v1/assets/"):
+                            cv_path = cv_path.replace("api/v1/assets/", "", 1).split("?")[0]
+                            stripped = True
+                        if not stripped:
+                            break
                 
                 current_utterances.append({
                     "utterance_index": u["utterance_index"],

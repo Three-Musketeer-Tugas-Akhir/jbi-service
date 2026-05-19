@@ -19,11 +19,18 @@ def _sanitize_cv_path(cv_path: Optional[str]) -> Optional[str]:
     if not cv_path:
         return None
     # Legacy corrupted data may contain full URLs like /api/v1/assets/jobs/...?token=...
-    if cv_path.startswith("/api/v1/assets/"):
-        cv_path = cv_path.replace("/api/v1/assets/", "", 1).split("?")[0]
-    # Also handle cases with duplicated prefixes (recursive corruption)
-    while cv_path.startswith("api/v1/assets/"):
-        cv_path = cv_path.replace("api/v1/assets/", "", 1).split("?")[0]
+    # Repeatedly strip ALL /api/v1/assets/ prefixes (with or without leading slash)
+    # and query params until only the raw MinIO path remains.
+    while True:
+        stripped = False
+        if cv_path.startswith("/api/v1/assets/"):
+            cv_path = cv_path.replace("/api/v1/assets/", "", 1).split("?")[0]
+            stripped = True
+        elif cv_path.startswith("api/v1/assets/"):
+            cv_path = cv_path.replace("api/v1/assets/", "", 1).split("?")[0]
+            stripped = True
+        if not stripped:
+            break
     return cv_path
 
 

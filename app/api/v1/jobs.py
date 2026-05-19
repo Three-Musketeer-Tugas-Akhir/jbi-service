@@ -1973,10 +1973,17 @@ async def get_dataset_explorer(
                 
             cv_path = u_data.get("cropped_video_path")
             # Sanitize legacy corrupted URLs (recursive /api/v1/assets/ prefix)
-            if cv_path and cv_path.startswith("/api/v1/assets/"):
-                cv_path = cv_path.replace("/api/v1/assets/", "", 1).split("?")[0]
-            while cv_path and cv_path.startswith("api/v1/assets/"):
-                cv_path = cv_path.replace("api/v1/assets/", "", 1).split("?")[0]
+            if cv_path:
+                while True:
+                    stripped = False
+                    if cv_path.startswith("/api/v1/assets/"):
+                        cv_path = cv_path.replace("/api/v1/assets/", "", 1).split("?")[0]
+                        stripped = True
+                    elif cv_path.startswith("api/v1/assets/"):
+                        cv_path = cv_path.replace("api/v1/assets/", "", 1).split("?")[0]
+                        stripped = True
+                    if not stripped:
+                        break
             cv_url = None
             if cv_path:
                 token = streaming_token_service.generate_token(current_user.id, cv_path)
