@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.api.deps import require_annotator_or_curator
+from app.api.deps import require_curator
 from app.db.models.annotation import AnnotationEdit
 from app.db.models.pipeline import PipelineJob, PipelineSegment, PipelineTranscript
 from app.db.models.voice_annotation import VoiceAnnotation
@@ -136,7 +136,7 @@ async def _collect_ok_utterances(
 async def get_normalization_segments(
     job_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_annotator_or_curator),
+    current_user=Depends(require_curator),
 ):
     """Fetch the current normalization state.
 
@@ -179,7 +179,7 @@ async def get_normalization_segments(
 async def auto_normalize_preview(
     job_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_annotator_or_curator),
+    current_user=Depends(require_curator),
 ):
     """Run normalization on all OK-status utterances and return before/after preview.
 
@@ -232,7 +232,7 @@ async def apply_normalization(
     job_id: str,
     request: ApplyNormalizationRequest,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(require_annotator_or_curator),
+    current_user=Depends(require_curator),
 ):
     """Persist the normalized text for all OK-status utterances.
 

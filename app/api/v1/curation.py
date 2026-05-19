@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import require_annotator_or_curator, require_curator
+from app.api.deps import require_curator
 from app.core.exceptions import NotFoundError
 from app.db.session import get_db
 from app.repositories.job_repository import JobRepository
@@ -25,7 +25,7 @@ router = APIRouter()
 async def normalize_segments(
     request: CurationNormalizeRequest,
     category: Optional[str] = None,
-    current_user=Depends(require_annotator_or_curator),
+    current_user=Depends(require_curator),
 ) -> CurationNormalizeResponse:
     """Normalize a list of text segments.
 

@@ -24,6 +24,8 @@ from app.schemas.auth import (
     ResendVerificationResponse,
     EmailVerificationStatusResponse,
     CurrentUserResponse,
+    ForceChangePasswordRequest,
+    ForceChangePasswordResponse,
 )
 
 # Job schemas
@@ -90,6 +92,8 @@ __all__ = [
     "ResendVerificationResponse",
     "EmailVerificationStatusResponse",
     "CurrentUserResponse",
+    "ForceChangePasswordRequest",
+    "ForceChangePasswordResponse",
     # User/Profile
     "UserProfileResponse",
     "UpdateProfileRequest",

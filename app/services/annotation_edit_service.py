@@ -14,6 +14,19 @@ from app.services.streaming_token_service import streaming_token_service
 from app.db.models.annotation import AnnotationEdit, AnnotationQueue
 
 
+def _sanitize_cv_path(cv_path: Optional[str]) -> Optional[str]:
+    """Strip URL prefix from cropped_video_path to ensure only MinIO object keys are stored."""
+    if not cv_path:
+        return None
+    # Legacy corrupted data may contain full URLs like /api/v1/assets/jobs/...?token=...
+    if cv_path.startswith("/api/v1/assets/"):
+        cv_path = cv_path.replace("/api/v1/assets/", "", 1).split("?")[0]
+    # Also handle cases with duplicated prefixes (recursive corruption)
+    while cv_path.startswith("api/v1/assets/"):
+        cv_path = cv_path.replace("api/v1/assets/", "", 1).split("?")[0]
+    return cv_path
+
+
 class AnnotationEditService:
     """Service for annotation edit operations."""
     
@@ -72,11 +85,15 @@ class AnnotationEditService:
         utterance_dicts = []
         for u in utterances:
             if hasattr(u, 'model_dump'):
-                utterance_dicts.append(u.model_dump())
+                d = u.model_dump()
             elif hasattr(u, 'dict'):
-                utterance_dicts.append(u.dict())
+                d = u.dict()
             else:
-                utterance_dicts.append(dict(u))
+                d = dict(u)
+            # Sanitize cropped_video_path to prevent URL corruption from legacy data
+            if d.get('cropped_video_path'):
+                d['cropped_video_path'] = _sanitize_cv_path(d['cropped_video_path'])
+            utterance_dicts.append(d)
         
         # Auto-compute aggregated values from utterances if not provided
         if not new_text and utterance_dicts:
@@ -438,8 +455,7 @@ class AnnotationEditService:
                 "utterances": [
                     {
                         **u,
-                        "cropped_video_path": f"{settings.api_v1_prefix}/assets/{u['cropped_video_path']}?token={streaming_token_service.generate_token(user_id, u['cropped_video_path'])}"
-                        if u.get("cropped_video_path") else None
+                        "cropped_video_path": _sanitize_cv_path(u.get("cropped_video_path"))
                     }
                     for u in latest_edit.utterance_corrections
                 ] if latest_edit.utterance_corrections else [],

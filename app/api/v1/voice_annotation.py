@@ -38,7 +38,7 @@ async def list_voice_annotation_jobs(
     page_size: int = Query(50, ge=1, le=100),
     dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "annotator")),
+    current_user: User = Depends(require_role("admin", "annotator", "curator")),
 ):
     """Get paginated list of jobs available for voice annotation."""
     dataset_uuid = None
@@ -62,7 +62,7 @@ async def list_voice_annotation_jobs(
 async def get_job_summary(
     job_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "annotator")),
+    current_user: User = Depends(require_role("admin", "annotator", "curator")),
 ):
     """Get voice annotation summary for a specific job."""
     service = VoiceAnnotationService(db)
@@ -78,7 +78,7 @@ async def get_job_summary(
 async def list_utterances(
     job_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "annotator")),
+    current_user: User = Depends(require_role("admin", "annotator", "curator")),
 ):
     """Get all utterances for a job with voice annotation data."""
     service = VoiceAnnotationService(db)
@@ -99,7 +99,7 @@ async def update_ground_truth(
     voice_annotation_id: UUID,
     body: UpdateGroundTruthRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "annotator")),
+    current_user: User = Depends(require_role("admin", "annotator", "curator")),
 ):
     """Update ground truth text for a single utterance.
 

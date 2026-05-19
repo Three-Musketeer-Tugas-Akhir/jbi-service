@@ -237,6 +237,11 @@ class UserRepository:
         
         # Assign roles
         if roles:
+            # Reload user with roles collection to avoid lazy-load error in async mode
+            from sqlalchemy.orm import selectinload
+            stmt = select(User).where(User.id == user.id).options(selectinload(User.roles))
+            result = await self.session.execute(stmt)
+            user = result.scalar_one()
             await self._assign_roles_to_user(user, roles)
         
         await self.session.refresh(user)

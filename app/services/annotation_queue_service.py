@@ -152,19 +152,22 @@ class AnnotationQueueService:
         if latest_edit and latest_edit.utterance_corrections:
             current_utterances = []
             for u in latest_edit.utterance_corrections:
+                # Return raw MinIO path — frontend must not send this back on save
                 cv_path = u.get("cropped_video_path")
-                cv_url = None
-                if cv_path:
-                    # Generate streaming URL for the utterance video
-                    token = streaming_token_service.generate_token(annotator_id, cv_path)
-                    cv_url = f"{settings.api_v1_prefix}/assets/{cv_path}?token={token}"
+                # Sanitize: if it's already a full URL (legacy corrupted data),
+                # extract just the path portion
+                if cv_path and cv_path.startswith("/api/v1/assets/"):
+                    cv_path = cv_path.replace("/api/v1/assets/", "", 1).split("?")[0]
+                # Also handle recursive duplication without leading slash
+                while cv_path and cv_path.startswith("api/v1/assets/"):
+                    cv_path = cv_path.replace("api/v1/assets/", "", 1).split("?")[0]
                 
                 current_utterances.append({
                     "utterance_index": u["utterance_index"],
                     "text": u["text"],
                     "start": u["start"],
                     "end": u["end"],
-                    "cropped_video_path": cv_url,
+                    "cropped_video_path": cv_path,
                     "status": u.get("status")
                 })
         
