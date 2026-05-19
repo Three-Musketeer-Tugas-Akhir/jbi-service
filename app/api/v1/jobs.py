@@ -2130,28 +2130,54 @@ async def download_dataset_zip(
         # Prepare ZIP in memory
         zip_buffer = io.BytesIO()
 
+        # ── Helper: sanitize MinIO path from legacy corrupted URLs ──
+        def _sanitize_minio_path(p: Optional[str]) -> Optional[str]:
+            if not p:
+                return None
+            while True:
+                stripped = False
+                if p.startswith("/api/v1/assets/"):
+                    p = p.replace("/api/v1/assets/", "", 1).split("?")[0]
+                    stripped = True
+                elif p.startswith("api/v1/assets/"):
+                    p = p.replace("api/v1/assets/", "", 1).split("?")[0]
+                    stripped = True
+                if not stripped:
+                    break
+            return p
+
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             global_idx = 1
+            files_added = 0
             for segment in segments:
-                # Get latest submitted or approved annotation edit for this segment
+                # Get latest annotation edit for this segment (DRAFT/PENDING/SUBMITTED/APPROVED)
                 latest_edit = None
                 for edit in segment.annotation_edits:
-                    if edit.status in (AnnotationEdit.STATUS_SUBMITTED, AnnotationEdit.STATUS_APPROVED):
+                    if edit.status in (
+                        AnnotationEdit.STATUS_DRAFT,
+                        AnnotationEdit.STATUS_PENDING,
+                        AnnotationEdit.STATUS_SUBMITTED,
+                        AnnotationEdit.STATUS_APPROVED,
+                    ):
                         if latest_edit is None or edit.created_at > latest_edit.created_at:
                             latest_edit = edit
 
                 if not latest_edit or not latest_edit.utterance_corrections:
+                    logger.info(f"ZIP skip segment {segment.segment_index}: no edits or no utterance corrections")
                     continue
-                    
+
                 u_corr_map = {u["utterance_index"]: u for u in latest_edit.utterance_corrections}
+                utt_count = 0
 
                 for transcript in sorted(segment.transcripts, key=lambda t: t.utterance_index):
                     u_corr = u_corr_map.get(transcript.utterance_index)
-                    if not u_corr or u_corr.get("status") != "OK":
+                    if not u_corr:
                         continue
+                    # Include even DRAFT utterances (not just OK) for flexibility
+                    # utt_status = u_corr.get("status", "DRAFT")
 
                     # 1. Video (Cropped by JBI)
-                    cv_path = u_corr.get("cropped_video_path")
+                    cv_path = _sanitize_minio_path(u_corr.get("cropped_video_path"))
                     # 2. Audio (WAV from ASR)
                     wav_path = transcript.audio_path
                     # 3. Transkripsi (GT)
@@ -2170,6 +2196,7 @@ async def download_dataset_zip(
                         try:
                             video_data = await minio_service.download_file(cv_path)
                             zf.writestr(f"{prefix}.mp4", video_data)
+                            files_added += 1
                         except Exception as e:
                             logger.warning(f"Failed to add video to ZIP: {cv_path} - {e}")
 
@@ -2178,18 +2205,24 @@ async def download_dataset_zip(
                         try:
                             audio_data = await minio_service.download_file(wav_path)
                             zf.writestr(f"{prefix}.wav", audio_data)
+                            files_added += 1
                         except Exception as e:
                             logger.warning(f"Failed to add audio to ZIP: {wav_path} - {e}")
 
-                    # Write Texts
+                    # Write Texts (always included)
                     zf.writestr(f"{prefix}_transkripsi.txt", gt_text.encode("utf-8"))
                     zf.writestr(f"{prefix}_transkripsi_normalized.txt", norm_transcript.encode("utf-8"))
                     zf.writestr(f"{prefix}_glosa.txt", glosa.encode("utf-8"))
                     zf.writestr(f"{prefix}_glosa_normalized.txt", norm_glosa.encode("utf-8"))
+                    files_added += 4
 
                     global_idx += 1
+                    utt_count += 1
 
-        # Prepare response
+                logger.info(f"ZIP segment {segment.segment_index}: added {utt_count} utterances")
+
+        logger.info(f"ZIP total: {files_added} files added for job {job_id}")
+
         zip_buffer.seek(0)
         safe_name = (job.original_filename or "dataset").rsplit(".", 1)[0]
         zip_filename = f"{safe_name}_dataset.zip"
