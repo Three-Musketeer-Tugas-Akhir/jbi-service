@@ -48,7 +48,7 @@ class DashboardService:
         try:
             # Total SIBI videos
             total_videos_result = await self.db.execute(
-                select(func.count(PipelineJob.id)).where(PipelineJob.category == "SIBI", *ds)
+                select(func.count(PipelineJob.id)).where(PipelineJob.id.isnot(None), *ds)
             )
             total_videos = total_videos_result.scalar() or 0
 
@@ -57,7 +57,7 @@ class DashboardService:
             recent_videos_result = await self.db.execute(
                 select(func.count(PipelineJob.id)).where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         PipelineJob.created_at >= twelve_weeks_ago,
                         *ds,
                     )
@@ -69,7 +69,7 @@ class DashboardService:
             total_chunks_result = await self.db.execute(
                 select(func.count(PipelineSegment.id))
                 .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
-                .where(PipelineJob.category == "SIBI", *ds)
+                .where(PipelineJob.id.isnot(None), *ds)
             )
             total_chunks = total_chunks_result.scalar() or 0
 
@@ -80,7 +80,7 @@ class DashboardService:
                 .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
                 .where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         func.date(PipelineJob.created_at) == today,
                         *ds,
                     )
@@ -95,7 +95,7 @@ class DashboardService:
                 .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
                 .where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         AnnotationEdit.is_deleted == False,
                         *ds,
                     )
@@ -109,7 +109,7 @@ class DashboardService:
                 .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
                 .where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         exists(
                             select(1).where(
                                 PipelineTranscript.segment_id == PipelineSegment.id
@@ -131,7 +131,7 @@ class DashboardService:
             export_ready_result = await self.db.execute(
                 select(func.count(PipelineJob.id)).where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         PipelineJob.curation_status.in_(
                             ["READY_TO_EXPORT", "NORMALIZED", "READY_TO_BE_NORMALIZED"]
                         ),
@@ -147,7 +147,7 @@ class DashboardService:
 
             return [
                 {
-                    "label": "TOTAL VIDEO SIBI",
+                    "label": "TOTAL VIDEO",
                     "value": total_videos,
                     "sublabel": f"+{recent_videos} minggu ini",
                     "icon": "video",
@@ -181,7 +181,7 @@ class DashboardService:
         try:
             # Base: total SIBI videos
             total_videos_result = await self.db.execute(
-                select(func.count(PipelineJob.id)).where(PipelineJob.category == "SIBI", *ds)
+                select(func.count(PipelineJob.id)).where(PipelineJob.id.isnot(None), *ds)
             )
             total_videos = total_videos_result.scalar() or 0
 
@@ -189,7 +189,7 @@ class DashboardService:
             cv_extract_result = await self.db.execute(
                 select(func.count(PipelineJob.id)).where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         exists(
                             select(1).where(
                                 PipelineSegment.job_id == PipelineJob.id
@@ -205,7 +205,7 @@ class DashboardService:
             asr_transcribe_result = await self.db.execute(
                 select(func.count(PipelineJob.id)).where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         exists(
                             select(1).where(
                                 PipelineSegment.job_id == PipelineJob.id
@@ -228,7 +228,7 @@ class DashboardService:
             review_annotate_result = await self.db.execute(
                 select(func.count(PipelineJob.id)).where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         exists(
                             select(1).where(
                                 PipelineSegment.job_id == PipelineJob.id
@@ -251,7 +251,7 @@ class DashboardService:
             kurasi_result = await self.db.execute(
                 select(func.count(PipelineJob.id)).where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         exists(
                             select(1).where(
                                 PipelineSegment.job_id == PipelineJob.id
@@ -276,7 +276,7 @@ class DashboardService:
             export_ready_result = await self.db.execute(
                 select(func.count(PipelineJob.id)).where(
                     and_(
-                        PipelineJob.category == "SIBI",
+                        PipelineJob.id.isnot(None),
                         PipelineJob.curation_status.in_(
                             ["READY_TO_EXPORT", "NORMALIZED", "READY_TO_BE_NORMALIZED"]
                         ),
