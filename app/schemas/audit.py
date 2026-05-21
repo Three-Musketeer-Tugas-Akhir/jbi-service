@@ -209,6 +209,24 @@ ACTION_LABELS = {
     "upload.completed": "Upload Completed",
     "upload.cancelled": "Upload Cancelled",
     
+    # Classification
+    "classification.updated": "Classification Updated",
+    
+    # Voice annotation
+    "voice_annotation.updated": "Voice Annotation Updated",
+    
+    # JBI annotation
+    "jbi_annotation.draft_saved": "JBI Annotation Draft Saved",
+    "jbi_annotation.edit_created": "JBI Annotation Edit Created",
+    "jbi_annotation.reset": "JBI Annotation Reset",
+    
+    # Normalization
+    "normalization.applied": "Normalization Applied",
+    
+    # Curation
+    "curation.approved": "Curation Approved",
+    "curation.normalized": "Curation Normalized",
+    
     # Admin
     "config.changed": "Configuration Changed",
     "audit.export_requested": "Audit Log Export Requested",

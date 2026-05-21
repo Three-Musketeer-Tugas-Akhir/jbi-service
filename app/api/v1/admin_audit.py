@@ -35,6 +35,33 @@ router = APIRouter(prefix="/admin/audit", tags=["admin-audit"])
 
 
 # ============================================================================
+# Module → Actions Mapping
+# ============================================================================
+
+MODULE_ACTIONS = {
+    "pipeline": [
+        "job.created", "job.cancelled", "job.deleted", "job.status_changed",
+        "pipeline.stage_started", "pipeline.stage_completed", "pipeline.stage_failed",
+    ],
+    "classification": [
+        "classification.updated",
+    ],
+    "voice_annotation": [
+        "voice_annotation.updated", "asr_review.submitted", "asr_review.corrected",
+    ],
+    "jbi_annotation": [
+        "jbi_annotation.draft_saved", "jbi_annotation.edit_created", "jbi_annotation.reset",
+        "annotation.submitted", "annotation.approved", "annotation.rejected",
+    ],
+    "normalization": [
+        "normalization.applied",
+    ],
+    "curation": [
+        "curation.approved", "curation.normalized",
+    ],
+}
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
 
@@ -109,6 +136,7 @@ async def list_audit_logs(
     resource_type: Optional[str] = Query(None, description="Filter by resource type (e.g., 'job', 'user')"),
     resource_id: Optional[UUID] = Query(None, description="Filter by specific resource ID"),
     ip_address: Optional[str] = Query(None, description="Filter by IP address"),
+    module: Optional[str] = Query(None, description="Filter by feature module (pipeline, classification, voice_annotation, jbi_annotation, normalization, curation)"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Items per page"),
     current_user: CurrentUser = Depends(require_admin),
@@ -125,12 +153,16 @@ async def list_audit_logs(
     # Calculate offset
     offset = (page - 1) * page_size
     
+    # Resolve module filter to actions list
+    actions_filter = MODULE_ACTIONS.get(module) if module else None
+
     # Search with filters
     logs, total = await repository.search_with_filters(
         start_date=start_date,
         end_date=end_date,
         actor_id=actor_id,
         action=action,
+        actions=actions_filter,
         resource_type=resource_type,
         resource_id=resource_id,
         ip_address=ip_address,

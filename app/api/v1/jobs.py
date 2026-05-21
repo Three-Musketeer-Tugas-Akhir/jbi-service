@@ -30,7 +30,9 @@ from app.schemas import (
 )
 from app.db.models.pipeline import JobStatus, PipelineSegment, PipelineTranscript
 from app.db.models.annotation import AnnotationEdit
+from app.db.models.audit import AuditAction
 from app.repositories.job_repository import JobRepository, get_job_repository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.pipeline.utils.result_serializer import deserialize_pipeline_result
 from app.services.validator import (
     validate_upload, validate_video_file, VideoValidationError,
@@ -441,6 +443,21 @@ async def update_job_category(
         raise HTTPException(status_code=500, detail="Failed to update category")
     
     logger.info("Job category updated: job_id=%s, category=%s", job_id, category)
+    
+    # Log classification update
+    audit_repo = AuditLogRepository(session)
+    await audit_repo.create(
+        action=AuditAction.CLASSIFICATION_UPDATED,
+        resource_type="job",
+        actor_id=current_user.id,
+        resource_id=uuid.UUID(job_id),
+        details={
+            "job_id": job_id,
+            "previous_category": record.category,
+            "new_category": category,
+        }
+    )
+    await session.commit()
     
     return CategoryUpdateResponse(
         job_id=job_id,

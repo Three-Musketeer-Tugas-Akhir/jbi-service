@@ -17,9 +17,11 @@ from app.api.deps import require_curator
 from app.db.models.annotation import AnnotationEdit
 from app.db.models.pipeline import PipelineJob, PipelineSegment, PipelineTranscript
 from app.db.models.voice_annotation import VoiceAnnotation
+from app.db.models.audit import AuditAction
 from app.db.session import get_db
 from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.repositories.job_repository import JobRepository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.schemas.normalization import (
     ApplyNormalizationRequest,
     ApplyNormalizationResponse,
@@ -321,6 +323,20 @@ async def apply_normalization(
 
     # Update job curation status
     await job_repo.update_curation_status(job_id, "NORMALIZED")
+    
+    # Log normalization applied
+    audit_repo = AuditLogRepository(db)
+    await audit_repo.create(
+        action=AuditAction.NORMALIZATION_APPLIED,
+        resource_type="normalization",
+        actor_id=current_user.id,
+        resource_id=uuid.UUID(job_id),
+        details={
+            "job_id": job_id,
+            "utterances_updated": updated_count,
+            "curation_status": "NORMALIZED",
+        }
+    )
     await db.commit()
 
     return ApplyNormalizationResponse(

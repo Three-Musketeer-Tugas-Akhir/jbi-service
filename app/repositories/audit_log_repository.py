@@ -192,6 +192,7 @@ class AuditLogRepository:
         end_date: Optional[datetime] = None,
         actor_id: Optional[UUID] = None,
         action: Optional[str] = None,
+        actions: Optional[List[str]] = None,
         resource_type: Optional[str] = None,
         resource_id: Optional[UUID] = None,
         ip_address: Optional[str] = None,
@@ -226,6 +227,8 @@ class AuditLogRepository:
             conditions.append(AuditLog.actor_id == actor_id)
         if action:
             conditions.append(AuditLog.action == action)
+        if actions:
+            conditions.append(AuditLog.action.in_(actions))
         if resource_type:
             conditions.append(AuditLog.resource_type == resource_type)
         if resource_id:

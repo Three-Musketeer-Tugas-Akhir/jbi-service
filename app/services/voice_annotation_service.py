@@ -14,6 +14,8 @@ from sqlalchemy.orm import selectinload
 
 from app.db.models.pipeline import PipelineJob, PipelineTranscript, PipelineSegment, JobStatus
 from app.db.models.voice_annotation import VoiceAnnotation
+from app.db.models.audit import AuditAction
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.services.voice_annotation_validator import validate_text
 from app.core.config import settings
 
@@ -295,6 +297,25 @@ class VoiceAnnotationService:
 
         # 3. Recalculate job-level counters
         job_summary = await self._recalculate_job_status(va.job_id)
+
+        # 4. Log voice annotation update
+        audit_repo = AuditLogRepository(self.db)
+        await audit_repo.create(
+            action=AuditAction.VOICE_ANNOTATION_UPDATED,
+            resource_type="voice_annotation",
+            actor_id=user_id,
+            resource_id=va.id,
+            details={
+                "voice_annotation_id": str(va.id),
+                "job_id": str(va.job_id),
+                "transcript_id": str(va.transcript_id),
+                "old_text": old_text,
+                "new_text": new_text,
+                "has_flag": has_flag,
+                "is_unflagged": is_unflagged,
+            }
+        )
+        await self.db.commit()
 
         return {
             "id": str(va.id),

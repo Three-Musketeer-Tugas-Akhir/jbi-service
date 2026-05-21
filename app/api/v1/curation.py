@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_curator
 from app.core.exceptions import NotFoundError
 from app.db.session import get_db
+from app.db.models.audit import AuditAction
 from app.repositories.job_repository import JobRepository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.schemas.curation import (
     CurationApproveRequest,
     CurationNormalizeRequest,
@@ -76,6 +78,20 @@ async def approve_video(
         )
 
     await job_repo.update_curation_status(str(request.video_id), "READY_TO_EXPORT")
+    
+    # Log curation approval
+    audit_repo = AuditLogRepository(session)
+    await audit_repo.create(
+        action=AuditAction.CURATION_APPROVED,
+        resource_type="curation",
+        actor_id=current_user.id,
+        resource_id=request.video_id,
+        details={
+            "video_id": str(request.video_id),
+            "previous_status": job.curation_status,
+            "new_status": "READY_TO_EXPORT",
+        }
+    )
     await session.commit()
 
     return {"success": True, "video_id": str(request.video_id), "curation_status": "READY_TO_EXPORT"}
@@ -108,6 +124,20 @@ async def mark_as_normalized(
         )
 
     await job_repo.update_curation_status(str(request.video_id), "NORMALIZED")
+    
+    # Log curation normalized
+    audit_repo = AuditLogRepository(session)
+    await audit_repo.create(
+        action=AuditAction.CURATION_NORMALIZED,
+        resource_type="curation",
+        actor_id=current_user.id,
+        resource_id=request.video_id,
+        details={
+            "video_id": str(request.video_id),
+            "previous_status": job.curation_status,
+            "new_status": "NORMALIZED",
+        }
+    )
     await session.commit()
 
     return {"success": True, "video_id": str(request.video_id), "curation_status": "NORMALIZED"}

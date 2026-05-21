@@ -147,6 +147,24 @@ class AuditAction:
     UPLOAD_COMPLETED = "upload.completed"
     UPLOAD_CANCELLED = "upload.cancelled"
     
+    # Classification
+    CLASSIFICATION_UPDATED = "classification.updated"
+    
+    # Voice annotation
+    VOICE_ANNOTATION_UPDATED = "voice_annotation.updated"
+    
+    # JBI annotation
+    JBI_ANNOTATION_DRAFT_SAVED = "jbi_annotation.draft_saved"
+    JBI_ANNOTATION_EDIT_CREATED = "jbi_annotation.edit_created"
+    JBI_ANNOTATION_RESET = "jbi_annotation.reset"
+    
+    # Normalization
+    NORMALIZATION_APPLIED = "normalization.applied"
+    
+    # Curation
+    CURATION_APPROVED = "curation.approved"
+    CURATION_NORMALIZED = "curation.normalized"
+    
     # Admin
     CONFIG_CHANGED = "config.changed"
     AUDIT_EXPORT_REQUESTED = "audit.export_requested"

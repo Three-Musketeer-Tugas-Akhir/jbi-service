@@ -8,10 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.repositories.annotation_queue_repository import AnnotationQueueRepository
 from app.repositories.segment_repository import SegmentRepository
+from app.repositories.audit_log_repository import AuditLogRepository
 from app.core.exceptions import NotFoundError, PermissionError, ValidationError
 from app.core.config import settings
 from app.services.streaming_token_service import streaming_token_service
 from app.db.models.annotation import AnnotationEdit, AnnotationQueue
+from app.db.models.audit import AuditAction
 
 
 def _sanitize_cv_path(cv_path: Optional[str]) -> Optional[str]:
@@ -149,6 +151,22 @@ class AnnotationEditService:
         )
         
         created_edit = await self.edit_repo.create(edit)
+        
+        # Log JBI annotation edit created
+        audit_repo = AuditLogRepository(self.db)
+        await audit_repo.create(
+            action=AuditAction.JBI_ANNOTATION_EDIT_CREATED,
+            resource_type="annotation",
+            actor_id=editor_id,
+            resource_id=created_edit.id,
+            details={
+                "segment_id": str(segment_id),
+                "edit_id": str(created_edit.id),
+                "utterance_count": len(utterance_dicts),
+            }
+        )
+        await self.db.commit()
+        
         return created_edit
     
     async def get_edit_history(
@@ -294,7 +312,24 @@ class AnnotationEditService:
             edited_at=datetime.utcnow()
         )
         
-        return await self.edit_repo.create(draft)
+        created_draft = await self.edit_repo.create(draft)
+        
+        # Log JBI annotation draft saved
+        audit_repo = AuditLogRepository(self.db)
+        await audit_repo.create(
+            action=AuditAction.JBI_ANNOTATION_DRAFT_SAVED,
+            resource_type="annotation",
+            actor_id=editor_id,
+            resource_id=created_draft.id,
+            details={
+                "segment_id": str(segment_id),
+                "edit_id": str(created_draft.id),
+                "utterance_count": len(utterance_dicts),
+            }
+        )
+        await self.db.commit()
+        
+        return created_draft
     
     async def get_preview(
         self,
@@ -383,6 +418,26 @@ class AnnotationEditService:
             edited_at=datetime.utcnow()
         )
         reset_record = await self.edit_repo.create(reset_edit)
+        
+        # Log JBI annotation reset
+        audit_repo = AuditLogRepository(self.db)
+        await audit_repo.create(
+            action=AuditAction.JBI_ANNOTATION_RESET,
+            resource_type="annotation",
+            actor_id=editor_id,
+            resource_id=reset_record.id,
+            details={
+                "segment_id": str(segment_id),
+                "reset_edit_id": str(reset_record.id),
+                "edits_removed": deleted_count,
+                "reverted_to": {
+                    "text": segment.asr_text or "",
+                    "start": segment.asr_start or 0.0,
+                    "end": segment.asr_end or 0.0
+                }
+            }
+        )
+        await self.db.commit()
         
         return {
             "segment_id": segment_id,
