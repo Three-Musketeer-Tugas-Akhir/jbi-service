@@ -176,12 +176,11 @@ def _download_sync(download_id: str, url: str, temp_dir: str, output_template: s
             _set_progress(progress)
 
     ydl_opts = {
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "format": "bestvideo+bestaudio/best",
         "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
         "progress_hooks": [_progress_hook],
-        "merge_output_format": "mp4",
         "socket_timeout": 30,
         "js_runtimes": {"node": {}},
         "extractor_args": {"youtube": {"player_client": ["android", "ios"]}},
@@ -199,10 +198,8 @@ def _download_sync(download_id: str, url: str, temp_dir: str, output_template: s
     actual_size = os.path.getsize(temp_file_path)
     actual_filename = downloaded_files[0].name
 
-    # Sanitize filename for storage
+    # Sanitize filename for storage (keep original extension)
     safe_filename = re.sub(r'[^\w\s\-\.\[\]]', '_', actual_filename)
-    if not safe_filename.lower().endswith('.mp4'):
-        safe_filename += '.mp4'
 
     progress.file_size = actual_size
     progress.filename = safe_filename
@@ -353,13 +350,24 @@ async def _upload_to_storage_and_create_job(
             # Upload to MinIO with standard job path
             minio_key = f"jobs/{job_id}/original/{filename}"
 
+            # Determine content type based on file extension
+            ext = Path(filename).suffix.lower()
+            content_type_map = {
+                '.mp4': 'video/mp4',
+                '.webm': 'video/webm',
+                '.mkv': 'video/x-matroska',
+                '.avi': 'video/x-msvideo',
+                '.mov': 'video/quicktime',
+            }
+            content_type = content_type_map.get(ext, 'video/mp4')
+
             with open(file_path, "rb") as f:
                 minio_client.put_object(
                     bucket_name=bucket,
                     object_name=minio_key,
                     data=f,
                     length=file_size,
-                    content_type="video/mp4",
+                    content_type=content_type,
                 )
 
             logger.info(f"[YT-DL {download_id}] Uploaded to MinIO: {minio_key}")
@@ -369,7 +377,7 @@ async def _upload_to_storage_and_create_job(
                 upload_id=download_id,
                 filename=filename,
                 file_size=file_size,
-                mime_type="video/mp4",
+                mime_type=content_type,
                 status="complete",
                 chunk_size=file_size,  # single "chunk"
                 total_chunks=1,
