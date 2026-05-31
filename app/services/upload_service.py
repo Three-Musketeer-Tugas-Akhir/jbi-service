@@ -230,6 +230,38 @@ class UploadService:
             raise NotFoundError(f"Upload {upload_id} not found")
         
         return upload
+
+    async def get_upload_locked(self, upload_id: str, user_id: UUID) -> Upload:
+        """
+        Get upload by ID with row-level locking (SELECT FOR UPDATE).
+        
+        Use this when updating chunks_received to prevent race conditions
+        from parallel chunk uploads.
+        
+        Args:
+            upload_id: Tus upload ID
+            user_id: User ID for verification
+            
+        Returns:
+            Upload record (locked)
+            
+        Raises:
+            NotFoundError: If upload not found or not owned by user
+        """
+        result = await self.db.execute(
+            select(Upload)
+            .where(
+                Upload.upload_id == upload_id,
+                Upload.user_id == user_id
+            )
+            .with_for_update()
+        )
+        upload = result.scalar_one_or_none()
+        
+        if not upload:
+            raise NotFoundError(f"Upload {upload_id} not found")
+        
+        return upload
     
     async def get_upload_offset(self, upload_id: str, user_id: UUID) -> int:
         """
@@ -281,29 +313,42 @@ class UploadService:
         """
         Store an upload chunk (legacy in-memory path).
         
+        Uses row-level locking to prevent race conditions from parallel uploads.
+        
         For the streaming path see ``store_chunk_streaming``.
         """
-        upload = await self.get_upload(upload_id, user_id)
         chunk_size = len(chunk_data)
-        chunk_index, is_complete = self._validate_chunk(
-            upload, offset, chunk_size,
-        )
-
-        if chunk_index is None:
-            # Already received — return next offset
-            return offset + chunk_size
-
-        chunk_key = f"{upload.temp_prefix}chunk_{chunk_index:08d}"
+        chunk_index: int | None = None
 
         try:
             # Run blocking MinIO put in thread pool → unblock event loop
+            # Upload BEFORE acquiring lock to minimize lock duration
+            # (orphaned chunks are cleaned up later)
+            upload_temp = await self.get_upload(upload_id, user_id)
+            chunk_index, _ = self._validate_chunk(upload_temp, offset, chunk_size)
+            
+            if chunk_index is None:
+                # Already received — return next offset
+                return offset + chunk_size
+
+            chunk_key = f"{upload_temp.temp_prefix}chunk_{chunk_index:08d}"
+            
             await asyncio.to_thread(
                 self.minio.put_object,
-                bucket_name=upload.temp_bucket,
+                bucket_name=upload_temp.temp_bucket,
                 object_name=chunk_key,
                 data=io.BytesIO(chunk_data),
                 length=chunk_size,
             )
+
+            # Acquire lock and update DB atomically
+            upload = await self.get_upload_locked(upload_id, user_id)
+            
+            # Re-validate after acquiring lock (might have been updated by another request)
+            chunk_index, _ = self._validate_chunk(upload, offset, chunk_size)
+            if chunk_index is None:
+                logger.debug(f"Chunk at offset {offset} already received (race condition avoided)")
+                return offset + chunk_size
 
             self._mark_chunk_received(upload, chunk_index)
             await self.db.flush()
@@ -333,6 +378,8 @@ class UploadService:
         This avoids loading the entire chunk into Python memory by
         reading directly from the file on disk.
 
+        Uses row-level locking to prevent race conditions from parallel uploads.
+
         Args:
             upload_id: Tus upload ID
             user_id: User ID
@@ -343,28 +390,40 @@ class UploadService:
         Returns:
             New offset after storing this chunk
         """
-        upload = await self.get_upload(upload_id, user_id)
-        chunk_index, is_complete = self._validate_chunk(
-            upload, offset, chunk_size,
-        )
-
-        if chunk_index is None:
-            return offset + chunk_size
-
-        chunk_key = f"{upload.temp_prefix}chunk_{chunk_index:08d}"
+        chunk_index: int | None = None
 
         try:
+            # Step 1: Pre-validate without lock and upload to MinIO
+            # Upload BEFORE acquiring lock to minimize lock duration
+            # (orphaned chunks are cleaned up later)
+            upload_temp = await self.get_upload(upload_id, user_id)
+            chunk_index, _ = self._validate_chunk(upload_temp, offset, chunk_size)
+
+            if chunk_index is None:
+                return offset + chunk_size
+
+            chunk_key = f"{upload_temp.temp_prefix}chunk_{chunk_index:08d}"
+
             # Upload from file handle in thread pool — zero RAM copy
             def _upload_from_file():
                 with open(chunk_path, "rb") as fh:
                     self.minio.put_object(
-                        bucket_name=upload.temp_bucket,
+                        bucket_name=upload_temp.temp_bucket,
                         object_name=chunk_key,
                         data=fh,
                         length=chunk_size,
                     )
 
             await asyncio.to_thread(_upload_from_file)
+
+            # Step 2: Acquire lock and update DB atomically
+            upload = await self.get_upload_locked(upload_id, user_id)
+
+            # Re-validate after acquiring lock (might have been updated by another request)
+            chunk_index, _ = self._validate_chunk(upload, offset, chunk_size)
+            if chunk_index is None:
+                logger.debug(f"Chunk at offset {offset} already received (race condition avoided)")
+                return offset + chunk_size
 
             self._mark_chunk_received(upload, chunk_index)
             await self.db.flush()
