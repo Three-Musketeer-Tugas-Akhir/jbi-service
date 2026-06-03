@@ -121,14 +121,30 @@ class PipelineMonitor:
             await asyncio.wait_for(admin.start(), timeout=15.0)
             
             try:
-                # List topics (returns list in this aiokafka version)
+                # List topics (returns list of strings in this aiokafka version)
                 topics = await asyncio.wait_for(admin.list_topics(), timeout=10.0)
-                for topic in topics:
-                    if isinstance(topic, str) and topic.startswith("pipeline."):
-                        status["topics"].append({
-                            "name": topic,
-                            "partitions": "-"  # API differs by version
-                        })
+                pipeline_topics = [t for t in topics if isinstance(t, str) and t.startswith("pipeline.")]
+                
+                # Get partition counts using describe_topics
+                if pipeline_topics:
+                    try:
+                        topic_details = await asyncio.wait_for(
+                            admin.describe_topics(pipeline_topics), 
+                            timeout=10.0
+                        )
+                        for detail in topic_details:
+                            if isinstance(detail, dict) and detail.get("error_code") == 0:
+                                status["topics"].append({
+                                    "name": detail["topic"],
+                                    "partitions": len(detail.get("partitions", []))
+                                })
+                    except Exception:
+                        # Fallback: just list topics without partition counts
+                        for topic in pipeline_topics:
+                            status["topics"].append({
+                                "name": topic,
+                                "partitions": "-"
+                            })
                 
                 # Consumer groups
                 groups = ["detection-workers", "asr-workers", "cropping-workers"]
