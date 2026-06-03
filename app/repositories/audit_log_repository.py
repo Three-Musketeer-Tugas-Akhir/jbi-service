@@ -279,6 +279,21 @@ class AuditLogRepository:
         result = await self.session.execute(stmt)
         return [row[0] for row in result.all()]
     
+    async def get_unique_actors(self) -> List[dict]:
+        """
+        Get list of unique actors in audit logs.
+        
+        Returns:
+            List of dicts with actor id and email
+        """
+        stmt = (
+            select(AuditLog.actor_id, User.email)
+            .join(User, AuditLog.actor_id == User.id)
+            .distinct()
+        )
+        result = await self.session.execute(stmt)
+        return [{"id": str(row[0]), "email": row[1]} for row in result.all() if row[0] is not None]
+    
     async def get_stats_by_action(
         self,
         start_date: Optional[datetime] = None,

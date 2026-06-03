@@ -21,14 +21,15 @@ class AnnotationQueueRepository:
         status: Optional[str] = None,
         dataset_id: Optional[UUID] = None,
         limit: int = 20,
-        offset: int = 0
+        offset: int = 0,
+        is_admin: bool = False
     ) -> List[AnnotationQueue]:
-        """Get queue entries for an annotator, optionally filtered by dataset."""
+        """Get queue entries for an annotator, optionally filtered by dataset. If is_admin is true, gets all entries."""
         from app.db.models.pipeline import PipelineSegment, PipelineJob
 
-        query = select(AnnotationQueue).where(
-            AnnotationQueue.annotator_id == annotator_id
-        )
+        query = select(AnnotationQueue)
+        if not is_admin:
+            query = query.where(AnnotationQueue.annotator_id == annotator_id)
         
         if status:
             status_list = [s.strip() for s in status.split(",")]
@@ -116,13 +117,14 @@ class AnnotationQueueRepository:
         annotator_id: UUID,
         status: Optional[str] = None,
         dataset_id: Optional[UUID] = None,
+        is_admin: bool = False
     ) -> int:
-        """Count queue entries for an annotator, optionally filtered by dataset."""
+        """Count queue entries for an annotator, optionally filtered by dataset. If is_admin is true, count all."""
         from app.db.models.pipeline import PipelineSegment, PipelineJob
 
-        query = select(func.count(AnnotationQueue.id)).where(
-            AnnotationQueue.annotator_id == annotator_id
-        )
+        query = select(func.count(AnnotationQueue.id))
+        if not is_admin:
+            query = query.where(AnnotationQueue.annotator_id == annotator_id)
         
         if status:
             status_list = [s.strip() for s in status.split(",")]

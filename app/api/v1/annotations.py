@@ -76,7 +76,8 @@ async def get_annotation_queue(
         status=status,
         dataset_id=dataset_uuid,
         page=page,
-        page_size=page_size
+        page_size=page_size,
+        is_admin=current_user.has_role("admin")
     )
     return result
 
@@ -104,7 +105,8 @@ async def get_segment_for_annotation(
     service = AnnotationQueueService(db)
     result = await service.get_segment_for_annotation(
         segment_id=segment_id,
-        annotator_id=current_user.id
+        annotator_id=current_user.id,
+        is_admin=current_user.has_role("admin")
     )
     return result
 
@@ -139,6 +141,7 @@ async def create_annotation_edit(
         segment_id=segment_id,
         editor_id=current_user.id,
         utterances=edit_data.utterances,
+        is_admin=current_user.has_role("admin")
     )
     return edit
 
@@ -163,7 +166,8 @@ async def get_annotation_edits(
     service = AnnotationEditService(db)
     edits = await service.get_edit_history(
         segment_id=segment_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        is_admin=current_user.has_role("admin")
     )
     
     return {
@@ -196,7 +200,8 @@ async def preview_annotation(
         segment_id=segment_id,
         user_id=current_user.id,
         start_time=preview_data.start_time,
-        end_time=preview_data.end_time
+        end_time=preview_data.end_time,
+        is_admin=current_user.has_role("admin")
     )
     
     # Add transcript (always include, may be None)
@@ -402,6 +407,7 @@ async def save_annotation_draft(
         segment_id=segment_id,
         editor_id=current_user.id,
         utterances=draft_data.utterances,
+        is_admin=current_user.has_role("admin")
     )
     
     return {
@@ -435,7 +441,8 @@ async def reset_annotation(
     service = AnnotationEditService(db)
     result = await service.reset_to_original(
         segment_id=segment_id,
-        editor_id=current_user.id
+        editor_id=current_user.id,
+        is_admin=current_user.has_role("admin")
     )
     return result
 
@@ -461,7 +468,8 @@ async def get_current_annotation_values(
     service = AnnotationEditService(db)
     values = await service.get_current_values_with_draft(
         segment_id=segment_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        is_admin=current_user.has_role("admin")
     )
     return values
 
@@ -490,7 +498,8 @@ async def check_submission_status(
     service = AnnotationSubmissionService(db)
     status_info = await service.check_submission_status(
         segment_id=segment_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        is_admin=current_user.has_role("admin")
     )
     return status_info
 
@@ -519,7 +528,8 @@ async def submit_for_review(
     result = await service.submit_for_review(
         segment_id=segment_id,
         user_id=current_user.id,
-        confirm_no_changes=submit_data.confirm_no_changes
+        confirm_no_changes=submit_data.confirm_no_changes,
+        is_admin=current_user.has_role("admin")
     )
     return result
 
@@ -548,7 +558,8 @@ async def get_review_status(
     service = AnnotationSubmissionService(db)
     status_info = await service.get_submission_status(
         segment_id=segment_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        is_admin=current_user.has_role("admin")
     )
     return status_info
 

@@ -52,7 +52,8 @@ class AnnotationEditService:
         utterances: List[Any],
         new_text: Optional[str] = None,
         new_start: Optional[float] = None,
-        new_end: Optional[float] = None
+        new_end: Optional[float] = None,
+        is_admin: bool = False
     ) -> AnnotationEdit:
         """
         Create a new annotation edit for a segment with utterance-level corrections.
@@ -80,7 +81,7 @@ class AnnotationEditService:
                 f"Segment {segment_id} not found in annotation queue"
             )
         
-        if queue_entry.annotator_id != editor_id:
+        if not is_admin and queue_entry.annotator_id != editor_id:
             raise PermissionError(
                 "You are not assigned to edit this segment"
             )
@@ -172,7 +173,8 @@ class AnnotationEditService:
     async def get_edit_history(
         self,
         segment_id: UUID,
-        user_id: UUID
+        user_id: UUID,
+        is_admin: bool = False
     ) -> List[AnnotationEdit]:
         """
         Get edit history for a segment.
@@ -190,7 +192,7 @@ class AnnotationEditService:
             raise NotFoundError(f"Segment {segment_id} not found")
         
         # TODO: Check if user is admin for full access
-        if queue_entry.annotator_id != user_id:
+        if not is_admin and queue_entry.annotator_id != user_id:
             raise PermissionError(
                 "You can only view edit history for your assigned segments"
             )
@@ -234,7 +236,8 @@ class AnnotationEditService:
         utterances: List[Any],
         new_text: Optional[str] = None,
         new_start: Optional[float] = None,
-        new_end: Optional[float] = None
+        new_end: Optional[float] = None,
+        is_admin: bool = False
     ) -> AnnotationEdit:
         """
         Save an annotation edit as draft with utterance-level corrections.
@@ -249,7 +252,7 @@ class AnnotationEditService:
         if not queue_entry:
             raise NotFoundError(f"Segment {segment_id} not found in annotation queue")
         
-        if queue_entry.annotator_id != editor_id:
+        if not is_admin and queue_entry.annotator_id != editor_id:
             raise PermissionError("You are not assigned to edit this segment")
         
         segment = await self.segment_repo.get_by_id(segment_id)
@@ -336,21 +339,16 @@ class AnnotationEditService:
         segment_id: UUID,
         user_id: UUID,
         start_time: float,
-        end_time: float
+        end_time: float,
+        is_admin: bool = False
     ) -> dict:
-        """
-        Get preview data for annotation with specific timestamps.
-        
-        Returns video URL and metadata for the annotator to verify
-        synchronization before saving/submitting.
-        """
-        # Verify access
+        """Get preview video for specified timestamps."""
         queue_entry = await self.queue_repo.get_by_segment(segment_id)
         if not queue_entry:
-            raise NotFoundError(f"Segment {segment_id} not found")
-        
-        if queue_entry.annotator_id != user_id:
-            raise PermissionError("You can only preview your assigned segments")
+            raise NotFoundError(f"Segment {segment_id} not found in annotation queue")
+            
+        if not is_admin and queue_entry.annotator_id != user_id:
+            raise PermissionError("This segment is not assigned to you")
         
         segment = await self.segment_repo.get_by_id(segment_id)
         if not segment or not segment.cropped_video_path:
@@ -373,7 +371,8 @@ class AnnotationEditService:
     async def reset_to_original(
         self,
         segment_id: UUID,
-        editor_id: UUID
+        editor_id: UUID,
+        is_admin: bool = False
     ) -> dict:
         """
         Reset all edits for a segment back to ASR-original state.
@@ -388,7 +387,7 @@ class AnnotationEditService:
         if not queue_entry:
             raise NotFoundError(f"Segment {segment_id} not found")
         
-        if queue_entry.annotator_id != editor_id:
+        if not is_admin and queue_entry.annotator_id != editor_id:
             raise PermissionError("You can only reset your own edits")
         
         segment = await self.segment_repo.get_by_id(segment_id)
@@ -483,7 +482,8 @@ class AnnotationEditService:
     async def get_current_values_with_draft(
         self,
         segment_id: UUID,
-        user_id: UUID
+        user_id: UUID,
+        is_admin: bool = False
     ) -> dict:
         """
         Get current values for a segment, including any draft edits.
@@ -496,7 +496,7 @@ class AnnotationEditService:
         if not queue_entry:
             raise NotFoundError(f"Segment {segment_id} not found")
         
-        if queue_entry.annotator_id != user_id:
+        if not is_admin and queue_entry.annotator_id != user_id:
             raise PermissionError("You are not assigned to view this segment")
         
         segment = await self.segment_repo.get_by_id(segment_id)
