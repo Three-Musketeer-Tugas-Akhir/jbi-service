@@ -47,6 +47,11 @@ from app.schemas.job import (
     SignLanguageCategory,
     CategoryUpdateRequest,
     CategoryUpdateResponse,
+    JobRetryASRRequest,
+    JobRetryASRResponse,
+    SegmentMissingTranscriptInfo,
+    CropStatusSegment,
+    JobCropStatusResponse,
 )
 
 # User/Profile schemas (from auth domain)
@@ -130,4 +135,9 @@ __all__ = [
     "SignLanguageCategory",
     "CategoryUpdateRequest",
     "CategoryUpdateResponse",
+    "JobRetryASRRequest",
+    "JobRetryASRResponse",
+    "SegmentMissingTranscriptInfo",
+    "CropStatusSegment",
+    "JobCropStatusResponse",
 ]

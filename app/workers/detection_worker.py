@@ -45,7 +45,7 @@ class DetectionWorker(KafkaPipelineWorker):
         self.minio_service = get_minio_service()
         self.detector = JBIDetector()
     
-    async def is_already_processed(self, job_id: str) -> bool:
+    async def is_already_processed(self, job_id: str, payload: Optional[Dict[str, Any]] = None) -> bool:
         """Check if detection was already done for this job."""
         try:
             job_uuid = UUID(job_id)

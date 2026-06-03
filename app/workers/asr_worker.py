@@ -38,8 +38,11 @@ class ASRWorker(KafkaPipelineWorker):
     next_stage_topic = PipelineTopics.CROPPING.value
     max_retries = 3
     
-    async def is_already_processed(self, job_id: str) -> bool:
-        """Check if ASR was already done for this job."""
+    async def is_already_processed(self, job_id: str, payload: Optional[Dict[str, Any]] = None) -> bool:
+        """Check if ASR was already done for this job.
+        
+        For partial retries (mode='partial'), only check the specified segments.
+        """
         try:
             job_uuid = UUID(job_id)
         except ValueError:
@@ -51,7 +54,14 @@ class ASRWorker(KafkaPipelineWorker):
             if not segments:
                 return False
             
-            # Check if any transcripts exist for these segments
+            # For partial retries, check only specified segments
+            if payload and payload.get("mode") == "partial" and payload.get("segment_ids"):
+                requested_ids = set(payload["segment_ids"])
+                segments = [s for s in segments if str(s.id) in requested_ids]
+                if not segments:
+                    return False
+            
+            # Check if transcripts exist for these segments
             segment_ids = [s.id for s in segments]
             from sqlalchemy import select
             from app.db.models.pipeline import PipelineTranscript
@@ -68,14 +78,21 @@ class ASRWorker(KafkaPipelineWorker):
         Process an ASR job.
         
         Args:
-            payload: {"job_id": str, "segment_count": int, "segment_ids": list}
+            payload: {"job_id": str, "segment_count": int, "segment_ids": list, "mode": str}
             
         Returns:
             {"transcripts_count": int, "segments_processed": int}
         """
         job_id = UUID(payload["job_id"])
+        is_partial = payload.get("mode") == "partial"
+        requested_segment_ids = set(payload.get("segment_ids", []))
         
-        logger.info("Processing ASR job: %s", job_id)
+        logger.info(
+            "Processing ASR job: %s (mode=%s, segments=%s)", 
+            job_id, 
+            "partial" if is_partial else "full",
+            len(requested_segment_ids) if is_partial else "all"
+        )
         
         # Get job details
         async with async_session() as session:
@@ -83,6 +100,17 @@ class ASRWorker(KafkaPipelineWorker):
             segment_repo = SegmentRepository(session)
             job = await job_repo.get_by_id(job_id)
             segments = await segment_repo.get_by_job_id(job_id)
+            
+            # Filter segments for partial retry
+            if is_partial and requested_segment_ids:
+                segments = [s for s in segments if str(s.id) in requested_segment_ids]
+                logger.info(
+                    "Filtered to %d segments for partial retry", 
+                    len(segments)
+                )
+                if not segments:
+                    logger.warning("No matching segments found for partial retry")
+                    return {"transcripts_count": 0, "segments_processed": 0}
             
             # Update status
             await job_repo.update_status(job_id, JobStatus.TRANSCRIBING, current_stage="asr")

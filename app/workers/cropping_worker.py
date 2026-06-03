@@ -51,8 +51,12 @@ class CroppingWorker(KafkaPipelineWorker):
         self.storage = StorageManager()
         self.minio_service = get_minio_service()
     
-    async def is_already_processed(self, job_id: str) -> bool:
+    async def is_already_processed(self, job_id: str, payload: Optional[Dict[str, Any]] = None) -> bool:
         """Check if cropping was already done for this job."""
+        # For partial retries, always process to filter transcripts inside
+        if payload and payload.get("mode") == "partial":
+            return False
+        
         try:
             job_uuid = UUID(job_id)
         except ValueError:
@@ -89,7 +93,12 @@ class CroppingWorker(KafkaPipelineWorker):
         if not job_id:
             raise ValueError("Missing job_id in payload")
         
-        logger.info("Starting cropping stage for job %s", job_id)
+        is_partial = payload.get("mode") == "partial"
+        
+        if is_partial:
+            logger.info("Starting PARTIAL cropping stage for job %s", job_id)
+        else:
+            logger.info("Starting cropping stage for job %s", job_id)
         
         async with async_session() as session:
             job_repo = JobRepository(session)
@@ -101,13 +110,11 @@ class CroppingWorker(KafkaPipelineWorker):
             if not job:
                 raise ValueError(f"Job {job_id} not found")
             
-            if job.status != JobStatus.ASR_COMPLETED:
+            if not is_partial and job.status != JobStatus.ASR_COMPLETED:
                 logger.warning(
                     "Job %s has status %s, expected ASR_COMPLETED",
                     job_id, job.status
                 )
-            
-
             
             # Get all segments with transcripts
             segments = await segment_repo.get_by_job_id(UUID(job_id))
@@ -117,7 +124,36 @@ class CroppingWorker(KafkaPipelineWorker):
             for seg in segments:
                 transcripts = await self._get_transcripts_for_segment(session, seg.id)
                 if transcripts:
-                    all_transcripts.append((seg, transcripts))
+                    # For partial retry, only include transcripts that are not yet cropped
+                    if is_partial:
+                        original_count = len(transcripts)
+                        transcripts = [
+                            t for t in transcripts 
+                            if t.status != "cropped"
+                        ]
+                        if len(transcripts) < original_count:
+                            logger.info(
+                                "Segment %s: filtered %d cropped utterances, %d remaining",
+                                seg.segment_index, original_count - len(transcripts), len(transcripts)
+                            )
+                    
+                    if transcripts:
+                        all_transcripts.append((seg, transcripts))
+            
+            # For partial retry, if all transcripts are already cropped, skip
+            if is_partial and not all_transcripts:
+                logger.info(
+                    "Partial retry: all transcripts already cropped for job %s. Nothing to do.",
+                    job_id
+                )
+                return {
+                    "job_id": job_id,
+                    "success": True,
+                    "skipped": True,
+                    "total_utterances": 0,
+                    "success_count": 0,
+                    "failure_count": 0,
+                }
             
             if not all_transcripts:
                 logger.warning("No transcripts found for job %s", job_id)
@@ -238,6 +274,7 @@ class CroppingWorker(KafkaPipelineWorker):
         return {
             "job_id": job_id,
             "success": failure_count == 0,
+            "skipped": False,
             "total_utterances": len(results),
             "success_count": success_count,
             "failure_count": failure_count,

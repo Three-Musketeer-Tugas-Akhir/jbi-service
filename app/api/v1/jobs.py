@@ -65,6 +65,11 @@ from app.schemas.job import (
     DatasetExplorerUtterance,
     JobRetryRequest,
     JobRetryResponse,
+    JobRetryASRRequest,
+    JobRetryASRResponse,
+    SegmentMissingTranscriptInfo,
+    JobCropStatusResponse,
+    CropStatusSegment,
 )
 from app.repositories.segment_repository import SegmentRepository
 from app.repositories.annotation_edit_repository import AnnotationEditRepository
@@ -668,6 +673,214 @@ async def retry_job(
     except Exception as e:
         logger.error("Failed to retry pipeline job %s (%s): %s", job_id, request.mode, e)
         raise HTTPException(status_code=500, detail="Failed to start retry")
+
+
+# ── POST /jobs/{job_id}/retry-asr ────────────────────────────────────────
+
+@router.post(
+    "/jobs/{job_id}/retry-asr",
+    response_model=JobRetryASRResponse,
+    responses={
+        404: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+    },
+)
+async def retry_asr(
+    job_id: str,
+    request: JobRetryASRRequest,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Retry ASR for segments missing transcripts.
+    
+    This endpoint queues ASR processing for segments that don't have transcripts.
+    You can optionally specify specific segment IDs to retry.
+    
+    - If segment_ids is provided: only those segments will be retried
+    - If segment_ids is null: all segments without transcripts will be retried
+    """
+    from app.messaging.kafka_client import pipeline_producer
+    
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid job ID: {job_id}")
+    
+    job_repo = JobRepository(session)
+    segment_repo = SegmentRepository(session)
+    
+    job = await job_repo.get_by_id(job_uuid)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+    
+    # Get all segments for this job
+    segments = await segment_repo.get_by_job_id(job_uuid)
+    if not segments:
+        raise HTTPException(status_code=400, detail=f"Job '{job_id}' has no segments")
+    
+    # Determine which segments to retry
+    if request.segment_ids:
+        # Validate provided segment IDs
+        valid_ids = {str(s.id) for s in segments}
+        requested_ids = set(request.segment_ids)
+        invalid_ids = requested_ids - valid_ids
+        
+        if invalid_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid segment IDs: {', '.join(invalid_ids)}"
+            )
+        
+        segments_to_retry = [s for s in segments if str(s.id) in requested_ids]
+    else:
+        # Auto-detect segments without transcripts
+        segments_to_retry = [s for s in segments if not s.transcripts]
+    
+    if not segments_to_retry:
+        raise HTTPException(
+            status_code=400,
+            detail="No segments to retry. All segments already have transcripts."
+        )
+    
+    # Check which segments already have transcripts (warn but don't skip if explicitly requested)
+    segments_missing = []
+    segments_with_transcripts = []
+    
+    for seg in segments_to_retry:
+        if seg.transcripts:
+            segments_with_transcripts.append(seg)
+        else:
+            segments_missing.append(seg)
+    
+    # If all requested segments already have transcripts, reject
+    if not segments_missing:
+        raise HTTPException(
+            status_code=400,
+            detail="All specified segments already have transcripts. Nothing to retry."
+        )
+    
+    # Update job status to TRANSCRIBING
+    await job_repo.update_status(job_uuid, JobStatus.TRANSCRIBING, current_stage="asr")
+    await session.commit()
+    
+    # Publish ASR job to Kafka for missing segments only
+    segment_ids_to_retry = [str(s.id) for s in segments_missing]
+    
+    try:
+        await pipeline_producer.publish_asr_job_partial(
+            job_id=job_id,
+            segment_ids=segment_ids_to_retry,
+            segment_count=len(segments_missing),
+        )
+        logger.info(
+            "ASR retry queued for job %s: %d segments, user=%s",
+            job_id, len(segments_missing), current_user.id
+        )
+    except Exception as e:
+        logger.error("Failed to publish ASR retry job %s: %s", job_id, e)
+        raise HTTPException(status_code=500, detail="Failed to queue ASR retry job")
+    
+    return JobRetryASRResponse(
+        id=job_id,
+        status=JobStatus.TRANSCRIBING,
+        segments_queued=len(segments_missing),
+        segments_info=[
+            SegmentMissingTranscriptInfo(
+                segment_id=str(s.id),
+                segment_index=s.segment_index
+            )
+            for s in segments_missing
+        ],
+        message=f"ASR retry queued for {len(segments_missing)} segments"
+    )
+
+
+# ── GET /jobs/{job_id}/crop-status ───────────────────────────────────────
+
+@router.get(
+    "/jobs/{job_id}/crop-status",
+    response_model=JobCropStatusResponse,
+    responses={
+        404: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+    },
+)
+async def get_crop_status(
+    job_id: str,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Get cropping status for all transcripts in a job.
+    
+    Returns per-segment breakdown of transcript cropping status:
+    - pending: not yet cropped
+    - cropped: successfully cropped
+    - failed: cropping failed
+    """
+    from sqlalchemy import select, func, case
+    
+    try:
+        job_uuid = uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid job ID: {job_id}")
+    
+    job_repo = JobRepository(session)
+    job = await job_repo.get_by_id(job_uuid)
+    
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+    
+    # Query crop status per segment
+    query = (
+        select(
+            PipelineSegment.segment_index,
+            func.count(PipelineTranscript.id).label("total"),
+            func.sum(case((PipelineTranscript.status == "cropped", 1), else_=0)).label("cropped"),
+            func.sum(case((PipelineTranscript.status == "failed", 1), else_=0)).label("failed"),
+            func.sum(case((PipelineTranscript.status == "pending", 1), else_=0)).label("pending"),
+        )
+        .join(PipelineTranscript, PipelineSegment.id == PipelineTranscript.segment_id)
+        .where(PipelineSegment.job_id == job_uuid)
+        .group_by(PipelineSegment.segment_index)
+        .order_by(PipelineSegment.segment_index)
+    )
+    
+    result = await session.execute(query)
+    rows = result.all()
+    
+    if not rows:
+        # No transcripts found for this job
+        return JobCropStatusResponse(
+            job_id=job_id,
+            total_transcripts=0,
+            cropped=0,
+            failed=0,
+            pending=0,
+            segments=[]
+        )
+    
+    total_transcripts = sum(r.total for r in rows)
+    total_cropped = sum(r.cropped or 0 for r in rows)
+    total_failed = sum(r.failed or 0 for r in rows)
+    total_pending = sum(r.pending or 0 for r in rows)
+    
+    return JobCropStatusResponse(
+        job_id=job_id,
+        total_transcripts=total_transcripts,
+        cropped=total_cropped,
+        failed=total_failed,
+        pending=total_pending,
+        segments=[
+            CropStatusSegment(
+                segment_index=r.segment_index,
+                total=r.total,
+                cropped=r.cropped or 0,
+                failed=r.failed or 0,
+                pending=r.pending or 0
+            )
+            for r in rows
+        ]
+    )
 
 
 # ── DELETE /jobs/{job_id} ────────────────────────────────────────────────

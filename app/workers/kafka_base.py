@@ -128,7 +128,9 @@ class KafkaPipelineWorker(ABC):
                 return
             
             # Check idempotency
-            if await self.is_already_processed(job_id):
+            # Pass payload for partial retry support (e.g., ASR retry specific segments)
+            payload = message.payload if hasattr(message, 'payload') else None
+            if await self.is_already_processed(job_id, payload):
                 logger.info(f"Job {job_id} already processed, skipping")
                 if self.next_stage_topic:
                     await self._ensure_next_stage_queued(message)
@@ -206,9 +208,11 @@ class KafkaPipelineWorker(ABC):
                     segment_ids=result.get("segment_ids", []),
                 )
             elif self.next_stage_topic == PipelineTopics.CROPPING.value:
+                mode = message.payload.get("mode", "full") if isinstance(message.payload, dict) else "full"
                 await pipeline_producer.publish_cropping_job(
                     job_id=str(message.job_id),
                     transcript_count=result.get("transcripts_count"),
+                    mode=mode,
                 )
             
             logger.info(

@@ -212,6 +212,29 @@ class JobRetryResponse(BaseModel):
     failed_stage: Optional[str] = Field(None, description="The stage that was retried (if partial)")
     message: str = Field(..., description="Success message")
 
+
+class JobRetryASRRequest(BaseModel):
+    """Request body for ASR retry endpoint."""
+    segment_ids: Optional[List[str]] = Field(
+        None, 
+        description="Optional list of segment IDs to retry. If not provided, all segments without transcripts will be retried."
+    )
+
+
+class SegmentMissingTranscriptInfo(BaseModel):
+    """Info about a segment missing transcripts."""
+    segment_id: str = Field(..., description="Segment UUID")
+    segment_index: int = Field(..., description="Segment index")
+
+
+class JobRetryASRResponse(BaseModel):
+    """Response for ASR retry endpoint."""
+    id: str = Field(..., description="Job UUID")
+    status: str = Field(..., description="New job status")
+    segments_queued: int = Field(..., description="Number of segments queued for ASR retry")
+    segments_info: List[SegmentMissingTranscriptInfo] = Field(..., description="Segments that will be retried")
+    message: str = Field(..., description="Success message")
+
 class HealthResponse(BaseModel):
     """Response for GET /api/v1/health."""
     status: str = Field(..., description="Overall health status (healthy/degraded)")
@@ -238,6 +261,29 @@ class ErrorResponse(BaseModel):
     """Standard error response body."""
     error: str
     detail: str
+
+
+# ============================================================================
+# Cropping Status Schemas
+# ============================================================================
+
+class CropStatusSegment(BaseModel):
+    """Cropping status per segment."""
+    segment_index: int = Field(..., description="Segment index (0-based)")
+    total: int = Field(..., description="Total utterances in segment")
+    cropped: int = Field(..., description="Number of cropped utterances")
+    failed: int = Field(..., description="Number of failed utterances")
+    pending: int = Field(..., description="Number of pending utterances")
+
+
+class JobCropStatusResponse(BaseModel):
+    """Response for GET /jobs/{job_id}/crop-status."""
+    job_id: str = Field(..., description="Job UUID")
+    total_transcripts: int = Field(..., description="Total utterances across all segments")
+    cropped: int = Field(..., description="Total cropped utterances")
+    failed: int = Field(..., description="Total failed utterances")
+    pending: int = Field(..., description="Total pending utterances")
+    segments: List[CropStatusSegment] = Field(..., description="Cropping status per segment")
 
 
 # ============================================================================

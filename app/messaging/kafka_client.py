@@ -94,6 +94,7 @@ class PipelineProducer:
         self,
         job_id: str,
         transcript_count: Optional[int] = None,
+        mode: str = "full",
     ) -> None:
         """Publish a cropping job to Kafka."""
         message = PipelineMessage(
@@ -102,6 +103,7 @@ class PipelineProducer:
             payload={
                 "job_id": job_id,
                 "transcript_count": transcript_count,
+                "mode": mode,
             },
         )
         await self._send(PipelineTopics.CROPPING.value, message, key=job_id)
@@ -149,6 +151,28 @@ class PipelineProducer:
             dlq.model_dump(mode="json"),
             key=job_id,
         )
+    
+    async def publish_asr_job_partial(
+        self,
+        job_id: str,
+        segment_ids: list,
+        segment_count: int,
+    ) -> None:
+        """Publish a partial ASR retry job to Kafka.
+        
+        Only processes specific segments that are missing transcripts.
+        """
+        message = PipelineMessage(
+            job_id=job_id,
+            stage="asr",
+            payload={
+                "job_id": job_id,
+                "segment_count": segment_count,
+                "segment_ids": segment_ids,
+                "mode": "partial",
+            },
+        )
+        await self._send(PipelineTopics.ASR.value, message, key=job_id)
     
     async def _send(
         self,
