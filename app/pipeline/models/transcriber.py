@@ -1,7 +1,9 @@
 """faster-whisper-based ASR transcription service."""
 
+import asyncio
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 from dataclasses import dataclass
@@ -54,6 +56,7 @@ class TranscriberService:
     _model = None
     _model_size = None
     _compute_type = None
+    _executor = ThreadPoolExecutor(max_workers=1)
     
     # Default configuration
     DEFAULT_MODEL_SIZE = "base"
@@ -138,64 +141,94 @@ class TranscriberService:
         model = self._load_model()
         
         try:
-            # Run transcription
-            segments_gen, info = model.transcribe(
-                str(audio_path),
-                language=language,
-                beam_size=beam_size,
-                patience=patience,
-                condition_on_previous_text=condition_on_previous_text,
-                word_timestamps=False  # Segment-level timestamps
+            # Run blocking transcription in thread executor to avoid blocking event loop
+            # This allows other async tasks (like Kafka heartbeat) to run during inference
+            result = await asyncio.get_event_loop().run_in_executor(
+                self._executor,
+                self._transcribe_sync,
+                model,
+                audio_path,
+                language,
+                beam_size,
+                patience,
+                condition_on_previous_text
             )
             
-            # Collect segments
-            segments = []
-            total_confidence = 0.0
-            segment_count = 0
-            full_text_parts = []
-            
-            for segment in segments_gen:
-                # Calculate average confidence for segment
-                # faster-whisper provides avg_logprob which we convert to confidence
-                # Higher avg_logprob = higher confidence (less negative is better)
-                # Typical range: -1.0 (high confidence) to -3.0 (low confidence)
-                if hasattr(segment, 'avg_logprob') and segment.avg_logprob is not None:
-                    # Convert logprob to approximate confidence (0-1 scale)
-                    # Clamp between 0 and 1
-                    confidence = min(1.0, max(0.0, 1.0 + segment.avg_logprob))
-                else:
-                    # Fallback: use heuristic based on no_speech_prob
-                    confidence = 1.0 - (info.no_speech_prob if hasattr(info, 'no_speech_prob') else 0.0)
-                
-                transcription_segment = TranscriptionSegment(
-                    start=segment.start,
-                    end=segment.end,
-                    text=segment.text.strip(),
-                    confidence=confidence
-                )
-                segments.append(transcription_segment)
-                full_text_parts.append(segment.text.strip())
-                total_confidence += confidence
-                segment_count += 1
-            
-            # Calculate average confidence
-            average_confidence = total_confidence / segment_count if segment_count > 0 else 0.0
-            
-            result = TranscriptionResult(
-                segments=segments,
-                text=" ".join(full_text_parts),
-                average_confidence=average_confidence
-            )
-            
-            logger.info(
-                f"Transcription complete: {segment_count} segments, "
-                f"avg_confidence={average_confidence:.2f}"
-            )
             return result
             
         except Exception as e:
             logger.error(f"Transcription failed: {e}")
             raise ProcessingError(f"ASR transcription failed: {e}")
+    
+    def _transcribe_sync(
+        self,
+        model,
+        audio_path: Path,
+        language: str,
+        beam_size: int,
+        patience: float,
+        condition_on_previous_text: bool
+    ) -> TranscriptionResult:
+        """
+        Synchronous transcription method to run in thread executor.
+        
+        This method contains the blocking faster-whisper inference logic
+        that must not block the asyncio event loop.
+        """
+        # Run transcription
+        segments_gen, info = model.transcribe(
+            str(audio_path),
+            language=language,
+            beam_size=beam_size,
+            patience=patience,
+            condition_on_previous_text=condition_on_previous_text,
+            word_timestamps=False  # Segment-level timestamps
+        )
+        
+        # Collect segments
+        segments = []
+        total_confidence = 0.0
+        segment_count = 0
+        full_text_parts = []
+        
+        for segment in segments_gen:
+            # Calculate average confidence for segment
+            # faster-whisper provides avg_logprob which we convert to confidence
+            # Higher avg_logprob = higher confidence (less negative is better)
+            # Typical range: -1.0 (high confidence) to -3.0 (low confidence)
+            if hasattr(segment, 'avg_logprob') and segment.avg_logprob is not None:
+                # Convert logprob to approximate confidence (0-1 scale)
+                # Clamp between 0 and 1
+                confidence = min(1.0, max(0.0, 1.0 + segment.avg_logprob))
+            else:
+                # Fallback: use heuristic based on no_speech_prob
+                confidence = 1.0 - (info.no_speech_prob if hasattr(info, 'no_speech_prob') else 0.0)
+            
+            transcription_segment = TranscriptionSegment(
+                start=segment.start,
+                end=segment.end,
+                text=segment.text.strip(),
+                confidence=confidence
+            )
+            segments.append(transcription_segment)
+            full_text_parts.append(segment.text.strip())
+            total_confidence += confidence
+            segment_count += 1
+        
+        # Calculate average confidence
+        average_confidence = total_confidence / segment_count if segment_count > 0 else 0.0
+        
+        result = TranscriptionResult(
+            segments=segments,
+            text=" ".join(full_text_parts),
+            average_confidence=average_confidence
+        )
+        
+        logger.info(
+            f"Transcription complete: {segment_count} segments, "
+            f"avg_confidence={average_confidence:.2f}"
+        )
+        return result
     
     def format_segments_txt(
         self,

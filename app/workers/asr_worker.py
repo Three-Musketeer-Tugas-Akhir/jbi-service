@@ -7,6 +7,7 @@ then publishes Stage 3 (Cropping) messages.
 
 import logging
 import asyncio
+import json
 import os
 from uuid import UUID
 from typing import Dict, Any, List, Optional
@@ -20,7 +21,9 @@ from app.db.session import async_session
 from app.db.models.pipeline import JobStatus, PipelineTranscript
 from app.services.minio_service import get_minio_service
 from app.core.exceptions import ProcessingError
+from app.core.locks import DistributedLockManager
 from app.messaging.topics import PipelineTopics
+from app.messaging.schemas import PipelineMessage
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +40,83 @@ class ASRWorker(KafkaPipelineWorker):
     consumer_group = "asr-workers"
     next_stage_topic = PipelineTopics.CROPPING.value
     max_retries = 3
+    
+    async def _process_message(self, msg) -> None:
+        """
+        Override parent method to add PostgreSQL advisory lock.
+        
+        This prevents duplicate processing when multiple workers are scaled up.
+        The lock ensures only one worker processes a specific job at a time.
+        """
+        try:
+            data = json.loads(msg.value.decode("utf-8"))
+            message = PipelineMessage.from_kafka_dict(data)
+            job_id = str(message.job_id)
+            
+            logger.info(
+                f"Processing {message.stage} job: {job_id} "
+                f"[msg_id={message.message_id}]"
+            )
+            
+            # Check cancellation
+            if await self.is_job_cancelled(job_id):
+                logger.warning(f"Job {job_id} was cancelled, skipping")
+                await self._commit(msg)
+                return
+            
+            # Try to acquire distributed lock for this job
+            # Use the same session for lock and idempotency check to keep transaction consistent
+            async with async_session() as session:
+                lock = await DistributedLockManager.try_lock_job(
+                    session, "asr", job_id
+                )
+                
+                if lock is None:
+                    logger.warning(
+                        f"Job {job_id} is locked by another worker, skipping"
+                    )
+                    await self._commit(msg)
+                    return
+                
+                try:
+                    # Check idempotency within the same session
+                    payload = message.payload if hasattr(message, 'payload') else None
+                    if await self.is_already_processed(job_id, payload):
+                        logger.info(f"Job {job_id} already processed, skipping")
+                        if self.next_stage_topic:
+                            await self._ensure_next_stage_queued(message)
+                        await self._commit(msg)
+                        return
+                    
+                    # Commit session to ensure lock is persisted
+                    # (advisory locks are session-scoped, but we need to commit
+                    # any pending transactions before long-running processing)
+                    await session.commit()
+                    
+                except Exception as e:
+                    await session.rollback()
+                    raise
+            
+            # Process with retry (outside lock session)
+            # Lock is still held because PostgreSQL advisory locks are session-scoped
+            result = await self._process_with_retry(message)
+            
+            if result is not None:
+                # Publish next stage
+                if self.next_stage_topic:
+                    await self._publish_next_stage(message, result)
+                
+                # Commit offset only after everything succeeds
+                await self._commit(msg)
+                logger.info(f"Job {job_id} completed and committed")
+                
+        except Exception as e:
+            logger.exception(f"Failed to process message: {e}")
+            # Don't commit → message will be redelivered
+            if isinstance(e, ProcessingError) and e.permanent:
+                logger.error(f"Permanent error, sending to DLQ: {e}")
+                await self._send_to_dlq(msg, e)
+                await self._commit(msg)
     
     async def is_already_processed(self, job_id: str, payload: Optional[Dict[str, Any]] = None) -> bool:
         """Check if ASR was already done for this job.
