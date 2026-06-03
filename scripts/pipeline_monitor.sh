@@ -72,14 +72,16 @@ get_kafka_status() {
     
     # Check if kafka container is running
     if docker ps --format json | grep -q "kafka"; then
-        # Try to get topics using kafka-broker-api-versions or kafka-topics
-        local kafka_topics=$(docker exec -i jbi-service-kafka-1 kafka-topics --bootstrap-server kafka:9092 --list 2>/dev/null | grep "^pipeline\." || true)
+        # Try to get topics using kafka-topics
+        local kafka_topics_output=$(docker exec -i jbi-service-kafka-1 kafka-topics --bootstrap-server kafka:9092 --list 2>/dev/null | grep "^pipeline\." || true)
         
-        if [ -n "$kafka_topics" ]; then
+        if [ -n "$kafka_topics_output" ]; then
             local topic_array=()
             while IFS= read -r topic; do
-                topic_array+=("\"$topic\"")
-            done <<< "$kafka_topics"
+                if [ -n "$topic" ]; then
+                    topic_array+=("{\"name\":\"$topic\",\"partitions\":\"-\"}")
+                fi
+            done <<< "$kafka_topics_output"
             
             if [ ${#topic_array[@]} -gt 0 ]; then
                 topics="[$(IFS=,; echo "${topic_array[*]}")]"
@@ -87,7 +89,11 @@ get_kafka_status() {
         fi
         
         # Consumer groups - simplified
-        consumer_groups='[{"group":"detection-workers","state":"unknown","members":0,"status":"check with kafka-consumer-groups"}]'
+        consumer_groups='[
+            {"group":"detection-workers","state":"unknown","members":0,"status":"check with kafka-consumer-groups"},
+            {"group":"asr-workers","state":"unknown","members":0,"status":"check with kafka-consumer-groups"},
+            {"group":"cropping-workers","state":"unknown","members":0,"status":"check with kafka-consumer-groups"}
+        ]'
     else
         error='"Kafka container not running"'
     fi
