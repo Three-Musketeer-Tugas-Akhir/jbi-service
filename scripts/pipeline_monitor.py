@@ -109,7 +109,7 @@ class PipelineMonitor:
             "error": None
         }
         try:
-            from aiokafka import AIOKafkaAdminClient
+            from aiokafka.admin import AIOKafkaAdminClient
             import asyncio
             
             admin = AIOKafkaAdminClient(
@@ -121,13 +121,13 @@ class PipelineMonitor:
             await asyncio.wait_for(admin.start(), timeout=15.0)
             
             try:
-                # List topics
+                # List topics (returns list in this aiokafka version)
                 topics = await asyncio.wait_for(admin.list_topics(), timeout=10.0)
                 for topic in topics:
-                    if topic.startswith("pipeline."):
+                    if isinstance(topic, str) and topic.startswith("pipeline."):
                         status["topics"].append({
                             "name": topic,
-                            "partitions": len(topics[topic].partitions)
+                            "partitions": "-"  # API differs by version
                         })
                 
                 # Consumer groups
@@ -138,21 +138,22 @@ class PipelineMonitor:
                             admin.describe_consumer_groups([group]), 
                             timeout=10.0
                         )
-                        if group_info:
+                        if group_info and len(group_info) > 0:
                             gi = group_info[0]
                             members = len(gi.members) if hasattr(gi, 'members') else 0
+                            state = str(gi.state) if hasattr(gi, 'state') else "unknown"
                             status["consumer_groups"].append({
                                 "group": group,
-                                "state": gi.state if hasattr(gi, 'state') else "unknown",
+                                "state": state,
                                 "members": members,
                                 "status": "healthy" if members > 0 else "no-consumers"
                             })
-                    except Exception:
+                    except Exception as e:
                         status["consumer_groups"].append({
                             "group": group,
                             "state": "unknown",
                             "members": 0,
-                            "status": "error"
+                            "status": f"error: {str(e)[:30]}"
                         })
             finally:
                 await admin.close()
