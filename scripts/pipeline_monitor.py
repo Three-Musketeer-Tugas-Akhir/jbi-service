@@ -42,9 +42,32 @@ class PipelineMonitor:
         self.kafka_brokers = os.getenv("KAFKA_BROKERS", "localhost:9092")
         self.console = Console()
 
+    def _is_docker_available(self) -> bool:
+        """Check if docker command is available."""
+        try:
+            result = subprocess.run(
+                ["docker", "--version"],
+                capture_output=True, timeout=5
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
+
     async def get_container_status(self) -> List[Dict[str, Any]]:
         """Get Docker container status."""
         containers = []
+        
+        # Check if docker is available (not available inside containers)
+        if not self._is_docker_available():
+            containers.append({
+                "name": "docker-unavailable",
+                "status": "N/A (running inside container)",
+                "health": "N/A",
+                "uptime": "Use 'docker ps' on host",
+                "running": True
+            })
+            return containers
+        
         try:
             result = subprocess.run(
                 ["docker", "ps", "--format", "json", "-a"],
@@ -87,15 +110,19 @@ class PipelineMonitor:
         }
         try:
             from aiokafka import AIOKafkaAdminClient
+            import asyncio
             
             admin = AIOKafkaAdminClient(
-                bootstrap_servers=self.kafka_brokers
+                bootstrap_servers=self.kafka_brokers,
+                request_timeout_ms=10000  # 10 second timeout
             )
-            await admin.start()
+            
+            # Start with timeout
+            await asyncio.wait_for(admin.start(), timeout=15.0)
             
             try:
                 # List topics
-                topics = await admin.list_topics()
+                topics = await asyncio.wait_for(admin.list_topics(), timeout=10.0)
                 for topic in topics:
                     if topic.startswith("pipeline."):
                         status["topics"].append({
@@ -107,7 +134,10 @@ class PipelineMonitor:
                 groups = ["detection-workers", "asr-workers", "cropping-workers"]
                 for group in groups:
                     try:
-                        group_info = await admin.describe_consumer_groups([group])
+                        group_info = await asyncio.wait_for(
+                            admin.describe_consumer_groups([group]), 
+                            timeout=10.0
+                        )
                         if group_info:
                             gi = group_info[0]
                             members = len(gi.members) if hasattr(gi, 'members') else 0
@@ -129,8 +159,10 @@ class PipelineMonitor:
                 
         except ImportError:
             status["error"] = "aiokafka not installed"
+        except asyncio.TimeoutError:
+            status["error"] = f"Kafka connection timeout (brokers: {self.kafka_brokers})"
         except Exception as e:
-            status["error"] = str(e)
+            status["error"] = f"{type(e).__name__}: {str(e)}"
         
         return status
 
