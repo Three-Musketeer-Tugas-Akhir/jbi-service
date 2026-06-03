@@ -68,6 +68,7 @@ get_container_status() {
 get_kafka_status() {
     local topics="[]"
     local consumer_groups="[]"
+    local worker_activity="[]"
     local error="null"
     
     # Check if kafka container is running
@@ -88,17 +89,74 @@ get_kafka_status() {
             fi
         fi
         
-        # Consumer groups - simplified
-        consumer_groups='[
-            {"group":"detection-workers","state":"unknown","members":0,"status":"check with kafka-consumer-groups"},
-            {"group":"asr-workers","state":"unknown","members":0,"status":"check with kafka-consumer-groups"},
-            {"group":"cropping-workers","state":"unknown","members":0,"status":"check with kafka-consumer-groups"}
-        ]'
+        # Check consumer groups and worker activity
+        local cg_array=()
+        local activity_array=()
+        local groups=("detection-workers" "asr-workers" "cropping-workers")
+        local topics_map=("pipeline.jobs.detect" "pipeline.jobs.asr" "pipeline.jobs.crop")
+        
+        for i in "${!groups[@]}"; do
+            local group="${groups[$i]}"
+            local topic="${topics_map[$i]}"
+            local worker_name=""
+            case "$group" in
+                "detection-workers") worker_name="detection-worker" ;;
+                "asr-workers") worker_name="asr-worker" ;;
+                "cropping-workers") worker_name="cropping-worker" ;;
+            esac
+            
+            # Get consumer group details
+            local cg_info=$(docker exec -i jbi-service-kafka-1 kafka-consumer-groups --bootstrap-server kafka:9092 --describe --group "$group" 2>/dev/null || true)
+            
+            local members=0
+            local total_lag=0
+            local state="unknown"
+            
+            if [ -n "$cg_info" ]; then
+                # Check if group has active members
+                if echo "$cg_info" | grep -q "has no active members"; then
+                    members=0
+                    state="Stable"
+                else
+                    members=$(echo "$cg_info" | grep -c "^$group" || echo "0")
+                    state="Stable"
+                fi
+                
+                # Calculate total lag
+                total_lag=$(echo "$cg_info" | awk '/^'$group'/ {sum+=$5} END {print sum+0}')
+            fi
+            
+            # Determine worker activity
+            local activity="idle"
+            local activity_color="yellow"
+            
+            if [ "$members" -gt 0 ] && [ "$total_lag" -gt 0 ]; then
+                activity="processing"
+                activity_color="green"
+            elif [ "$members" -eq 0 ] && [ "$total_lag" -gt 0 ]; then
+                activity="down (lag: $total_lag)"
+                activity_color="red"
+            elif [ "$members" -gt 0 ] && [ "$total_lag" -eq 0 ]; then
+                activity="idle (connected)"
+                activity_color="yellow"
+            fi
+            
+            cg_array+=("{\"group\":\"$group\",\"state\":\"$state\",\"members\":$members,\"lag\":$total_lag,\"status\":\"$activity\"}")
+            activity_array+=("{\"worker\":\"$worker_name\",\"activity\":\"$activity\",\"lag\":$total_lag}")
+        done
+        
+        if [ ${#cg_array[@]} -gt 0 ]; then
+            consumer_groups="[$(IFS=,; echo "${cg_array[*]}")]"
+        fi
+        
+        if [ ${#activity_array[@]} -gt 0 ]; then
+            worker_activity="[$(IFS=,; echo "${activity_array[*]}")]"
+        fi
     else
         error='"Kafka container not running"'
     fi
     
-    echo "{\"topics\":$topics,\"consumer_groups\":$consumer_groups,\"error\":$error}"
+    echo "{\"topics\":$topics,\"consumer_groups\":$consumer_groups,\"worker_activity\":$worker_activity,\"error\":$error}"
 }
 
 # Function to get DB status using docker exec
@@ -217,6 +275,27 @@ print_table() {
     done
     
     echo "└─────────────────────────────┴─────────┴────────┴──────────────────────────┘"
+    echo ""
+    
+    # Worker Activity
+    echo -e "${YELLOW}Worker Activity${NC}"
+    echo "┌─────────────────────────────┬──────────────────────────┬─────────────┐"
+    printf "│ %-27s │ %-24s │ %-11s │\n" "Worker" "Activity" "Queue Lag"
+    echo "├─────────────────────────────┼──────────────────────────┼─────────────┤"
+    
+    echo "$kafka" | jq -r '.worker_activity[]? | [.worker, .activity, .lag] | @tsv' | while IFS=$'\t' read -r worker activity lag; do
+        local color="$NC"
+        if [[ "$activity" =~ processing ]]; then
+            color="$GREEN"
+        elif [[ "$activity" =~ down ]]; then
+            color="$RED"
+        elif [[ "$activity" =~ idle ]]; then
+            color="$YELLOW"
+        fi
+        printf "│ %-27s │ ${color}%-24s${NC} │ %-11s │\n" "$worker" "$activity" "$lag"
+    done
+    
+    echo "└─────────────────────────────┴──────────────────────────┴─────────────┘"
     echo ""
     
     # Kafka Topics
