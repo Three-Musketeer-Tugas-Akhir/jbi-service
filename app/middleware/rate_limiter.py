@@ -7,8 +7,9 @@ For production, consider Redis-based rate limiting.
 
 import time
 from typing import Dict, Tuple, Optional
-from fastapi import Request, HTTPException
+from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 from app.core.config import settings
 
@@ -92,9 +93,9 @@ class LoginRateLimitMiddleware(BaseHTTPMiddleware):
             allowed, remaining = rate_limiter.is_allowed(client_ip)
             
             if not allowed:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=429,
-                    detail="Too many attempts, try again later"
+                    content={"detail": "Too many attempts, try again later"}
                 )
             
             # Store rate limit info in request state for response headers
