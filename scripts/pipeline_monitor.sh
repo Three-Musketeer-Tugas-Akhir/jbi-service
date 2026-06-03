@@ -69,20 +69,20 @@ get_active_jobs_from_logs() {
     local active_jobs="[]"
     local job_array=()
     
-    # Check detection worker logs
-    local detection_logs=$(docker logs --tail 50 jbi-service-detection-worker-1 2>/dev/null | grep -oP 'Processing detection job:\s*\K[0-9a-fA-F-]{36}' | tail -1)
+    # Check detection worker logs (look for "Processing detection job:" or "Processing detect job:")
+    local detection_logs=$(docker logs --tail 100 jbi-service-detection-worker-1 2>/dev/null | grep -oP 'Processing (detection|detect) job[:\s]+\K[0-9a-fA-F-]{36}' | tail -1)
     if [ -n "$detection_logs" ]; then
         job_array+=("{\"worker\":\"detection-worker\",\"job_id\":\"$detection_logs\",\"stage\":\"detection\"}")
     fi
     
-    # Check ASR worker logs
-    local asr_logs=$(docker logs --tail 50 jbi-service-asr-worker-1 2>/dev/null | grep -oP 'Processing ASR job:\s*\K[0-9a-fA-F-]{36}' | tail -1)
+    # Check ASR worker logs (look for "Processing asr job:" - note: lowercase in logs)
+    local asr_logs=$(docker logs --tail 100 jbi-service-asr-worker-1 2>/dev/null | grep -oP 'Processing asr job[:\s]+\K[0-9a-fA-F-]{36}' | tail -1)
     if [ -n "$asr_logs" ]; then
         job_array+=("{\"worker\":\"asr-worker\",\"job_id\":\"$asr_logs\",\"stage\":\"asr\"}")
     fi
     
     # Check cropping worker logs
-    local cropping_logs=$(docker logs --tail 50 jbi-service-cropping-worker-1 2>/dev/null | grep -oP 'Starting cropping stage for job\s*\K[0-9a-fA-F-]{36}' | tail -1)
+    local cropping_logs=$(docker logs --tail 100 jbi-service-cropping-worker-1 2>/dev/null | grep -oP 'Starting cropping stage for job[:\s]+\K[0-9a-fA-F-]{36}' | tail -1)
     if [ -n "$cropping_logs" ]; then
         job_array+=("{\"worker\":\"cropping-worker\",\"job_id\":\"$cropping_logs\",\"stage\":\"cropping\"}")
     fi
