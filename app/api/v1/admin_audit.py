@@ -549,6 +549,7 @@ async def get_available_filters(
     
     actions = await repository.get_unique_actions()
     resource_types = await repository.get_unique_resource_types()
+    actors = await repository.get_unique_actors()
     
     action_mappings = [
         {"action": action, "label": get_action_label(action)}
@@ -557,5 +558,6 @@ async def get_available_filters(
     
     return {
         "actions": action_mappings,
-        "resource_types": resource_types
+        "resource_types": resource_types,
+        "actors": actors
     }

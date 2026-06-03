@@ -29,7 +29,8 @@ class AnnotationSubmissionService:
     async def check_submission_status(
         self,
         segment_id: UUID,
-        user_id: UUID
+        user_id: UUID,
+        is_admin: bool = False
     ) -> dict:
         """
         Check if a segment can be submitted for review.
@@ -44,7 +45,7 @@ class AnnotationSubmissionService:
         if not queue_entry:
             raise NotFoundError(f"Segment {segment_id} not found")
         
-        if queue_entry.annotator_id != user_id:
+        if not is_admin and queue_entry.annotator_id != user_id:
             raise PermissionError("You can only submit your own annotations")
         
         # Check if already submitted
@@ -76,7 +77,8 @@ class AnnotationSubmissionService:
         self,
         segment_id: UUID,
         user_id: UUID,
-        confirm_no_changes: bool = False
+        confirm_no_changes: bool = False,
+        is_admin: bool = False
     ) -> dict:
         """
         Submit an annotation for curator review.
@@ -107,7 +109,7 @@ class AnnotationSubmissionService:
         if not queue_entry:
             raise NotFoundError(f"Segment {segment_id} not found in annotation queue")
         
-        if queue_entry.annotator_id != user_id:
+        if not is_admin and queue_entry.annotator_id != user_id:
             raise PermissionError("You can only submit your own annotations")
         
         # Check if already submitted
@@ -201,7 +203,8 @@ class AnnotationSubmissionService:
     async def get_submission_status(
         self,
         segment_id: UUID,
-        user_id: UUID
+        user_id: UUID,
+        is_admin: bool = False
     ) -> dict:
         """
         Get the review status for a submitted annotation.
@@ -216,7 +219,7 @@ class AnnotationSubmissionService:
         if not queue_entry:
             raise NotFoundError(f"Segment {segment_id} not found")
         
-        if queue_entry.annotator_id != user_id:
+        if not is_admin and queue_entry.annotator_id != user_id:
             raise PermissionError("You can only view your own submissions")
         
         # Get the submitted edit

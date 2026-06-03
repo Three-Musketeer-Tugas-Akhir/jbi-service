@@ -35,7 +35,8 @@ class AnnotationQueueService:
         status: Optional[str] = None,
         dataset_id: Optional[UUID] = None,
         page: int = 1,
-        page_size: int = 20
+        page_size: int = 20,
+        is_admin: bool = False
     ) -> dict:
         """Get paginated queue for an annotator, optionally filtered by dataset."""
         offset = (page - 1) * page_size
@@ -46,7 +47,8 @@ class AnnotationQueueService:
             status=status,
             dataset_id=dataset_id,
             limit=page_size,
-            offset=offset
+            offset=offset,
+            is_admin=is_admin
         )
         
         # Get total count
@@ -54,6 +56,7 @@ class AnnotationQueueService:
             annotator_id=annotator_id,
             status=status,
             dataset_id=dataset_id,
+            is_admin=is_admin
         )
         
         # Build response items
@@ -75,7 +78,8 @@ class AnnotationQueueService:
     async def get_segment_for_annotation(
         self,
         segment_id: UUID,
-        annotator_id: UUID
+        annotator_id: UUID,
+        is_admin: bool = False
     ) -> dict:
         """Get complete segment details for annotation."""
         # Verify segment is assigned to this annotator
@@ -83,7 +87,7 @@ class AnnotationQueueService:
         if not queue_entry:
             raise NotFoundError(f"Segment {segment_id} not found in annotation queue")
         
-        if queue_entry.annotator_id != annotator_id:
+        if not is_admin and queue_entry.annotator_id != annotator_id:
             raise PermissionError("This segment is not assigned to you")
         
         # Get segment details with transcripts
