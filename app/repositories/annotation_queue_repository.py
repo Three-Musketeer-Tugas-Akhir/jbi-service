@@ -31,7 +31,11 @@ class AnnotationQueueRepository:
         )
         
         if status:
-            query = query.where(AnnotationQueue.status == status)
+            status_list = [s.strip() for s in status.split(",")]
+            if len(status_list) > 1:
+                query = query.where(AnnotationQueue.status.in_(status_list))
+            else:
+                query = query.where(AnnotationQueue.status == status)
         
         if dataset_id:
             query = (
@@ -121,7 +125,11 @@ class AnnotationQueueRepository:
         )
         
         if status:
-            query = query.where(AnnotationQueue.status == status)
+            status_list = [s.strip() for s in status.split(",")]
+            if len(status_list) > 1:
+                query = query.where(AnnotationQueue.status.in_(status_list))
+            else:
+                query = query.where(AnnotationQueue.status == status)
         
         if dataset_id:
             query = (

@@ -231,15 +231,29 @@ class AnnotationSubmissionService:
         # Get review record
         review = await self.review_repo.get_by_edit_id(submitted_edit.id)
         
+        # Get segment and job to include job_id and filename
+        segment = await self.segment_repo.get_by_id(segment_id)
+        job_id = segment.job_id if segment else None
+        original_filename = None
+        if job_id:
+            from app.repositories.job_repository import JobRepository
+            job_repo = JobRepository(self.db)
+            job = await job_repo.get_by_id(job_id)
+            original_filename = job.original_filename if job else None
+        
         if not review:
             return {
                 "segment_id": segment_id,
+                "job_id": job_id,
+                "original_filename": original_filename,
                 "status": "SUBMITTED",
                 "message": "Submitted, awaiting review assignment"
             }
         
         return {
             "segment_id": segment_id,
+            "job_id": job_id,
+            "original_filename": original_filename,
             "review_id": review.id,
             "status": review.status,
             "submitted_at": submitted_edit.submitted_at,
