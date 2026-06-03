@@ -2377,6 +2377,12 @@ async def download_dataset_zip(
                     break
             return p
 
+        # Accumulators for texts
+        ground_truth_lines = []
+        ground_truth_norm_lines = []
+        glosa_lines = []
+        glosa_norm_lines = []
+
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             global_idx = 1
             files_added = 0
@@ -2423,30 +2429,8 @@ async def download_dataset_zip(
                     prefix = f"{base_prefix}_{global_idx:04d}"
                     sentence_folder = f"kalimat_{global_idx:04d}"
 
-                    if layout == "sentence":
-                        # ── Layout: Sentence-focused ──
-                        # NamaVideo/kalimat_0001/video.mp4
-                        # NamaVideo/kalimat_0001/audio.wav
-                        # NamaVideo/kalimat_0001/transkripsi.txt
-                        # NamaVideo/kalimat_0001/glosa.txt
-                        video_path = f"{sentence_folder}/video.mp4"
-                        audio_path = f"{sentence_folder}/audio.wav"
-                        trans_path = f"{sentence_folder}/transkripsi.txt"
-                        trans_norm_path = f"{sentence_folder}/transkripsi_normalized.txt"
-                        glosa_path = f"{sentence_folder}/glosa.txt"
-                        glosa_norm_path = f"{sentence_folder}/glosa_normalized.txt"
-                    else:
-                        # ── Layout: File-focused (default) ──
-                        # NamaVideo/video/INEWS_SB_250511_0001.mp4
-                        # NamaVideo/audio/INEWS_SB_250511_0001.wav
-                        # NamaVideo/transkripsi/INEWS_SB_250511_0001.txt
-                        # NamaVideo/glosa/INEWS_SB_250511_0001.txt
-                        video_path = f"video/{prefix}.mp4"
-                        audio_path = f"audio/{prefix}.wav"
-                        trans_path = f"transkripsi/{prefix}.txt"
-                        trans_norm_path = f"transkripsi/{prefix}_normalized.txt"
-                        glosa_path = f"glosa/{prefix}.txt"
-                        glosa_norm_path = f"glosa/{prefix}_normalized.txt"
+                    video_path = f"video/{prefix}.mp4"
+                    audio_path = f"audio/{prefix}.wav"
 
                     # Write Video
                     if cv_path:
@@ -2466,17 +2450,43 @@ async def download_dataset_zip(
                         except Exception as e:
                             logger.warning(f"Failed to add audio to ZIP: {wav_path} - {e}")
 
-                    # Write Texts (always included)
-                    zf.writestr(trans_path, gt_text.encode("utf-8"))
-                    zf.writestr(trans_norm_path, norm_transcript.encode("utf-8"))
-                    zf.writestr(glosa_path, glosa.encode("utf-8"))
-                    zf.writestr(glosa_norm_path, norm_glosa.encode("utf-8"))
-                    files_added += 4
+                    # Accumulate Texts
+                    ground_truth_lines.append(f"{prefix}|{gt_text.replace(chr(10), ' ').replace(chr(13), '')}")
+                    ground_truth_norm_lines.append(f"{prefix}|{norm_transcript.replace(chr(10), ' ').replace(chr(13), '')}")
+                    glosa_lines.append(f"{prefix}|{glosa.replace(chr(10), ' ').replace(chr(13), '')}")
+                    glosa_norm_lines.append(f"{prefix}|{norm_glosa.replace(chr(10), ' ').replace(chr(13), '')}")
 
                     global_idx += 1
                     utt_count += 1
 
                 logger.info(f"ZIP segment {segment.segment_index}: added {utt_count} utterances")
+
+            safe_name = (job.original_filename or "dataset").rsplit(".", 1)[0]
+            
+            # Write concatenated texts
+            zf.writestr("ground_truth.txt", "\\n".join(ground_truth_lines).encode("utf-8"))
+            zf.writestr("ground_truth_normalized.txt", "\\n".join(ground_truth_norm_lines).encode("utf-8"))
+            zf.writestr("glosa.txt", "\\n".join(glosa_lines).encode("utf-8"))
+            zf.writestr("glosa_normalized.txt", "\\n".join(glosa_norm_lines).encode("utf-8"))
+            files_added += 4
+
+            # Write README
+            readme_content = f"""# Dataset {safe_name}
+
+## Folder Structure
+- `video/`: Contains all cropped video files (.mp4)
+- `audio/`: Contains all cropped audio files (.wav)
+
+## Text Files
+Format for all text files: `filename_prefix|text_content`
+
+1. `ground_truth.txt`: Original transcript of the speech.
+2. `ground_truth_normalized.txt`: Normalized transcript (punctuation, casing, etc. handled).
+3. `glosa.txt`: Translated sign language gloss.
+4. `glosa_normalized.txt`: Normalized sign language gloss.
+"""
+            zf.writestr("README.md", readme_content.encode("utf-8"))
+            files_added += 1
 
         logger.info(f"ZIP total: {files_added} files added for job {job_id} (layout={layout})")
 
