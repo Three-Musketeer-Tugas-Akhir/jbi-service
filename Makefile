@@ -132,3 +132,20 @@ seed-users:
 seed-users-docker:
 	@echo "🌱 Seeding database in Docker..."
 	docker compose exec api-gpu python scripts/seed_users.py
+
+# Pipeline monitoring
+monitor:
+	@echo "📊 Starting pipeline monitor..."
+	python scripts/pipeline_monitor.py
+
+monitor-json:
+	@echo "📊 Starting pipeline monitor (JSON mode)..."
+	python scripts/pipeline_monitor.py --json
+
+monitor-watch:
+	@echo "📊 Starting pipeline monitor (watch mode)..."
+	python scripts/pipeline_monitor.py --watch 30
+
+monitor-docker:
+	@echo "📊 Running monitor inside api-gpu container..."
+	docker compose --profile gpu exec api-gpu python /app/scripts/pipeline_monitor.py
