@@ -16,7 +16,6 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import select
@@ -36,8 +35,7 @@ class UtteranceCroppingService:
         segment_id: uuid.UUID,
         utterance_index: int,
         start_time: float,
-        end_time: float,
-        edit_id: Optional[uuid.UUID] = None
+        end_time: float
     ):
         """
         Background task to crop the utterance video and upload it to MinIO.
@@ -76,29 +74,15 @@ class UtteranceCroppingService:
                     logger.error(f"Transcript/CV2 Video not found for {segment_id} utt {utterance_index}.")
                     return
                 
-                # 3. Fetch active edit.
-                # Prefer the exact edit the crop endpoint operated on (edit_id) so the
-                # cropped_video_path is written to the SAME row, even if a concurrent
-                # draft save created a newer edit in the meantime. Fall back to the
-                # latest DRAFT/PENDING edit for backward compatibility.
-                edit = None
-                if edit_id is not None:
-                    edit_by_id = await db.execute(
-                        select(AnnotationEdit).where(
-                            AnnotationEdit.id == edit_id,
-                            AnnotationEdit.is_deleted == False
-                        )
-                    )
-                    edit = edit_by_id.scalars().first()
-                if edit is None:
-                    edit_result = await db.execute(
-                        select(AnnotationEdit).where(
-                            AnnotationEdit.segment_id == segment_id,
-                            AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
-                            AnnotationEdit.is_deleted == False
-                        ).order_by(AnnotationEdit.edited_at.desc())
-                    )
-                    edit = edit_result.scalars().first()
+                # 3. Fetch active edit
+                edit_result = await db.execute(
+                    select(AnnotationEdit).where(
+                        AnnotationEdit.segment_id == segment_id,
+                        AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+                        AnnotationEdit.is_deleted == False
+                    ).order_by(AnnotationEdit.edited_at.desc())
+                )
+                edit = edit_result.scalars().first()
                 if not edit or not edit.utterance_corrections:
                     logger.error(f"No active edit found for segment {segment_id}.")
                     return
@@ -197,7 +181,7 @@ class UtteranceCroppingService:
                         output_path=tmp_output,
                         start_time=relative_start,
                         end_time=relative_start + requested_duration,
-                        use_input_seeking=False,
+                        use_input_seeking=True,
                         config=config
                     )
                     
@@ -227,39 +211,8 @@ class UtteranceCroppingService:
                     next_transcript = next_result.scalar_one_or_none()
                     
                     if not next_transcript or not next_transcript.video_path:
-                        logger.warning("Next utterance video not found. Clamping to end of current video (likely the last utterance).")
-                        
-                        if relative_start >= orig_duration - 0.001:
-                            # Already at/past the end of the video — use original as-is
-                            utt_list[utt_idx_in_array]["cropped_video_path"] = curr_transcript.video_path
-                            utt_list[utt_idx_in_array]["status"] = "OK"
-                        else:
-                            # Fallback: Just crop what we have left in the current video
-                            tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
-                            success = await run_ffmpeg_crop(
-                                input_path=curr_video_url,
-                                output_path=tmp_output,
-                                start_time=relative_start,
-                                end_time=orig_duration,
-                                use_input_seeking=False,
-                                config=config
-                            )
-                            if not success:
-                                await _mark_failed(db, edit, utt_list, utt_idx_in_array)
-                                return
-                            
-                            upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
-                            with open(tmp_output, "rb") as f:
-                                await minio_service.upload_file(f, upload_key)
-                            
-                            _cleanup_tmp(tmp_output)
-                            
-                            utt_list[utt_idx_in_array]["cropped_video_path"] = upload_key
-                            utt_list[utt_idx_in_array]["status"] = "OK"
-                        
-                        edit.utterance_corrections = utt_list
-                        flag_modified(edit, "utterance_corrections")
-                        await db.commit()
+                        logger.error("Next utterance video not found. Cannot merge.")
+                        await _mark_failed(db, edit, utt_list, utt_idx_in_array)
                         return
                     
                     # Clamp right_overlap to next video's duration
@@ -304,7 +257,7 @@ class UtteranceCroppingService:
                                 output_path=tmp_output,
                                 start_time=relative_start,
                                 end_time=crop_end,
-                                use_input_seeking=False,
+                                use_input_seeking=True,
                                 config=config
                             )
                             _cleanup_tmp(tmp_merged)
@@ -323,7 +276,7 @@ class UtteranceCroppingService:
                                 output_path=tmp_output,
                                 start_time=0.0,
                                 end_time=min(requested_duration, next_duration),
-                                use_input_seeking=False,
+                                use_input_seeking=True,
                                 config=config
                             )
                             if not success:
@@ -337,7 +290,7 @@ class UtteranceCroppingService:
                             output_path=tmp_part_a,
                             start_time=relative_start,
                             end_time=orig_duration,
-                            use_input_seeking=False,
+                            use_input_seeking=True,
                             config=config
                         )
                         
@@ -348,7 +301,7 @@ class UtteranceCroppingService:
                             output_path=tmp_part_b,
                             start_time=0.0,
                             end_time=clamped_overlap,
-                            use_input_seeking=False,
+                            use_input_seeking=True,
                             config=config
                         )
                         
@@ -568,11 +521,15 @@ async def _cascade_update_next_utterance(
     if not transcript:
         return affected
     
-    # Push start forward logically (calculate new start)
+    # Push start forward
     old_start = transcript.start
     new_start = old_start + right_overlap
-    
     if new_start > old_start:
+        transcript.start = new_start
+        # Ensure start < end
+        if transcript.start >= transcript.end:
+            transcript.start = transcript.end - 0.1
+        
         # Clear merged video so next load re-merges
         transcript.merged_video_path = None
         transcript.merged_video_duration = None
@@ -582,7 +539,7 @@ async def _cascade_update_next_utterance(
             "utterance_index": next_utterance_index,
             "segment_id": str(next_segment_id),
             "old_start": old_start,
-            "new_start": new_start,
+            "new_start": float(transcript.start),
             "action": "start_shifted",
         })
     
@@ -602,8 +559,7 @@ async def _cascade_update_next_utterance(
         for i, utt in enumerate(next_utt_list):
             if utt.get("utterance_index") == next_utterance_index:
                 old_start_edit = utt.get("start", 0.0)
-                # Cap the edit at transcript.end - 0.1 so we don't have invalid intervals
-                new_start_edit = max(old_start_edit, new_start)
+                new_start_edit = max(old_start_edit, transcript.start)
                 
                 if new_start_edit > old_start_edit:
                     next_utt_list[i]["start"] = new_start_edit
