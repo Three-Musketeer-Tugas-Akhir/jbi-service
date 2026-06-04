@@ -43,7 +43,7 @@ from app.services.minio_service import get_minio_service
 from app.workers.tasks import process_job
 from app.core.exceptions import ValidationError, NotFoundError, PermissionError, ConflictError
 from app.db.models.auth import User
-from app.api.deps import get_current_user, require_admin
+from app.api.deps import get_current_user, require_admin, require_role
 from app.schemas.job import (
     JobCreate, 
     JobResponse,
@@ -219,7 +219,7 @@ async def create_job(
     url: Optional[str] = Form(None),
     category: Optional[str] = Form(None, description="Sign language category (SIBI or BISINDO)"),
     dataset_id: Optional[str] = Form(None, description="Associated dataset ID"),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
 ):
     """Upload a video or provide a URL to start a detection job.
 
@@ -413,7 +413,7 @@ async def update_job_category(
     job_id: str,
     request: CategoryUpdateRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
 ):
     """Update the sign language category of a job.
     
@@ -483,7 +483,7 @@ async def update_job_category(
 async def start_pipeline_processing(
     job_id: str,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
 ):
     """Start pipeline processing for a classified job.
     
@@ -526,7 +526,7 @@ async def start_pipeline_processing(
 )
 async def start_all_classified(
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
 ):
     """Start pipeline processing for ALL classified-but-unprocessed jobs.
     
@@ -593,7 +593,7 @@ async def retry_job(
     job_id: str,
     request: JobRetryRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
 ):
     """Retry a failed pipeline job.
     
@@ -689,7 +689,7 @@ async def retry_asr(
     job_id: str,
     request: JobRetryASRRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
 ):
     """Retry ASR for segments missing transcripts.
     
@@ -808,7 +808,7 @@ async def retry_asr(
 async def get_crop_status(
     job_id: str,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
 ):
     """Get cropping status for all transcripts in a job.
     
@@ -1120,7 +1120,7 @@ async def download_segment(job_id: str, index: int, session: AsyncSession = Depe
 async def upload_video_pipeline(
     video: Annotated[UploadFile, File(...)],
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
     job_repo: JobRepository = Depends(get_job_repository),
     dataset_id: Optional[str] = Form(None, description="Associated dataset ID"),
 ):
@@ -1209,7 +1209,7 @@ async def upload_video_pipeline(
 async def create_job_from_url_pipeline(
     request: JobCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(require_role("admin", "annotator")),
     job_repo: JobRepository = Depends(get_job_repository),
     dataset_id: Optional[str] = Query(None, description="Associated dataset ID"),
 ):
