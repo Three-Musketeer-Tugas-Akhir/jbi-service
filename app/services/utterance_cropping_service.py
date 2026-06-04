@@ -568,15 +568,11 @@ async def _cascade_update_next_utterance(
     if not transcript:
         return affected
     
-    # Push start forward
+    # Push start forward logically (calculate new start)
     old_start = transcript.start
     new_start = old_start + right_overlap
+    
     if new_start > old_start:
-        transcript.start = new_start
-        # Ensure start < end
-        if transcript.start >= transcript.end:
-            transcript.start = transcript.end - 0.1
-        
         # Clear merged video so next load re-merges
         transcript.merged_video_path = None
         transcript.merged_video_duration = None
@@ -586,7 +582,7 @@ async def _cascade_update_next_utterance(
             "utterance_index": next_utterance_index,
             "segment_id": str(next_segment_id),
             "old_start": old_start,
-            "new_start": float(transcript.start),
+            "new_start": new_start,
             "action": "start_shifted",
         })
     
@@ -606,7 +602,8 @@ async def _cascade_update_next_utterance(
         for i, utt in enumerate(next_utt_list):
             if utt.get("utterance_index") == next_utterance_index:
                 old_start_edit = utt.get("start", 0.0)
-                new_start_edit = max(old_start_edit, transcript.start)
+                # Cap the edit at transcript.end - 0.1 so we don't have invalid intervals
+                new_start_edit = max(old_start_edit, new_start)
                 
                 if new_start_edit > old_start_edit:
                     next_utt_list[i]["start"] = new_start_edit

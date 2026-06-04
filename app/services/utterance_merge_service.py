@@ -25,8 +25,9 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.session import async_session_maker
 from app.db.models.pipeline import PipelineJob, PipelineSegment, PipelineTranscript
+from app.db.models.annotation import AnnotationEdit
 from app.services.minio_service import get_minio_service
-from app.pipeline.utils.video import run_ffmpeg_concat, FFmpegConfig
+from app.pipeline.utils.video import run_ffmpeg_concat, run_ffmpeg_crop, FFmpegConfig
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -130,8 +131,69 @@ class UtteranceMergeService:
                 await _download_file(curr_presigned, curr_tmp)
                 await _download_file(next_presigned, next_tmp)
 
-                # 6. Merge using FFmpeg
+                # Fetch AnnotationEdit to check for any cascading start shifts
+                edit_result = await db.execute(
+                    select(AnnotationEdit).where(
+                        AnnotationEdit.segment_id == segment_id,
+                        AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+                        AnnotationEdit.is_deleted == False
+                    ).order_by(AnnotationEdit.edited_at.desc())
+                )
+                edit = edit_result.scalars().first()
+
+                curr_offset = 0.0
+                if edit and edit.utterance_corrections:
+                    for utt in edit.utterance_corrections:
+                        if utt.get("utterance_index") == utterance_index:
+                            curr_edit_start = utt.get("start", curr_transcript.start)
+                            curr_offset = max(0.0, curr_edit_start - curr_transcript.start)
+                            break
+
+                next_offset = 0.0
+                if edit and edit.utterance_corrections:
+                    for utt in edit.utterance_corrections:
+                        if utt.get("utterance_index") == next_transcript.utterance_index:
+                            next_edit_start = utt.get("start", next_transcript.start)
+                            next_offset = max(0.0, next_edit_start - next_transcript.start)
+                            break
+                            
+                # If next_transcript is in a different segment, we'd need to fetch that edit
+                if next_transcript.segment_id != segment_id:
+                    next_edit_result = await db.execute(
+                        select(AnnotationEdit).where(
+                            AnnotationEdit.segment_id == next_transcript.segment_id,
+                            AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+                            AnnotationEdit.is_deleted == False
+                        ).order_by(AnnotationEdit.edited_at.desc())
+                    )
+                    next_edit = next_edit_result.scalars().first()
+                    if next_edit and next_edit.utterance_corrections:
+                        for utt in next_edit.utterance_corrections:
+                            if utt.get("utterance_index") == next_transcript.utterance_index:
+                                next_edit_start = utt.get("start", next_transcript.start)
+                                next_offset = max(0.0, next_edit_start - next_transcript.start)
+                                break
+
                 config = FFmpegConfig(video_preset="ultrafast")
+
+                # Physically crop the temp files if they have been shifted by previous trim operations
+                if curr_offset > 0:
+                    logger.info(f"Applying {curr_offset:.2f}s offset to curr_tmp before merge")
+                    tmp_cropped = curr_tmp + "_cropped.mp4"
+                    success = await run_ffmpeg_crop(curr_tmp, tmp_cropped, start_time=curr_offset, end_time=9999, use_input_seeking=True, config=config)
+                    if success and os.path.exists(tmp_cropped):
+                        os.remove(curr_tmp)
+                        curr_tmp = tmp_cropped
+                        
+                if next_offset > 0:
+                    logger.info(f"Applying {next_offset:.2f}s offset to next_tmp before merge")
+                    tmp_cropped = next_tmp + "_cropped.mp4"
+                    success = await run_ffmpeg_crop(next_tmp, tmp_cropped, start_time=next_offset, end_time=9999, use_input_seeking=True, config=config)
+                    if success and os.path.exists(tmp_cropped):
+                        os.remove(next_tmp)
+                        next_tmp = tmp_cropped
+
+                # 6. Merge using FFmpeg
                 success = await run_ffmpeg_concat(
                     input_paths=[curr_tmp, next_tmp],
                     output_path=merged_tmp,
