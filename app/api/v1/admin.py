@@ -238,7 +238,7 @@ async def update_user_role(
         ip_address = None
     
     result = await user_service.update_role(
-        admin_id=current_user.user_id,
+        admin_id=current_user.id,
         target_user_id=user_id,
         new_role=role_data.role,
         ip_address=ip_address
@@ -309,7 +309,7 @@ async def deactivate_user(
         ip_address = None
     
     result = await user_service.deactivate_user(
-        admin_id=current_user.user_id,
+        admin_id=current_user.id,
         target_user_id=user_id,
         ip_address=ip_address
     )
@@ -574,7 +574,7 @@ async def update_system_config(
     
     await config_service.update_config(
         update_dict,
-        updated_by=str(current_user.user_id)
+        updated_by=str(current_user.id)
     )
     
     # Return updated config
