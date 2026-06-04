@@ -617,3 +617,19 @@ def _cleanup_tmp(*paths):
                 os.remove(path)
         except OSError:
             pass
+                "utterance_index": dt.utterance_index,
+                "segment_id": str(dt.segment_id),
+                "action": "merged_video_invalidated",
+            })
+    
+    await db.commit()
+    return affected
+
+
+def _cleanup_tmp(*paths):
+    for path in paths:
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
