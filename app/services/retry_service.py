@@ -84,8 +84,12 @@ class RetryService:
         job.current_stage = None
         job.error_message = None
         job.completed_at = None
+        # Fully clear cancellation state so a retried job is not left with stale
+        # cancelled_at/cancelled_by, and so update_status is allowed again.
         job.is_cancelled = False
-        
+        job.cancelled_at = None
+        job.cancelled_by = None
+
         # Reset progress counters
         job.total_segments = 0
         job.completed_segments = 0
@@ -149,7 +153,9 @@ class RetryService:
             job.error_message = None
             job.completed_at = None
             job.is_cancelled = False
-            
+            job.cancelled_at = None
+            job.cancelled_by = None
+
             await self.db.commit()
             
             # Trigger ASR stage
@@ -201,7 +207,9 @@ class RetryService:
             job.error_message = None
             job.completed_at = None
             job.is_cancelled = False
-            
+            job.cancelled_at = None
+            job.cancelled_by = None
+
             await self.db.commit()
             
             # Count total transcripts to queue

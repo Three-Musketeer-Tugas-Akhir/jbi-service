@@ -1,5 +1,6 @@
 """Job repository for database operations."""
 
+import logging
 from typing import Optional, Tuple, List
 from uuid import UUID
 
@@ -10,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.pipeline import PipelineJob
 from app.db.session import get_db
 from sqlalchemy.orm.attributes import flag_modified
+
+logger = logging.getLogger(__name__)
 
 
 class JobRepository:
@@ -87,6 +90,15 @@ class JobRepository:
         
         job = await self.get_by_id(job_id)
         if job:
+            # Guard: a cancelled job must NOT be silently resurrected by a worker
+            # that finishes an in-flight stage after cancellation (it would
+            # overwrite CANCELLED and then block retry). Only an explicit retry —
+            # which resets is_cancelled/status directly — can leave CANCELLED.
+            if (job.is_cancelled or job.status == "CANCELLED") and status != "CANCELLED":
+                logger.info(
+                    "Ignoring status update to '%s' for cancelled job %s", status, job_id
+                )
+                return False
             job.status = status
             if current_stage is not None:
                 job.current_stage = current_stage
