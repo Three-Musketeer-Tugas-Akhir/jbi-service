@@ -1,5 +1,7 @@
 import uuid
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional, Annotated
 import io
@@ -2432,12 +2434,31 @@ async def download_dataset_zip(
                     video_path = f"video/{prefix}.mp4"
                     audio_path = f"audio/{prefix}.wav"
 
-                    # Write Video
+                    # Write Video (MUTED — exported dataset must contain no sound)
                     if cv_path:
                         try:
+                            from app.pipeline.utils.video import run_ffmpeg_strip_audio
                             video_data = await minio_service.download_file(cv_path)
-                            zf.writestr(video_path, video_data)
-                            files_added += 1
+                            tmp_in = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}_in.mp4")
+                            tmp_out = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}_mute.mp4")
+                            try:
+                                with open(tmp_in, "wb") as f:
+                                    f.write(video_data)
+                                if await run_ffmpeg_strip_audio(tmp_in, tmp_out):
+                                    with open(tmp_out, "rb") as f:
+                                        zf.writestr(video_path, f.read())
+                                    files_added += 1
+                                else:
+                                    # Do not fall back to the audio-bearing original:
+                                    # the dataset must have no sound. Skip with a warning.
+                                    logger.warning(f"Skip video (failed to strip audio): {cv_path}")
+                            finally:
+                                for _p in (tmp_in, tmp_out):
+                                    try:
+                                        if os.path.exists(_p):
+                                            os.remove(_p)
+                                    except OSError:
+                                        pass
                         except Exception as e:
                             logger.warning(f"Failed to add video to ZIP: {cv_path} - {e}")
 
@@ -2474,8 +2495,8 @@ async def download_dataset_zip(
             readme_content = f"""# Dataset {safe_name}
 
 ## Folder Structure
-- `video/`: Contains all cropped video files (.mp4)
-- `audio/`: Contains all cropped audio files (.wav)
+- `video/`: Contains all cropped sign-language video files (.mp4), MUTED (no audio track).
+- `audio/`: Contains all cropped audio files (.wav).
 
 ## Text Files
 Format for all text files: `filename_prefix|text_content`

@@ -499,6 +499,81 @@ async def run_ffmpeg_crop(
         return False
 
 
+async def run_ffmpeg_strip_audio(
+    input_path: str,
+    output_path: str,
+    timeout_seconds: int = 300,
+) -> bool:
+    """
+    Produce a silent copy of a video (no audio track) using FFmpeg.
+
+    First tries a lossless stream copy (`-c:v copy -an`) which is fast and keeps
+    the exact video bytes. If that fails (some containers reject a bare copy),
+    falls back to a quick re-encode (`-c:v libx264 -an`). Either way the result
+    has NO audio. Used by dataset export so downloaded clips are guaranteed silent.
+
+    Returns:
+        True if a valid muted output file was produced.
+    """
+    processor = get_video_processor()
+    output_file = Path(output_path)
+
+    async def _run(cmd) -> bool:
+        if output_file.exists():
+            try:
+                output_file.unlink()
+            except OSError as e:
+                logger.warning("Failed to remove existing output file: %s", e)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_seconds
+            )
+        except asyncio.TimeoutError:
+            logger.error("FFmpeg strip-audio timed out after %s seconds", timeout_seconds)
+            proc.kill()
+            await proc.wait()
+            _cleanup_file(output_path)
+            return False
+        if proc.returncode != 0:
+            stderr_text = stderr.decode("utf-8", errors="replace") if stderr else "Unknown error"
+            logger.warning("FFmpeg strip-audio command failed: %s", stderr_text)
+            _cleanup_file(output_path)
+            return False
+        if not output_file.exists() or output_file.stat().st_size == 0:
+            logger.warning("FFmpeg strip-audio output is empty or missing: %s", output_path)
+            return False
+        return True
+
+    try:
+        # 1) Lossless copy, drop audio
+        copy_cmd = [
+            processor._ffmpeg_path, "-y",
+            "-i", str(input_path),
+            "-c:v", "copy", "-an",
+            str(output_path),
+        ]
+        if await _run(copy_cmd):
+            return True
+
+        # 2) Fallback: re-encode video, drop audio
+        reencode_cmd = [
+            processor._ffmpeg_path, "-y",
+            "-i", str(input_path),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-an",
+            str(output_path),
+        ]
+        return await _run(reencode_cmd)
+    except Exception as e:
+        logger.error("FFmpeg strip-audio error: %s", e)
+        _cleanup_file(output_path)
+        return False
+
+
 def _cleanup_file(path: str) -> None:
     """Clean up a file if it exists (synchronous helper)."""
     try:
