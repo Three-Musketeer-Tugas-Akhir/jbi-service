@@ -2143,6 +2143,38 @@ async def get_stage3_results(
 # DATASET DOWNLOAD API
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+async def _resolve_synced_video_path(
+    minio_service,
+    job_id,
+    segment_id: str,
+    utterance_index: int,
+    stored_cv_path: Optional[str],
+) -> Optional[str]:
+    """Resolve the post-annotation (utterances_synced) MinIO key for an utterance.
+
+    The exported / explorer video MUST be the JBI-annotated clip from
+    `utterances_synced/`, NEVER the pre-annotation source clip in `utterances/`.
+
+    `cropped_video_path` stored on the edit can be stale (older builds sometimes
+    fell back to the pre-annotation source path), so we trust the deterministic
+    synced key first — it is exactly what UtteranceCroppingService uploads:
+    `jobs/{job_id}/utterances_synced/{segment_id}_utt_{idx}.mp4`.
+
+    Returns the synced key if the object exists, else the stored path only when it
+    already points under `utterances_synced/`, else None (no post-annotation clip).
+    """
+    synced_key = f"jobs/{job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
+    try:
+        if await minio_service.object_exists(synced_key):
+            return synced_key
+    except Exception as e:
+        logger.warning(f"object_exists check failed for {synced_key}: {e}")
+    if stored_cv_path and "/utterances_synced/" in stored_cv_path:
+        return stored_cv_path
+    return None
+
+
 @router.get(
     "/pipeline/jobs/{job_id}/dataset/explorer",
     response_model=DatasetExplorerResponse,
@@ -2169,6 +2201,7 @@ async def get_dataset_explorer(
 
     segment_repo = SegmentRepository(db)
     edit_repo = AnnotationEditRepository(db)
+    minio_service = get_minio_service()
 
     # Get all segments for job with their transcripts
     segments = await segment_repo.get_by_job_id(uuid.UUID(job_id))
@@ -2216,6 +2249,12 @@ async def get_dataset_explorer(
                         stripped = True
                     if not stripped:
                         break
+            # Always serve the post-annotation (utterances_synced) clip, never the
+            # pre-annotation source — trust the deterministic synced key over a
+            # possibly-stale stored cropped_video_path.
+            cv_path = await _resolve_synced_video_path(
+                minio_service, segment.job_id, str(segment.id), asr_t.utterance_index, cv_path
+            )
             cv_url = None
             if cv_path:
                 token = streaming_token_service.generate_token(current_user.id, cv_path)
@@ -2415,8 +2454,15 @@ async def download_dataset_zip(
                     # Include even DRAFT utterances (not just OK) for flexibility
                     # utt_status = u_corr.get("status", "DRAFT")
 
-                    # 1. Video (Cropped by JBI)
-                    cv_path = _sanitize_minio_path(u_corr.get("cropped_video_path"))
+                    # 1. Video (Cropped by JBI) — always the post-annotation clip
+                    # from utterances_synced, never the pre-annotation source.
+                    cv_path = await _resolve_synced_video_path(
+                        minio_service,
+                        segment.job_id,
+                        str(segment.id),
+                        transcript.utterance_index,
+                        _sanitize_minio_path(u_corr.get("cropped_video_path")),
+                    )
                     # 2. Audio (WAV from ASR)
                     wav_path = transcript.audio_path
                     # 3. Transkripsi (GT)
