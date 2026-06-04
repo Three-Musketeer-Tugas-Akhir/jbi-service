@@ -180,7 +180,7 @@ class UtteranceMergeService:
                 if curr_offset > 0:
                     logger.info(f"Applying {curr_offset:.2f}s offset to curr_tmp before merge")
                     tmp_cropped = curr_tmp + "_cropped.mp4"
-                    success = await run_ffmpeg_crop(curr_tmp, tmp_cropped, start_time=curr_offset, end_time=9999, use_input_seeking=True, config=config)
+                    success = await run_ffmpeg_crop(curr_tmp, tmp_cropped, start_time=curr_offset, end_time=9999, use_input_seeking=False, config=config)
                     if success and os.path.exists(tmp_cropped):
                         os.remove(curr_tmp)
                         curr_tmp = tmp_cropped
@@ -188,7 +188,7 @@ class UtteranceMergeService:
                 if next_offset > 0:
                     logger.info(f"Applying {next_offset:.2f}s offset to next_tmp before merge")
                     tmp_cropped = next_tmp + "_cropped.mp4"
-                    success = await run_ffmpeg_crop(next_tmp, tmp_cropped, start_time=next_offset, end_time=9999, use_input_seeking=True, config=config)
+                    success = await run_ffmpeg_crop(next_tmp, tmp_cropped, start_time=next_offset, end_time=9999, use_input_seeking=False, config=config)
                     if success and os.path.exists(tmp_cropped):
                         os.remove(next_tmp)
                         next_tmp = tmp_cropped

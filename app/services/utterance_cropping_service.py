@@ -197,7 +197,7 @@ class UtteranceCroppingService:
                         output_path=tmp_output,
                         start_time=relative_start,
                         end_time=relative_start + requested_duration,
-                        use_input_seeking=True,
+                        use_input_seeking=False,
                         config=config
                     )
                     
@@ -241,7 +241,7 @@ class UtteranceCroppingService:
                                 output_path=tmp_output,
                                 start_time=relative_start,
                                 end_time=orig_duration,
-                                use_input_seeking=True,
+                                use_input_seeking=False,
                                 config=config
                             )
                             if not success:
@@ -304,7 +304,7 @@ class UtteranceCroppingService:
                                 output_path=tmp_output,
                                 start_time=relative_start,
                                 end_time=crop_end,
-                                use_input_seeking=True,
+                                use_input_seeking=False,
                                 config=config
                             )
                             _cleanup_tmp(tmp_merged)
@@ -323,7 +323,7 @@ class UtteranceCroppingService:
                                 output_path=tmp_output,
                                 start_time=0.0,
                                 end_time=min(requested_duration, next_duration),
-                                use_input_seeking=True,
+                                use_input_seeking=False,
                                 config=config
                             )
                             if not success:
@@ -337,7 +337,7 @@ class UtteranceCroppingService:
                             output_path=tmp_part_a,
                             start_time=relative_start,
                             end_time=orig_duration,
-                            use_input_seeking=True,
+                            use_input_seeking=False,
                             config=config
                         )
                         
@@ -348,7 +348,7 @@ class UtteranceCroppingService:
                             output_path=tmp_part_b,
                             start_time=0.0,
                             end_time=clamped_overlap,
-                            use_input_seeking=True,
+                            use_input_seeking=False,
                             config=config
                         )
                         
