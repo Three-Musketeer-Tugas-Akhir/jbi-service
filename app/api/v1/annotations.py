@@ -326,10 +326,11 @@ async def get_merged_video_for_utterance(
     from app.db.models.pipeline import PipelineSegment
     from sqlalchemy import select
     
-    # Verify assignment
+    # Verify assignment (admins may view any segment, e.g. reviewing submissions)
     queue_service = AnnotationQueueService(db)
     queue_entry = await queue_service.queue_repo.get_by_segment(segment_id)
-    if not queue_entry or queue_entry.annotator_id != current_user.id:
+    is_admin = current_user.has_role("admin")
+    if not queue_entry or (not is_admin and queue_entry.annotator_id != current_user.id):
         raise HTTPException(status_code=403, detail="Segment not assigned to you")
     
     # Get job_id
@@ -591,7 +592,8 @@ async def list_my_submissions(
         user_id=current_user.id,
         status=status,
         page=page,
-        page_size=page_size
+        page_size=page_size,
+        is_admin=current_user.has_role("admin")
     )
     return result
 

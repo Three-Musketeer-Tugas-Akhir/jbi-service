@@ -307,22 +307,31 @@ class AnnotationSubmissionService:
         user_id: UUID,
         status: Optional[str] = None,
         page: int = 1,
-        page_size: int = 20
+        page_size: int = 20,
+        is_admin: bool = False
     ) -> dict:
         """
-        List all submissions by an annotator with their review status.
+        List submissions with their review status.
+
+        Annotators see only their own submissions; admins see ALL submissions
+        across every annotator.
         """
-        # Get all queue entries for this annotator with COMPLETED status
+        # Get COMPLETED queue entries — all annotators' if admin, else just this user's.
         queue_entries = await self.queue_repo.get_by_annotator(
             annotator_id=user_id,
             status=AnnotationQueue.STATUS_COMPLETED,
             limit=page_size,
-            offset=(page - 1) * page_size
+            offset=(page - 1) * page_size,
+            is_admin=is_admin
         )
-        
+
         items = []
         for entry in queue_entries:
-            status_info = await self.get_submission_status(entry.segment_id, user_id)
+            # Pass is_admin so the per-segment permission check is bypassed when an
+            # admin lists submissions owned by other annotators.
+            status_info = await self.get_submission_status(
+                entry.segment_id, user_id, is_admin=is_admin
+            )
             if status is None or status_info.get("status") == status:
                 items.append(status_info)
         
