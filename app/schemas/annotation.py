@@ -53,6 +53,7 @@ class QueueItemResponse(QueueItemBase):
     video_preview_url: str
     transcript_text: Optional[str] = None
     utterance_count: int = Field(0, description="Number of ASR utterances in this segment")
+    completed_utterance_count: int = Field(0, description="Number of utterances marked OK/FAILED (resolved) in the active edit")
     asr_confidence: Optional[float] = None
     
     # Active edit information (Option B: latest DRAFT/PENDING/SUBMITTED)

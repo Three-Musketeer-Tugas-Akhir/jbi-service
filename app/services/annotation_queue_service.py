@@ -231,7 +231,17 @@ class AnnotationQueueService:
             segment_id=entry.segment_id,
             editor_id=entry.annotator_id
         )
-        
+
+        # Count resolved utterances (OK or FAILED/skipped) in the active edit so
+        # the queue card can show a real "X/Y kalimat" progress bar for in-progress
+        # work, not just 0 until the whole segment is completed.
+        completed_utterance_count = 0
+        if latest_edit and latest_edit.utterance_corrections:
+            completed_utterance_count = sum(
+                1 for u in latest_edit.utterance_corrections
+                if u.get("status") in ("OK", "FAILED")
+            )
+
         return {
             "id": entry.id,
             "segment_id": entry.segment_id,
@@ -243,6 +253,7 @@ class AnnotationQueueService:
             "assigned_at": entry.assigned_at,
             "transcript_text": transcript_text,
             "utterance_count": utterance_count,
+            "completed_utterance_count": completed_utterance_count,
             "asr_confidence": segment.asr_confidence if segment else None,
             # Active edit information (Option B)
             "edit_id": latest_edit.id if latest_edit else None,
