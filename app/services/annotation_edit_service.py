@@ -3,7 +3,9 @@ from typing import List, Optional, Tuple, Any, Dict
 from uuid import UUID
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.repositories.annotation_edit_repository import AnnotationEditRepository
 from app.repositories.annotation_queue_repository import AnnotationQueueRepository
@@ -295,28 +297,70 @@ class AnnotationEditService:
         
         # Get current values (excluding previous drafts)
         old_text, old_start, old_end = await self._get_current_values_for_draft(segment_id, editor_id)
-        
+
         # Sort utterances by utterance_index before storing for consistent ordering
         utterance_dicts.sort(key=lambda x: x.get('utterance_index', 0))
-        
-        # Create draft edit
-        draft = AnnotationEdit(
-            segment_id=segment_id,
-            editor_id=editor_id,
-            old_text=old_text,
-            old_start=old_start,
-            old_end=old_end,
-            new_text=new_text or "",
-            new_start=new_start or 0.0,
-            new_end=new_end or 0.0,
-            utterance_corrections=utterance_dicts,
-            status=AnnotationEdit.STATUS_DRAFT,
-            is_deleted=False,
-            edited_at=datetime.utcnow()
+
+        # ── Upsert: reuse the existing active DRAFT row instead of inserting a
+        # new one on every save. This stops draft rows from piling up and, more
+        # importantly, keeps a single stable row so the async crop task never
+        # writes cropped_video_path to a soon-to-be-superseded edit.
+        existing_result = await self.db.execute(
+            select(AnnotationEdit).where(
+                AnnotationEdit.segment_id == segment_id,
+                AnnotationEdit.editor_id == editor_id,
+                AnnotationEdit.status == AnnotationEdit.STATUS_DRAFT,
+                AnnotationEdit.is_deleted == False
+            ).order_by(AnnotationEdit.edited_at.desc())
         )
-        
-        created_draft = await self.edit_repo.create(draft)
-        
+        existing_draft = existing_result.scalars().first()
+
+        # Carry forward cropped_video_path from the existing draft when the
+        # incoming payload omits it (defensive against older clients), then
+        # sanitize so only raw MinIO object keys are stored.
+        prev_map = {}
+        if existing_draft and existing_draft.utterance_corrections:
+            prev_map = {
+                u.get("utterance_index"): u
+                for u in existing_draft.utterance_corrections
+            }
+        for d in utterance_dicts:
+            if not d.get("cropped_video_path"):
+                prev = prev_map.get(d.get("utterance_index"))
+                if prev and prev.get("cropped_video_path"):
+                    d["cropped_video_path"] = prev["cropped_video_path"]
+            if d.get("cropped_video_path"):
+                d["cropped_video_path"] = _sanitize_cv_path(d["cropped_video_path"])
+
+        if existing_draft:
+            existing_draft.old_text = old_text
+            existing_draft.old_start = old_start
+            existing_draft.old_end = old_end
+            existing_draft.new_text = new_text or ""
+            existing_draft.new_start = new_start or 0.0
+            existing_draft.new_end = new_end or 0.0
+            existing_draft.utterance_corrections = utterance_dicts
+            existing_draft.edited_at = datetime.utcnow()
+            flag_modified(existing_draft, "utterance_corrections")
+            await self.db.flush()
+            created_draft = existing_draft
+        else:
+            draft = AnnotationEdit(
+                segment_id=segment_id,
+                editor_id=editor_id,
+                old_text=old_text,
+                old_start=old_start,
+                old_end=old_end,
+                new_text=new_text or "",
+                new_start=new_start or 0.0,
+                new_end=new_end or 0.0,
+                utterance_corrections=utterance_dicts,
+                status=AnnotationEdit.STATUS_DRAFT,
+                is_deleted=False,
+                edited_at=datetime.utcnow()
+            )
+            created_draft = await self.edit_repo.create(draft)
+
         # Log JBI annotation draft saved
         audit_repo = AuditLogRepository(self.db)
         await audit_repo.create(

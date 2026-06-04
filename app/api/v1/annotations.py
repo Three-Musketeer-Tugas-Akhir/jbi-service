@@ -255,14 +255,18 @@ async def crop_utterance_physically(
     flag_modified(edit, "utterance_corrections")
     await db.commit()
     
-    # Spawn background task
+    # Spawn background task.
+    # Pass the exact edit_id so the cropped_video_path is written back to THIS
+    # edit row, preventing the result from being orphaned if a concurrent draft
+    # save creates a newer edit before the crop finishes.
     from app.services.utterance_cropping_service import UtteranceCroppingService
     background_tasks.add_task(
         UtteranceCroppingService.crop_and_upload,
         segment_id=segment_id,
         utterance_index=utterance_index,
         start_time=target_utt["start"],
-        end_time=target_utt["end"]
+        end_time=target_utt["end"],
+        edit_id=edit.id
     )
     
     return {"status": "processing", "message": "Physical cropping started in background"}
