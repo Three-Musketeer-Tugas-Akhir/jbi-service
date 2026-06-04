@@ -211,8 +211,39 @@ class UtteranceCroppingService:
                     next_transcript = next_result.scalar_one_or_none()
                     
                     if not next_transcript or not next_transcript.video_path:
-                        logger.error("Next utterance video not found. Cannot merge.")
-                        await _mark_failed(db, edit, utt_list, utt_idx_in_array)
+                        logger.warning("Next utterance video not found. Clamping to end of current video (likely the last utterance).")
+                        
+                        if relative_start >= orig_duration - 0.001:
+                            # Already at/past the end of the video — use original as-is
+                            utt_list[utt_idx_in_array]["cropped_video_path"] = curr_transcript.video_path
+                            utt_list[utt_idx_in_array]["status"] = "OK"
+                        else:
+                            # Fallback: Just crop what we have left in the current video
+                            tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
+                            success = await run_ffmpeg_crop(
+                                input_path=curr_video_url,
+                                output_path=tmp_output,
+                                start_time=relative_start,
+                                end_time=orig_duration,
+                                use_input_seeking=True,
+                                config=config
+                            )
+                            if not success:
+                                await _mark_failed(db, edit, utt_list, utt_idx_in_array)
+                                return
+                            
+                            upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
+                            with open(tmp_output, "rb") as f:
+                                await minio_service.upload_file(f, upload_key)
+                            
+                            _cleanup_tmp(tmp_output)
+                            
+                            utt_list[utt_idx_in_array]["cropped_video_path"] = upload_key
+                            utt_list[utt_idx_in_array]["status"] = "OK"
+                        
+                        edit.utterance_corrections = utt_list
+                        flag_modified(edit, "utterance_corrections")
+                        await db.commit()
                         return
                     
                     # Clamp right_overlap to next video's duration
@@ -601,22 +632,6 @@ async def _cascade_update_next_utterance(
             dt.merged_video_duration = None
             dt.video_n_duration = None
             affected.append({
-                "utterance_index": dt.utterance_index,
-                "segment_id": str(dt.segment_id),
-                "action": "merged_video_invalidated",
-            })
-    
-    await db.commit()
-    return affected
-
-
-def _cleanup_tmp(*paths):
-    for path in paths:
-        try:
-            if path and os.path.exists(path):
-                os.remove(path)
-        except OSError:
-            pass
                 "utterance_index": dt.utterance_index,
                 "segment_id": str(dt.segment_id),
                 "action": "merged_video_invalidated",
