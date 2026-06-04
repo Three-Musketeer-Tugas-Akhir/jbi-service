@@ -116,21 +116,62 @@ class AnnotationSubmissionService:
         if await self.edit_repo.has_submitted_edit(segment_id):
             raise ConflictError("This segment has already been submitted for review")
         
-        # Get the latest non-deleted, non-draft edit
+        # Get the latest non-deleted edit (normally a DRAFT in the new flow).
         latest_edit = await self.edit_repo.get_latest_by_segment(segment_id)
-        
-        if not latest_edit or latest_edit.status == AnnotationEdit.STATUS_DRAFT:
-            # No edits or only drafts - need confirmation
+
+        # A DRAFT IS the annotator's real work. With the "Simpan Draft" button removed,
+        # every "Simpan & Lanjut" persists a DRAFT holding the glosa text, per-utterance
+        # OK/FAILED status, and cropped_video_path. It MUST be promoted to SUBMITTED,
+        # never discarded/replaced with an ASR-original copy (doing so loses all the
+        # annotation work and leaves curation/normalization with zero OK utterances).
+        has_work = (
+            latest_edit is not None
+            and latest_edit.utterance_corrections is not None
+            and len(latest_edit.utterance_corrections) > 0
+        )
+        submitted_asr_original = not has_work
+
+        if has_work:
+            # "No changes" guard (INVARIANT-8.2): only require confirmation when the
+            # edit carries NO real work — i.e. no utterance was marked OK/FAILED and
+            # every text still matches the raw ASR transcript verbatim.
+            if not confirm_no_changes:
+                corr = latest_edit.utterance_corrections
+                has_status_work = any(u.get("status") in ("OK", "FAILED") for u in corr)
+                same_as_asr = False
+                if not has_status_work:
+                    segment = await self.segment_repo.get_by_id(segment_id)
+                    if segment and segment.transcripts:
+                        asr_by_idx = {
+                            t.utterance_index: (t.text or "").strip()
+                            for t in segment.transcripts
+                        }
+                        same_as_asr = len(corr) == len(asr_by_idx) and all(
+                            (u.get("text") or "").strip()
+                            == asr_by_idx.get(u.get("utterance_index"))
+                            for u in corr
+                        )
+                if same_as_asr:
+                    raise ValidationError(
+                        "No changes made. Set confirm_no_changes=true to submit ASR-original."
+                    )
+
+            # Promote in place, preserving utterance_corrections
+            # (glosa + status + cropped_video_path).
+            latest_edit.status = AnnotationEdit.STATUS_SUBMITTED
+            latest_edit.submitted_at = datetime.utcnow()
+            await self.db.flush()
+        else:
+            # No edit exists at all → build an ASR-original submission (needs confirmation).
             if not confirm_no_changes:
                 raise ValidationError(
                     "No changes made. Set confirm_no_changes=true to submit ASR-original."
                 )
-            
-            # Create a "submission" edit that represents ASR-original
+
             segment = await self.segment_repo.get_by_id(segment_id)
             if not segment:
                 raise NotFoundError(f"Segment {segment_id} not found")
-            
+
             latest_edit = AnnotationEdit(
                 segment_id=segment_id,
                 editor_id=user_id,
@@ -145,7 +186,8 @@ class AnnotationSubmissionService:
                         "utterance_index": t.utterance_index,
                         "text": t.text,
                         "start": t.start,
-                        "end": t.end
+                        "end": t.end,
+                        "status": "OK",
                     }
                     for t in sorted(segment.transcripts, key=lambda x: x.utterance_index)
                 ] if segment.transcripts else [],
@@ -155,11 +197,6 @@ class AnnotationSubmissionService:
                 submitted_at=datetime.utcnow()
             )
             latest_edit = await self.edit_repo.create(latest_edit)
-        else:
-            # Update existing edit to submitted
-            latest_edit.status = AnnotationEdit.STATUS_SUBMITTED
-            latest_edit.submitted_at = datetime.utcnow()
-            await self.db.flush()
         
         # Update queue status to COMPLETED
         await self.queue_repo.update_status(
@@ -186,7 +223,7 @@ class AnnotationSubmissionService:
             details={
                 "segment_id": str(segment_id),
                 "review_id": str(review.id),
-                "is_asr_original": not confirm_no_changes and (not latest_edit or latest_edit.status == AnnotationEdit.STATUS_DRAFT)
+                "is_asr_original": submitted_asr_original
             }
         )
         await self.db.commit()
