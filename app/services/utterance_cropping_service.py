@@ -181,7 +181,7 @@ class UtteranceCroppingService:
                         output_path=tmp_output,
                         start_time=relative_start,
                         end_time=relative_start + requested_duration,
-                        use_input_seeking=True,
+                        use_input_seeking=False,
                         config=config
                     )
                     
@@ -257,7 +257,7 @@ class UtteranceCroppingService:
                                 output_path=tmp_output,
                                 start_time=relative_start,
                                 end_time=crop_end,
-                                use_input_seeking=True,
+                                use_input_seeking=False,
                                 config=config
                             )
                             _cleanup_tmp(tmp_merged)
@@ -276,7 +276,7 @@ class UtteranceCroppingService:
                                 output_path=tmp_output,
                                 start_time=0.0,
                                 end_time=min(requested_duration, next_duration),
-                                use_input_seeking=True,
+                                use_input_seeking=False,
                                 config=config
                             )
                             if not success:
@@ -290,7 +290,7 @@ class UtteranceCroppingService:
                             output_path=tmp_part_a,
                             start_time=relative_start,
                             end_time=orig_duration,
-                            use_input_seeking=True,
+                            use_input_seeking=False,
                             config=config
                         )
                         
@@ -301,7 +301,7 @@ class UtteranceCroppingService:
                             output_path=tmp_part_b,
                             start_time=0.0,
                             end_time=clamped_overlap,
-                            use_input_seeking=True,
+                            use_input_seeking=False,
                             config=config
                         )
                         
@@ -341,9 +341,21 @@ class UtteranceCroppingService:
                 
                 utt_list[utt_idx_in_array]["cropped_video_path"] = upload_key
                 utt_list[utt_idx_in_array]["status"] = "OK"
-                
+
                 edit.utterance_corrections = utt_list
                 flag_modified(edit, "utterance_corrections")
+
+                # ══════════════════════════════════════════════════════════
+                # RESPONSIVE MERGE REGENERATION (this utterance)
+                # Invalidate THIS utterance's own look-ahead merge cache so that
+                # re-opening it rebuilds from the latest annotated state (e.g. the
+                # user goes back to Kalimat N, trims its front, and presses Save —
+                # the merge must reflect the new start offset, not the stale clip).
+                # The cascade clears N+1..N+k; this covers N itself.
+                # ══════════════════════════════════════════════════════════
+                curr_transcript.merged_video_path = None
+                curr_transcript.merged_video_duration = None
+                curr_transcript.video_n_duration = None
                 
                 # ══════════════════════════════════════════════════════════
                 # IMPROVEMENT 3: Record cascade audit trail
@@ -521,25 +533,25 @@ async def _cascade_update_next_utterance(
     if not transcript:
         return affected
     
-    # Push start forward
+    # Push start forward logically (calculate new start). We deliberately do NOT
+    # mutate PipelineTranscript.start: the transcript is the immutable ASR/CV2
+    # ground truth ("original"). The shift is applied only to the AnnotationEdit
+    # working state below and surfaced via merge offsets, so re-trimming N stays
+    # idempotent (the cascade never compounds on an already-mutated start).
     old_start = transcript.start
     new_start = old_start + right_overlap
+
     if new_start > old_start:
-        transcript.start = new_start
-        # Ensure start < end
-        if transcript.start >= transcript.end:
-            transcript.start = transcript.end - 0.1
-        
-        # Clear merged video so next load re-merges
+        # Clear merged video so next load re-merges from the latest annotated state
         transcript.merged_video_path = None
         transcript.merged_video_duration = None
         transcript.video_n_duration = None
-        
+
         affected.append({
             "utterance_index": next_utterance_index,
             "segment_id": str(next_segment_id),
             "old_start": old_start,
-            "new_start": float(transcript.start),
+            "new_start": new_start,
             "action": "start_shifted",
         })
     
@@ -559,8 +571,10 @@ async def _cascade_update_next_utterance(
         for i, utt in enumerate(next_utt_list):
             if utt.get("utterance_index") == next_utterance_index:
                 old_start_edit = utt.get("start", 0.0)
-                new_start_edit = max(old_start_edit, transcript.start)
-                
+                # Apply the logical shift to the working (edit) state — not the
+                # transcript. This is where the cascade actually persists.
+                new_start_edit = max(old_start_edit, new_start)
+
                 if new_start_edit > old_start_edit:
                     next_utt_list[i]["start"] = new_start_edit
                     # Clear cropped_video_path so it will be re-cropped

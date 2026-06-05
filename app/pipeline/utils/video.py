@@ -389,6 +389,14 @@ async def run_ffmpeg_crop(
         return False
     
     processor = get_video_processor()
+
+    # Snap sub-millisecond float residuals to 0. Subtractions like
+    # (start_time - orig_start) can yield values such as 8.88e-16 which Python's
+    # str() renders in scientific notation ("8.88e-16") — and ffmpeg rejects that
+    # for -ss ("Invalid duration specification for ss"), failing the whole crop.
+    if 0 < start_time < 1e-4:
+        start_time = 0.0
+
     duration = end_time - start_time
     # Enforce minimum crop duration to avoid unplayable sub-frame videos
     MIN_CROP_DURATION = 0.067  # 2 frames at 30fps
@@ -399,6 +407,12 @@ async def run_ffmpeg_crop(
         )
         duration = MIN_CROP_DURATION
         end_time = start_time + duration
+
+    # Always format ffmpeg time args as fixed-point seconds (never scientific
+    # notation, which ffmpeg cannot parse).
+    def _ts(value: float) -> str:
+        return f"{max(0.0, value):.6f}"
+
     output_file = Path(output_path)
     
     # Use provided config or default
@@ -429,9 +443,9 @@ async def run_ffmpeg_crop(
             cmd = [
                 processor._ffmpeg_path,
                 "-y",
-                "-ss", str(start_time),
+                "-ss", _ts(start_time),
                 "-i", str(input_path),
-                "-t", str(duration),
+                "-t", _ts(duration),
                 "-c:v", cfg.video_codec,
                 "-crf", str(cfg.video_crf),
                 "-preset", cfg.video_preset,
@@ -446,8 +460,8 @@ async def run_ffmpeg_crop(
                 processor._ffmpeg_path,
                 "-y",
                 "-i", str(input_path),
-                "-ss", str(start_time),
-                "-t", str(duration),
+                "-ss", _ts(start_time),
+                "-t", _ts(duration),
                 "-c:v", cfg.video_codec,
                 "-crf", str(cfg.video_crf),
                 "-preset", cfg.video_preset,

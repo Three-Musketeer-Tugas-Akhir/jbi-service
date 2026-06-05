@@ -25,8 +25,9 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.session import async_session_maker
 from app.db.models.pipeline import PipelineJob, PipelineSegment, PipelineTranscript
+from app.db.models.annotation import AnnotationEdit
 from app.services.minio_service import get_minio_service
-from app.pipeline.utils.video import run_ffmpeg_concat, FFmpegConfig
+from app.pipeline.utils.video import run_ffmpeg_concat, run_ffmpeg_crop, FFmpegConfig
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -130,8 +131,51 @@ class UtteranceMergeService:
                 await _download_file(curr_presigned, curr_tmp)
                 await _download_file(next_presigned, next_tmp)
 
-                # 6. Merge using FFmpeg
+                # ══════════════════════════════════════════════════════════
+                # RESPONSIVE MERGE REGENERATION
+                # The look-ahead merge must reflect the *latest annotated state*,
+                # not the immutable original CV2 clips. When a previous trim
+                # cascaded a front-shift onto utterance N (or N+1), the working
+                # AnnotationEdit start moves ahead of the transcript's original
+                # start. We physically drop that consumed head from each source
+                # before concatenating, so the merge shown to the annotator is
+                # always derived from the current state of the chain.
+                # ══════════════════════════════════════════════════════════
                 config = FFmpegConfig(video_preset="ultrafast")
+
+                curr_offset = await _edit_front_offset(
+                    db, segment_id, utterance_index, curr_transcript.start
+                )
+                next_offset = await _edit_front_offset(
+                    db, next_transcript.segment_id,
+                    next_transcript.utterance_index, next_transcript.start
+                )
+
+                if curr_offset > 0:
+                    logger.info(f"Applying {curr_offset:.2f}s offset to curr_tmp before merge")
+                    tmp_cropped = curr_tmp + "_cropped.mp4"
+                    ok = await run_ffmpeg_crop(
+                        curr_tmp, tmp_cropped,
+                        start_time=curr_offset, end_time=9999,
+                        use_input_seeking=False, config=config
+                    )
+                    if ok and os.path.exists(tmp_cropped):
+                        os.remove(curr_tmp)
+                        curr_tmp = tmp_cropped
+
+                if next_offset > 0:
+                    logger.info(f"Applying {next_offset:.2f}s offset to next_tmp before merge")
+                    tmp_cropped = next_tmp + "_cropped.mp4"
+                    ok = await run_ffmpeg_crop(
+                        next_tmp, tmp_cropped,
+                        start_time=next_offset, end_time=9999,
+                        use_input_seeking=False, config=config
+                    )
+                    if ok and os.path.exists(tmp_cropped):
+                        os.remove(next_tmp)
+                        next_tmp = tmp_cropped
+
+                # 6. Merge using FFmpeg
                 success = await run_ffmpeg_concat(
                     input_paths=[curr_tmp, next_tmp],
                     output_path=merged_tmp,
@@ -538,6 +582,37 @@ class UtteranceMergeService:
                 )
                 await db.commit()
             raise
+
+
+async def _edit_front_offset(
+    db,
+    segment_id: uuid.UUID,
+    utterance_index: int,
+    transcript_start: float,
+) -> float:
+    """How many seconds were trimmed off the FRONT of an utterance by the latest
+    annotation edit (incl. cascaded shifts), relative to its original transcript
+    start. Returns 0.0 when there is no active edit / no front shift.
+
+    This is what makes the merge "responsive": the working start lives only in
+    AnnotationEdit (the transcript stays immutable), so the merge reads it here.
+    """
+    result = await db.execute(
+        select(AnnotationEdit).where(
+            AnnotationEdit.segment_id == segment_id,
+            AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+            AnnotationEdit.is_deleted == False
+        ).order_by(AnnotationEdit.edited_at.desc())
+    )
+    edit = result.scalars().first()
+    if not edit or not edit.utterance_corrections:
+        return 0.0
+
+    for utt in edit.utterance_corrections:
+        if utt.get("utterance_index") == utterance_index:
+            edit_start = utt.get("start", transcript_start)
+            return max(0.0, edit_start - transcript_start)
+    return 0.0
 
 
 async def _download_file(url: str, dest_path: str) -> None:
