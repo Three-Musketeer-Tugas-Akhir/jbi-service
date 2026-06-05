@@ -46,7 +46,7 @@ security = HTTPBearer(auto_error=False)
     "/login",
     response_model=LoginResponse,
     responses={
-        401: {"model": AuthErrorResponse, "description": "Invalid credentials"},
+        401: {"model": AuthErrorResponse, "description": "Email atau password salah"},
         422: {"description": "Validation error"},
         429: {"model": AuthErrorResponse, "description": "Rate limit exceeded"},
     },
@@ -91,7 +91,7 @@ async def login(
             
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid credentials",
+                detail="Email atau password salah",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         

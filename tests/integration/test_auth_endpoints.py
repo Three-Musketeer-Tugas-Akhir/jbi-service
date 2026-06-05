@@ -18,7 +18,7 @@ class TestLoginEndpoint:
         pass
     
     def test_login_invalid_credentials_placeholder(self):
-        """Placeholder for invalid credentials test."""
+        """Placeholder for Email atau password salah test."""
         # TODO: Implement when test database and fixtures are set up
         pass
     
