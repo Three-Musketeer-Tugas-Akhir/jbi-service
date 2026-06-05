@@ -184,7 +184,8 @@ class UtteranceCroppingService:
                 skip_part_a = relative_start >= orig_duration - 0.001
                 
                 cascade_affected = []  # Track affected utterances for audit trail
-                
+                final_overlap = 0.0    # Seconds this crop consumed from the head of the NEXT video
+
                 if right_overlap <= 0 and not skip_part_a:
                     # ══════════════════════════════════════════════
                     # NORMAL CASE: fits within this CV2 video
@@ -340,14 +341,10 @@ class UtteranceCroppingService:
                             await _mark_failed(db, edit, utt_list, utt_idx_in_array)
                             return
                     
-                    # ══════════════════════════════════════════════════════════
-                    # IMPROVEMENT 2 + 3: Deep cascade + audit trail
-                    # ══════════════════════════════════════════════════════════
-                    cascade_affected = await _cascade_update_next_utterance(
-                        db, segment, next_transcript.segment_id, 
-                        next_transcript.utterance_index, clamped_overlap
-                    )
-                
+                    # This crop consumed clamped_overlap seconds from the head of
+                    # the next video. The unified idempotent cascade below applies it.
+                    final_overlap = clamped_overlap
+
                 # Upload video
                 upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
                 with open(tmp_output, "rb") as f:
@@ -372,7 +369,18 @@ class UtteranceCroppingService:
                 curr_transcript.merged_video_path = None
                 curr_transcript.merged_video_duration = None
                 curr_transcript.video_n_duration = None
-                
+
+                # ══════════════════════════════════════════════════════════
+                # IDEMPOTENT CASCADE (REPLACE semantics)
+                # Pin the next utterance's working start to exactly the head this
+                # crop consumed (final_overlap). final_overlap == 0 resets it to
+                # base — so re-trimming N smaller, even down to no spill, always
+                # pulls N+1 back and never strands a gap of lost content.
+                # ══════════════════════════════════════════════════════════
+                cascade_affected = await _cascade_set_next_start(
+                    db, segment, utterance_index, final_overlap
+                )
+
                 # ══════════════════════════════════════════════════════════
                 # IMPROVEMENT 3: Record cascade audit trail
                 # ══════════════════════════════════════════════════════════
@@ -381,7 +389,7 @@ class UtteranceCroppingService:
                         "source_utterance": utterance_index,
                         "source_segment_id": str(segment_id),
                         "affected_utterances": cascade_affected,
-                        "shift_amount": right_overlap if right_overlap > 0 else 0,
+                        "shift_amount": final_overlap,
                         "timestamp": datetime.utcnow().isoformat(),
                         "action": "trim_crop",
                     }
@@ -521,57 +529,51 @@ async def _mark_failed(db, edit, utt_list, utt_idx):
     await db.commit()
 
 
-async def _cascade_update_next_utterance(
-    db, segment: PipelineSegment, next_segment_id: uuid.UUID, 
-    next_utterance_index: int, right_overlap: float
+async def _cascade_set_next_start(
+    db, segment: PipelineSegment, curr_utterance_index: int, final_overlap: float
 ) -> list:
-    """Cascade update next utterance after trim — IMPROVED.
-    
-    IMPROVEMENT 2: Deep cascade invalidation.
-    After updating N+1, continues to invalidate merged videos for N+2, N+3, etc.
-    
-    IMPROVEMENT 3: Returns list of affected utterances for audit trail.
-    
-    1. Push next utterance's start forward by the overlap amount
-    2. Clear cropped_video_path so next utterance will be re-cropped
-    3. Clear merged_video_path for N+1, N+2, ... (deep cascade)
+    """Idempotent cascade (REPLACE semantics).
+
+    After utterance N is cropped consuming ``final_overlap`` seconds from the head
+    of the next video, pin the NEXT utterance's working start to exactly
+    ``transcript_base + final_overlap``.
+
+    Because the target is computed from the immutable transcript base (never from
+    the previous working start), this is fully idempotent in BOTH directions:
+      - re-trim N larger  -> N+1 start moves further forward
+      - re-trim N smaller -> N+1 start moves back
+      - re-trim N to no spill (final_overlap == 0) -> N+1 resets to base
+    so a shrink never strands a gap of lost content between N and N+1.
+
+    PipelineTranscript.start is never mutated (immutable original). The shift
+    lives only in the AnnotationEdit working state and is surfaced via the merge
+    front-offset. Returns the list of affected utterances for the audit trail.
     """
     affected = []
-    
-    # Get the transcript for next utterance
-    transcript_result = await db.execute(
-        select(PipelineTranscript).where(
-            PipelineTranscript.segment_id == next_segment_id,
-            PipelineTranscript.utterance_index == next_utterance_index
+
+    # Find the next utterance in the chain (same segment, else next segment).
+    next_result = await db.execute(
+        select(PipelineTranscript)
+        .join(PipelineSegment, PipelineTranscript.segment_id == PipelineSegment.id)
+        .where(PipelineSegment.job_id == segment.job_id)
+        .where(
+            (PipelineSegment.segment_index > segment.segment_index) |
+            ((PipelineSegment.segment_index == segment.segment_index) &
+             (PipelineTranscript.utterance_index > curr_utterance_index))
         )
+        .order_by(PipelineSegment.segment_index.asc(), PipelineTranscript.utterance_index.asc())
+        .limit(1)
     )
-    transcript = transcript_result.scalar_one_or_none()
+    transcript = next_result.scalar_one_or_none()
     if not transcript:
         return affected
-    
-    # Push start forward logically (calculate new start). We deliberately do NOT
-    # mutate PipelineTranscript.start: the transcript is the immutable ASR/CV2
-    # ground truth ("original"). The shift is applied only to the AnnotationEdit
-    # working state below and surfaced via merge offsets, so re-trimming N stays
-    # idempotent (the cascade never compounds on an already-mutated start).
-    old_start = transcript.start
-    new_start = old_start + right_overlap
 
-    if new_start > old_start:
-        # Clear merged video so next load re-merges from the latest annotated state
-        transcript.merged_video_path = None
-        transcript.merged_video_duration = None
-        transcript.video_n_duration = None
+    next_segment_id = transcript.segment_id
+    next_utterance_index = transcript.utterance_index
+    base_start = transcript.start                      # immutable original
+    target_start = base_start + max(0.0, final_overlap)
 
-        affected.append({
-            "utterance_index": next_utterance_index,
-            "segment_id": str(next_segment_id),
-            "old_start": old_start,
-            "new_start": new_start,
-            "action": "start_shifted",
-        })
-    
-    # Also update AnnotationEdit (draft corrections) if exists
+    # Apply the target start to the next utterance's active edit (REPLACE, not max).
     edit_result = await db.execute(
         select(AnnotationEdit).where(
             AnnotationEdit.segment_id == next_segment_id,
@@ -580,62 +582,44 @@ async def _cascade_update_next_utterance(
         ).order_by(AnnotationEdit.edited_at.desc())
     )
     next_edit = edit_result.scalars().first()
-    
+
+    changed = False
     if next_edit and next_edit.utterance_corrections:
         next_utt_list = list(next_edit.utterance_corrections)
-        
         for i, utt in enumerate(next_utt_list):
             if utt.get("utterance_index") == next_utterance_index:
-                old_start_edit = utt.get("start", 0.0)
-                # Apply the logical shift to the working (edit) state — not the
-                # transcript. This is where the cascade actually persists.
-                new_start_edit = max(old_start_edit, new_start)
-
-                if new_start_edit > old_start_edit:
-                    next_utt_list[i]["start"] = new_start_edit
-                    # Clear cropped_video_path so it will be re-cropped
+                old_start_edit = utt.get("start", base_start)
+                new_start = target_start
+                # Keep start strictly before end.
+                end_val = utt.get("end", transcript.end)
+                if new_start >= end_val:
+                    new_start = end_val - 0.1
+                if abs(new_start - old_start_edit) > 1e-6:
+                    next_utt_list[i]["start"] = new_start
+                    # The head of N+1 changed -> its physical crop is stale.
                     next_utt_list[i]["cropped_video_path"] = None
-                    # Clear status so it can be edited again
                     if next_utt_list[i].get("status") == "OK":
                         next_utt_list[i]["status"] = "DRAFT"
-                    
-                    if next_utt_list[i]["start"] >= next_utt_list[i].get("end", 999):
-                        next_utt_list[i]["start"] = next_utt_list[i]["end"] - 0.1
-                    
                     next_edit.utterance_corrections = next_utt_list
                     flag_modified(next_edit, "utterance_corrections")
+                    changed = True
+                    affected.append({
+                        "utterance_index": next_utterance_index,
+                        "segment_id": str(next_segment_id),
+                        "old_start": old_start_edit,
+                        "new_start": new_start,
+                        "action": "start_set",
+                    })
                 break
-    
-    # ══════════════════════════════════════════════════════════════════
-    # IMPROVEMENT 2: Deep cascade — invalidate merged videos for
-    # N+2, N+3, ... because their cached merge may contain stale data
-    # from the video that just changed.
-    # ══════════════════════════════════════════════════════════════════
-    deep_result = await db.execute(
-        select(PipelineTranscript)
-        .join(PipelineSegment, PipelineTranscript.segment_id == PipelineSegment.id)
-        .where(PipelineSegment.job_id == segment.job_id)
-        .where(
-            (PipelineSegment.segment_index > segment.segment_index) |
-            ((PipelineSegment.segment_index == segment.segment_index) & 
-             (PipelineTranscript.utterance_index > next_utterance_index))
-        )
-        .order_by(PipelineSegment.segment_index.asc(), PipelineTranscript.utterance_index.asc())
-        .limit(5)  # Invalidate up to 5 downstream merges
-    )
-    downstream_transcripts = deep_result.scalars().all()
-    
-    for dt in downstream_transcripts:
-        if dt.merged_video_path:
-            dt.merged_video_path = None
-            dt.merged_video_duration = None
-            dt.video_n_duration = None
-            affected.append({
-                "utterance_index": dt.utterance_index,
-                "segment_id": str(dt.segment_id),
-                "action": "merged_video_invalidated",
-            })
-    
+
+    # N+1's head changed -> its own look-ahead merge (N+1 + N+2) is stale.
+    # (N's merge, which also contains N+1, is cleared by the caller.) Downstream
+    # merges (N+2 + N+3, ...) do not contain N+1, so they stay valid.
+    if changed and transcript.merged_video_path:
+        transcript.merged_video_path = None
+        transcript.merged_video_duration = None
+        transcript.video_n_duration = None
+
     await db.commit()
     return affected
 
