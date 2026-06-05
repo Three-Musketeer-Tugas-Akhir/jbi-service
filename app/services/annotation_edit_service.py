@@ -325,12 +325,17 @@ class AnnotationEditService:
                 for u in existing_draft.utterance_corrections
             }
         for d in utterance_dicts:
+            prev = prev_map.get(d.get("utterance_index"))
             if not d.get("cropped_video_path"):
-                prev = prev_map.get(d.get("utterance_index"))
                 if prev and prev.get("cropped_video_path"):
                     d["cropped_video_path"] = prev["cropped_video_path"]
             if d.get("cropped_video_path"):
                 d["cropped_video_path"] = _sanitize_cv_path(d["cropped_video_path"])
+            # Carry forward the server-maintained cascade floor (the FE never sends
+            # it). Without this, a draft save would drop the floor and the merge
+            # would stop hiding the head owned by the previous sentence.
+            if d.get("floor") is None and prev is not None and prev.get("floor") is not None:
+                d["floor"] = prev["floor"]
 
         if existing_draft:
             existing_draft.old_text = old_text

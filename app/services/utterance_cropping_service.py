@@ -532,22 +532,24 @@ async def _mark_failed(db, edit, utt_list, utt_idx):
 async def _cascade_set_next_start(
     db, segment: PipelineSegment, curr_utterance_index: int, final_overlap: float
 ) -> list:
-    """Idempotent cascade (REPLACE semantics).
+    """Idempotent cascade (REPLACE semantics) on the next utterance's FLOOR.
 
     After utterance N is cropped consuming ``final_overlap`` seconds from the head
-    of the next video, pin the NEXT utterance's working start to exactly
-    ``transcript_base + final_overlap``.
+    of the next video, pin the NEXT utterance's ``floor`` to exactly
+    ``transcript_base + final_overlap`` and carry its annotation ``start`` along
+    while preserving the annotator's own head trim-in (``start - floor``).
 
-    Because the target is computed from the immutable transcript base (never from
-    the previous working start), this is fully idempotent in BOTH directions:
-      - re-trim N larger  -> N+1 start moves further forward
-      - re-trim N smaller -> N+1 start moves back
-      - re-trim N to no spill (final_overlap == 0) -> N+1 resets to base
+    Because the floor is computed from the immutable transcript base (never from
+    the previous floor), this is fully idempotent in BOTH directions:
+      - re-trim N larger  -> N+1 floor moves further forward
+      - re-trim N smaller -> N+1 floor moves back
+      - re-trim N to no spill (final_overlap == 0) -> N+1 floor resets to base
     so a shrink never strands a gap of lost content between N and N+1.
 
-    PipelineTranscript.start is never mutated (immutable original). The shift
-    lives only in the AnnotationEdit working state and is surfaced via the merge
-    front-offset. Returns the list of affected utterances for the audit trail.
+    The floor is what the look-ahead merge physically crops from N+1's head (the
+    region owned by N, hidden from N+1). The annotator's own trim-in beyond the
+    floor stays as a recoverable gray head. PipelineTranscript.start is never
+    mutated. Returns the list of affected utterances for the audit trail.
     """
     affected = []
 
@@ -571,9 +573,11 @@ async def _cascade_set_next_start(
     next_segment_id = transcript.segment_id
     next_utterance_index = transcript.utterance_index
     base_start = transcript.start                      # immutable original
-    target_start = base_start + max(0.0, final_overlap)
+    # The cascade owns the FLOOR (how much of N+1's head this sentence consumed),
+    # not the annotation start. The annotator's own head trim-in (start - floor)
+    # is preserved on top, so it survives N being re-trimmed.
+    new_floor = base_start + max(0.0, final_overlap)
 
-    # Apply the target start to the next utterance's active edit (REPLACE, not max).
     edit_result = await db.execute(
         select(AnnotationEdit).where(
             AnnotationEdit.segment_id == next_segment_id,
@@ -588,13 +592,18 @@ async def _cascade_set_next_start(
         next_utt_list = list(next_edit.utterance_corrections)
         for i, utt in enumerate(next_utt_list):
             if utt.get("utterance_index") == next_utterance_index:
-                old_start_edit = utt.get("start", base_start)
-                new_start = target_start
+                old_floor = utt.get("floor", base_start)
+                old_start = utt.get("start", base_start)
+                # Preserve the annotator's own head trim-in (the part of start
+                # beyond the floor) while re-pinning the cascade floor.
+                user_delta = max(0.0, old_start - old_floor)
+                new_start = new_floor + user_delta
                 # Keep start strictly before end.
                 end_val = utt.get("end", transcript.end)
                 if new_start >= end_val:
                     new_start = end_val - 0.1
-                if abs(new_start - old_start_edit) > 1e-6:
+                if abs(new_floor - old_floor) > 1e-6 or abs(new_start - old_start) > 1e-6:
+                    next_utt_list[i]["floor"] = new_floor
                     next_utt_list[i]["start"] = new_start
                     # The head of N+1 changed -> its physical crop is stale.
                     next_utt_list[i]["cropped_video_path"] = None
@@ -606,9 +615,10 @@ async def _cascade_set_next_start(
                     affected.append({
                         "utterance_index": next_utterance_index,
                         "segment_id": str(next_segment_id),
-                        "old_start": old_start_edit,
+                        "old_start": old_start,
                         "new_start": new_start,
-                        "action": "start_set",
+                        "new_floor": new_floor,
+                        "action": "floor_set",
                     })
                 break
 

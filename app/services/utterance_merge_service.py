@@ -73,11 +73,18 @@ class UtteranceMergeService:
                         curr_transcript.merged_video_path, expiry=3600
                     )
                     logger.info(f"Returning existing merged video: {curr_transcript.merged_video_path}")
+                    # head_offset reflects the CURRENT edit (start - floor); the cached
+                    # tape itself starts at the floor, which only changes via the
+                    # cascade (which clears this cache), so reading it fresh is safe.
+                    _, head_offset = await _edit_front_geometry(
+                        db, segment_id, utterance_index, curr_transcript.start
+                    )
                     return {
                         "merged_video_url": url,
                         "merged_video_path": curr_transcript.merged_video_path,
                         "video_n_duration": curr_transcript.video_n_duration or 0.0,
                         "total_duration": curr_transcript.merged_video_duration or 0.0,
+                        "head_offset": head_offset,
                     }
                 except Exception as e:
                     logger.warning(f"Failed to generate URL for existing merged video: {e}")
@@ -116,6 +123,7 @@ class UtteranceMergeService:
                     "video_n_duration": 0.0,
                     "total_duration": (curr_transcript.end - curr_transcript.start),
                     "is_single_video": True,
+                    "head_offset": 0.0,
                 }
 
             # 5. Download both videos to temp files
@@ -138,31 +146,32 @@ class UtteranceMergeService:
                 # It must reflect the latest annotated state — but only for the
                 # part this utterance OWNS, i.e. utterance N's own front.
                 #
-                # Apply ONLY curr_offset (how much of N's own head was trimmed,
-                # whether by a direct trim-in on N or by a cascade from N-1).
+                # Crop ONLY the FLOOR off N's head — the region owned by the
+                # PREVIOUS sentence (cascade). This stays hidden from N because it
+                # is not N's to annotate. The annotator's OWN head trim-in
+                # (head_offset = start - floor) is deliberately KEPT in the tape as
+                # a recoverable gray region the FE renders before the start handle,
+                # so an over-aggressive left trim-in can be dragged back.
                 #
                 # Do NOT apply the next utterance's front offset. When N trims out,
-                # the cascade pushes N+1's working start forward by exactly the
-                # amount N consumed from the head of Video N+1 — but that consumed
-                # head is part of N's result and MUST stay visible in N's tape.
-                # Cropping it here would double-remove it: the spilled-over seconds
-                # (e.g. "menetapkan dua tersangka") vanish from N's preview even
-                # though the synced/exported clip contains them. The "N+1 head is
-                # gone" view is rendered correctly when N+1 is itself the curr of
-                # its own merge (curr_offset there crops Video N+1's head).
+                # the cascade pushes N+1's floor forward by exactly the amount N
+                # consumed from the head of Video N+1 — but that consumed head is
+                # part of N's result and MUST stay visible in N's tape. The "N+1
+                # head is gone" view is rendered correctly when N+1 is itself the
+                # curr of its own merge (its floor crops Video N+1's head).
                 # ══════════════════════════════════════════════════════════
                 config = FFmpegConfig(video_preset="ultrafast")
 
-                curr_offset = await _edit_front_offset(
+                curr_floor_offset, head_offset = await _edit_front_geometry(
                     db, segment_id, utterance_index, curr_transcript.start
                 )
 
-                if curr_offset > 0:
-                    logger.info(f"Applying {curr_offset:.2f}s offset to curr_tmp before merge")
+                if curr_floor_offset > 0:
+                    logger.info(f"Applying {curr_floor_offset:.2f}s floor offset to curr_tmp before merge")
                     tmp_cropped = curr_tmp + "_cropped.mp4"
                     ok = await run_ffmpeg_crop(
                         curr_tmp, tmp_cropped,
-                        start_time=curr_offset, end_time=9999,
+                        start_time=curr_floor_offset, end_time=9999,
                         use_input_seeking=False, config=config
                     )
                     if ok and os.path.exists(tmp_cropped):
@@ -210,6 +219,7 @@ class UtteranceMergeService:
                     "video_n_duration": curr_duration,
                     "total_duration": merged_duration,
                     "is_single_video": False,
+                    "head_offset": head_offset,
                 }
 
             finally:
@@ -578,18 +588,24 @@ class UtteranceMergeService:
             raise
 
 
-async def _edit_front_offset(
+async def _edit_front_geometry(
     db,
     segment_id: uuid.UUID,
     utterance_index: int,
     transcript_start: float,
-) -> float:
-    """How many seconds were trimmed off the FRONT of an utterance by the latest
-    annotation edit (incl. cascaded shifts), relative to its original transcript
-    start. Returns 0.0 when there is no active edit / no front shift.
+) -> tuple:
+    """Front geometry of an utterance for the look-ahead merge, read from the
+    latest annotation edit (the transcript stays immutable, so the working values
+    live only in AnnotationEdit). Returns ``(floor_offset, head_offset)``:
 
-    This is what makes the merge "responsive": the working start lives only in
-    AnnotationEdit (the transcript stays immutable), so the merge reads it here.
+    - ``floor_offset`` = seconds of the head OWNED BY THE PREVIOUS sentence
+      (the cascade ``floor``), measured from the original transcript start. The
+      merge physically crops this away so it stays hidden from this utterance.
+    - ``head_offset`` = seconds the annotator trimmed off this utterance's OWN
+      head (``start - floor``). KEPT in the tape as a recoverable gray region the
+      FE renders before the start handle.
+
+    Defaults to ``(0.0, 0.0)`` when there is no active edit (full tape, no gray).
     """
     result = await db.execute(
         select(AnnotationEdit).where(
@@ -600,13 +616,16 @@ async def _edit_front_offset(
     )
     edit = result.scalars().first()
     if not edit or not edit.utterance_corrections:
-        return 0.0
+        return 0.0, 0.0
 
     for utt in edit.utterance_corrections:
         if utt.get("utterance_index") == utterance_index:
             edit_start = utt.get("start", transcript_start)
-            return max(0.0, edit_start - transcript_start)
-    return 0.0
+            floor = utt.get("floor", transcript_start)
+            floor_offset = max(0.0, floor - transcript_start)
+            head_offset = max(0.0, edit_start - floor)
+            return floor_offset, head_offset
+    return 0.0, 0.0
 
 
 async def _download_file(url: str, dest_path: str) -> None:
