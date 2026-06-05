@@ -133,22 +133,28 @@ class UtteranceMergeService:
 
                 # ══════════════════════════════════════════════════════════
                 # RESPONSIVE MERGE REGENERATION
-                # The look-ahead merge must reflect the *latest annotated state*,
-                # not the immutable original CV2 clips. When a previous trim
-                # cascaded a front-shift onto utterance N (or N+1), the working
-                # AnnotationEdit start moves ahead of the transcript's original
-                # start. We physically drop that consumed head from each source
-                # before concatenating, so the merge shown to the annotator is
-                # always derived from the current state of the chain.
+                # The look-ahead merge is a continuous tape [Video N | Video N+1]
+                # so the annotator can drag the trim boundary anywhere within it.
+                # It must reflect the latest annotated state — but only for the
+                # part this utterance OWNS, i.e. utterance N's own front.
+                #
+                # Apply ONLY curr_offset (how much of N's own head was trimmed,
+                # whether by a direct trim-in on N or by a cascade from N-1).
+                #
+                # Do NOT apply the next utterance's front offset. When N trims out,
+                # the cascade pushes N+1's working start forward by exactly the
+                # amount N consumed from the head of Video N+1 — but that consumed
+                # head is part of N's result and MUST stay visible in N's tape.
+                # Cropping it here would double-remove it: the spilled-over seconds
+                # (e.g. "menetapkan dua tersangka") vanish from N's preview even
+                # though the synced/exported clip contains them. The "N+1 head is
+                # gone" view is rendered correctly when N+1 is itself the curr of
+                # its own merge (curr_offset there crops Video N+1's head).
                 # ══════════════════════════════════════════════════════════
                 config = FFmpegConfig(video_preset="ultrafast")
 
                 curr_offset = await _edit_front_offset(
                     db, segment_id, utterance_index, curr_transcript.start
-                )
-                next_offset = await _edit_front_offset(
-                    db, next_transcript.segment_id,
-                    next_transcript.utterance_index, next_transcript.start
                 )
 
                 if curr_offset > 0:
@@ -162,18 +168,6 @@ class UtteranceMergeService:
                     if ok and os.path.exists(tmp_cropped):
                         os.remove(curr_tmp)
                         curr_tmp = tmp_cropped
-
-                if next_offset > 0:
-                    logger.info(f"Applying {next_offset:.2f}s offset to next_tmp before merge")
-                    tmp_cropped = next_tmp + "_cropped.mp4"
-                    ok = await run_ffmpeg_crop(
-                        next_tmp, tmp_cropped,
-                        start_time=next_offset, end_time=9999,
-                        use_input_seeking=False, config=config
-                    )
-                    if ok and os.path.exists(tmp_cropped):
-                        os.remove(next_tmp)
-                        next_tmp = tmp_cropped
 
                 # 6. Merge using FFmpeg
                 success = await run_ffmpeg_concat(
