@@ -3,7 +3,7 @@ import logging
 import time
 
 from app.core.config import settings
-from app.services.cleanup import cleanup_expired_jobs, cleanup_expired_refresh_tokens
+from app.services.cleanup import cleanup_expired_refresh_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +26,12 @@ async def _cleanup_loop():
         await asyncio.sleep(interval)
         
         # Cleanup expired jobs
-        try:
-            cleaned = await cleanup_expired_jobs()
-            if cleaned > 0:
-                logger.info("Scheduled cleanup removed %d jobs", cleaned)
-        except Exception:
-            logger.exception("Job cleanup cycle failed — will retry next interval")
+        # try:
+        #     cleaned = await cleanup_expired_jobs()
+        #     if cleaned > 0:
+        #         logger.info("Scheduled cleanup removed %d jobs", cleaned)
+        # except Exception:
+        #     logger.exception("Job cleanup cycle failed — will retry next interval")
         
         # Cleanup expired refresh tokens (run once per day)
         current_time = time.monotonic()
