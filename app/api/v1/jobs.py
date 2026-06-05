@@ -2530,11 +2530,11 @@ async def download_dataset_zip(
 
             safe_name = (job.original_filename or "dataset").rsplit(".", 1)[0]
             
-            # Write concatenated texts
-            zf.writestr("ground_truth.txt", "\\n".join(ground_truth_lines).encode("utf-8"))
-            zf.writestr("ground_truth_normalized.txt", "\\n".join(ground_truth_norm_lines).encode("utf-8"))
-            zf.writestr("glosa.txt", "\\n".join(glosa_lines).encode("utf-8"))
-            zf.writestr("glosa_normalized.txt", "\\n".join(glosa_norm_lines).encode("utf-8"))
+            # Write concatenated texts (one entry per line)
+            zf.writestr("ground_truth.txt", "\n".join(ground_truth_lines).encode("utf-8"))
+            zf.writestr("ground_truth_normalized.txt", "\n".join(ground_truth_norm_lines).encode("utf-8"))
+            zf.writestr("glosa.txt", "\n".join(glosa_lines).encode("utf-8"))
+            zf.writestr("glosa_normalized.txt", "\n".join(glosa_norm_lines).encode("utf-8"))
             files_added += 4
 
             # Write README
