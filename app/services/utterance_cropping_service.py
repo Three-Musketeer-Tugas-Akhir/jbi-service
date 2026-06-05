@@ -16,6 +16,7 @@ import logging
 import os
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import select
@@ -35,7 +36,8 @@ class UtteranceCroppingService:
         segment_id: uuid.UUID,
         utterance_index: int,
         start_time: float,
-        end_time: float
+        end_time: float,
+        edit_id: Optional[uuid.UUID] = None
     ):
         """
         Background task to crop the utterance video and upload it to MinIO.
@@ -74,15 +76,29 @@ class UtteranceCroppingService:
                     logger.error(f"Transcript/CV2 Video not found for {segment_id} utt {utterance_index}.")
                     return
                 
-                # 3. Fetch active edit
-                edit_result = await db.execute(
-                    select(AnnotationEdit).where(
-                        AnnotationEdit.segment_id == segment_id,
-                        AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
-                        AnnotationEdit.is_deleted == False
-                    ).order_by(AnnotationEdit.edited_at.desc())
-                )
-                edit = edit_result.scalars().first()
+                # 3. Fetch active edit.
+                # Prefer the exact edit the crop endpoint operated on (edit_id) so the
+                # cropped_video_path is written to the SAME row, even if a concurrent
+                # draft save created a newer edit in the meantime. Fall back to the
+                # latest DRAFT/PENDING edit for backward compatibility.
+                edit = None
+                if edit_id is not None:
+                    edit_by_id = await db.execute(
+                        select(AnnotationEdit).where(
+                            AnnotationEdit.id == edit_id,
+                            AnnotationEdit.is_deleted == False
+                        )
+                    )
+                    edit = edit_by_id.scalars().first()
+                if edit is None:
+                    edit_result = await db.execute(
+                        select(AnnotationEdit).where(
+                            AnnotationEdit.segment_id == segment_id,
+                            AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+                            AnnotationEdit.is_deleted == False
+                        ).order_by(AnnotationEdit.edited_at.desc())
+                    )
+                    edit = edit_result.scalars().first()
                 if not edit or not edit.utterance_corrections:
                     logger.error(f"No active edit found for segment {segment_id}.")
                     return
