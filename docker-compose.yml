@@ -192,6 +192,7 @@ services:
       - uploads_data:/app/storage/uploads
       - outputs_data:/app/storage/outputs
     deploy:
+      replicas: 3
       resources:
         reservations:
           devices:
