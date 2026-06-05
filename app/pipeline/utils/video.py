@@ -560,6 +560,55 @@ async def transcode_to_h264(
         raise TranscodeError(f"Transcoding failed: {e}") from e
 
 
+async def run_ffmpeg_strip_audio(
+    input_path: str,
+    output_path: str,
+    timeout_seconds: int = 120,
+) -> bool:
+    """Remove the audio track from a video file (copy video stream, drop audio).
+
+    Uses ``-c:v copy -an`` so there is no re-encoding — very fast and lossless.
+    Returns True on success, False on any error.
+    """
+    processor = get_video_processor()
+
+    cmd = [
+        processor._ffmpeg_path,
+        "-y",
+        "-i", str(input_path),
+        "-c:v", "copy",
+        "-an",
+        str(output_path),
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        logger.error("run_ffmpeg_strip_audio timed out for %s", input_path)
+        proc.kill()
+        await proc.wait()
+        _cleanup_file(output_path)
+        return False
+
+    if proc.returncode != 0:
+        stderr_text = stderr.decode("utf-8", errors="replace") if stderr else "unknown error"
+        logger.error("run_ffmpeg_strip_audio failed for %s: %s", input_path, stderr_text)
+        _cleanup_file(output_path)
+        return False
+
+    if not Path(output_path).exists() or Path(output_path).stat().st_size == 0:
+        logger.error("run_ffmpeg_strip_audio produced empty output: %s", output_path)
+        return False
+
+    logger.info("Audio stripped: %s -> %s", input_path, output_path)
+    return True
+
+
 async def run_ffmpeg_concat(
     input_paths: list,
     output_path: str,
