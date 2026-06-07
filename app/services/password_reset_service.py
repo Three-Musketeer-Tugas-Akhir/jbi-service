@@ -328,10 +328,10 @@ class PasswordResetService:
             Error message if invalid, None if valid
         """
         if len(password) < 8:
-            return "Password must be at least 8 characters long."
+            return "Password harus terdiri dari minimal 8 karakter."
         
         if len(password) > 128:
-            return "Password must not exceed 128 characters."
+            return "Password tidak boleh lebih dari 128 karakter."
         
         has_upper = any(c.isupper() for c in password)
         has_lower = any(c.islower() for c in password)
@@ -339,17 +339,17 @@ class PasswordResetService:
         has_special = any(c in '!@#$%^&*()_+-=[]{}|;:,.<>?' for c in password)
         
         if not (has_upper and has_lower and has_digit):
-            return "Password must contain at least one uppercase letter, one lowercase letter, and one digit."
+            return "Password harus mengandung setidaknya satu huruf besar, satu huruf kecil, dan satu angka."
         
         if not has_special:
-            return "Password must contain at least one special character (!@#$%^&*()_+-=[]{}|;:,.<>?)."
+            return "Password harus mengandung setidaknya satu karakter spesial (!@#$%^&*()_+-=[]{}|;:,.<>?)."
         
         # Check for common patterns
         common_patterns = ['password', '123456', 'qwerty', 'abc123']
         password_lower = password.lower()
         for pattern in common_patterns:
             if pattern in password_lower:
-                return "Password is too common. Please choose a stronger password."
+                return "Password terlalu umum. Silakan pilih password yang lebih kuat."
         
         return None
 
