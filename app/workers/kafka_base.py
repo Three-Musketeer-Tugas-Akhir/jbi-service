@@ -163,7 +163,7 @@ class KafkaPipelineWorker(ABC):
         job_id = str(message.job_id)
         attempts = 0
         last_error = None
-        
+
         while attempts < self.max_retries:
             try:
                 result = await self.process(message.payload)
@@ -174,16 +174,44 @@ class KafkaPipelineWorker(ABC):
                 logger.warning(
                     f"Job {job_id} failed (attempt {attempts}/{self.max_retries}): {e}"
                 )
-                
+
                 if attempts < self.max_retries:
                     delay = min(2 ** (attempts - 1) * self.retry_base_delay, 300)
                     logger.info(f"Retrying in {delay}s...")
                     await asyncio.sleep(delay)
                 else:
                     logger.error(f"Job {job_id} failed after {self.max_retries} attempts")
-                    raise last_error
-        
+                    # Ensure job is marked FAILED in DB so it doesn't get
+                    # reprocessed on Kafka redelivery (infinite loop prevention).
+                    await self._mark_job_failed(job_id, last_error)
+                    # Raising permanent=True causes _process_message to send
+                    # to DLQ and commit the offset — stops redelivery.
+                    raise ProcessingError(
+                        f"Job {job_id} gagal setelah {self.max_retries} percobaan: {last_error}",
+                        permanent=True,
+                    ) from last_error
+
         return None
+
+    async def _mark_job_failed(self, job_id: str, error: Exception) -> None:
+        """Mark job FAILED in DB after exhausting all retries (best-effort)."""
+        try:
+            job_uuid = UUID(job_id)
+            from app.db.models.pipeline import JobStatus as _JobStatus
+            async with async_session() as session:
+                job_repo = JobRepository(session)
+                job = await job_repo.get_by_id(job_uuid)
+                if job and job.status not in (_JobStatus.FAILED, _JobStatus.CROPPING_FAILED):
+                    await job_repo.update_status(
+                        job_uuid,
+                        _JobStatus.FAILED,
+                        error_message=f"Proses gagal setelah {self.max_retries} percobaan: {str(error)[:200]}",
+                        current_stage=job.current_stage,
+                    )
+                    await session.commit()
+                    logger.info(f"Marked job {job_id} as FAILED after exhausting retries")
+        except Exception as e:
+            logger.error(f"Failed to mark job {job_id} as FAILED: {e}")
     
     async def _commit(self, msg) -> None:
         """Commit Kafka offset for a message."""
@@ -303,10 +331,10 @@ class KafkaPipelineWorker(ABC):
             job_repo = JobRepository(session)
             return await job_repo.is_job_cancelled(job_uuid)
     
-    async def is_already_processed(self, job_id: str) -> bool:
+    async def is_already_processed(self, job_id: str, payload: Optional[Dict[str, Any]] = None) -> bool:
         """
         Check if job was already processed (idempotency).
-        
+
         Override in subclasses for stage-specific checks.
         """
         return False

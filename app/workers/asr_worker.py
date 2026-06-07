@@ -87,18 +87,19 @@ class ASRWorker(KafkaPipelineWorker):
                             await self._ensure_next_stage_queued(message)
                         await self._commit(msg)
                         return
-                    
-                    # Commit session to ensure lock is persisted
-                    # (advisory locks are session-scoped, but we need to commit
-                    # any pending transactions before long-running processing)
+
                     await session.commit()
-                    
+
                 except Exception as e:
                     await session.rollback()
                     raise
-            
-            # Process with retry (outside lock session)
-            # Lock is still held because PostgreSQL advisory locks are session-scoped
+                finally:
+                    # Explicitly release the advisory lock before the session closes.
+                    # Without this the lock leaks onto the pooled connection and
+                    # blocks legitimate retry processing by other (or the same) worker.
+                    await lock.release()
+
+            # Process with retry (outside the lock session — lock is now released)
             result = await self._process_with_retry(message)
             
             if result is not None:
@@ -120,38 +121,44 @@ class ASRWorker(KafkaPipelineWorker):
     
     async def is_already_processed(self, job_id: str, payload: Optional[Dict[str, Any]] = None) -> bool:
         """Check if ASR was already done for this job.
-        
+
         For partial retries (mode='partial'), only check the specified segments.
+        For full retries, ALL segments must have transcripts to be considered done
+        (partial completion from a crashed worker is NOT considered done, so the
+        worker re-runs and fills in the missing segments).
         """
         try:
             job_uuid = UUID(job_id)
         except ValueError:
             return False
-        
+
         async with async_session() as session:
             segment_repo = SegmentRepository(session)
             segments = await segment_repo.get_by_job_id(job_uuid)
             if not segments:
                 return False
-            
-            # For partial retries, check only specified segments
+
+            # For partial retries, narrow to requested segments only
             if payload and payload.get("mode") == "partial" and payload.get("segment_ids"):
                 requested_ids = set(payload["segment_ids"])
                 segments = [s for s in segments if str(s.id) in requested_ids]
                 if not segments:
                     return False
-            
-            # Check if transcripts exist for these segments
-            segment_ids = [s.id for s in segments]
-            from sqlalchemy import select
+
+            # Every segment in the set must have at least one transcript.
+            # If any segment is missing transcripts the job is not done yet.
+            from sqlalchemy import select, func
             from app.db.models.pipeline import PipelineTranscript
-            result = await session.execute(
-                select(PipelineTranscript).where(
-                    PipelineTranscript.segment_id.in_(segment_ids)
+            for seg in segments:
+                result = await session.execute(
+                    select(func.count(PipelineTranscript.id)).where(
+                        PipelineTranscript.segment_id == seg.id
+                    )
                 )
-            )
-            transcripts = result.scalars().all()
-            return len(transcripts) > 0
+                if (result.scalar() or 0) == 0:
+                    return False
+
+            return True
     
     async def process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
