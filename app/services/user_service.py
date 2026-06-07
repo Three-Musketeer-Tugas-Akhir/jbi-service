@@ -182,7 +182,7 @@ class UserService:
             if user is None:
                 return {
                     "success": False,
-                    "message": "User not found."
+                    "message": "User tidak ditemukan."
                 }
             
             # Update email if provided
@@ -202,7 +202,7 @@ class UserService:
                     return {
                         "success": True,
                         "user": user,
-                        "message": "No changes to apply."
+                        "message": "Tidak ada perubahan yang dilakukan."
                     }
                 
                 # Check if email is already in use
@@ -213,7 +213,7 @@ class UserService:
                 if email_exists:
                     return {
                         "success": False,
-                        "message": "This email address is already in use."
+                        "message": "Alamat email ini sudah digunakan."
                     }
                 
                 # Update email
@@ -227,7 +227,7 @@ class UserService:
             return {
                 "success": True,
                 "user": user,
-                "message": "Profile updated successfully."
+                "message": "Profil berhasil diperbarui."
             }
             
         except Exception as e:
@@ -236,7 +236,7 @@ class UserService:
             logger.exception("Error updating profile")
             return {
                 "success": False,
-                "message": "An error occurred while updating your profile."
+                "message": "Terjadi kesalahan saat memperbarui profil Anda."
             }
     
     async def change_password(
