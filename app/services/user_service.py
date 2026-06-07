@@ -67,7 +67,7 @@ class UserService:
         Note:
             Returns (False, None, None) for non-existent user or wrong password
             to prevent user enumeration attacks.
-            Returns (False, None, "Account is deactivated") for deactivated users.
+            Returns (False, None, "Akun dinonaktifkan.") for deactivated users.
         """
         # Validate inputs
         if not email or not password:
@@ -96,7 +96,7 @@ class UserService:
         if not user.is_active:
             # Still perform bcrypt check to prevent timing attacks
             bcrypt.checkpw(password_bytes, stored_hash)
-            return False, None, "Account is deactivated"
+            return False, None, "Akun dinonaktifkan."
         
         # Verify password
         try:

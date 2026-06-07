@@ -82,10 +82,10 @@ async def login(
                 pass
             
             # Check for specific error message (e.g., deactivated account)
-            if error_msg == "Account is deactivated":
+            if error_msg == "Akun dinonaktifkan.":
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Account is deactivated",
+                    detail="Akun dinonaktifkan.",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             
