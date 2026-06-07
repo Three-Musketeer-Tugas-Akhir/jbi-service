@@ -44,13 +44,13 @@ class TokenRefreshService:
             
             jti_str = payload.get("jti")
             if not jti_str:
-                return {"success": False, "message": "Token missing jti claim"}
+                return {"success": False, "message": "Token tidak memiliki klaim jti"}
             
             jti = UUID(jti_str)
             exp_timestamp = payload.get("exp")
             
             if not exp_timestamp:
-                return {"success": False, "message": "Token missing exp claim"}
+                return {"success": False, "message": "Token tidak memiliki klaim exp"}
             
             expires_at = datetime.fromtimestamp(exp_timestamp, tz=timezone.utc)
             
@@ -84,33 +84,33 @@ class TokenRefreshService:
             try:
                 payload = jwt_auth_service.decode_token(refresh_token)
             except InvalidTokenError:
-                return {"success": False, "message": "Invalid refresh token"}
+                return {"success": False, "message": "Refresh token tidak valid"}
             
             # Step 2: Verify it's a refresh token
             if payload.get("type") != "refresh":
-                return {"success": False, "message": "Invalid token type"}
+                return {"success": False, "message": "Tipe token tidak valid"}
             
             # Step 3: Get jti from payload
             jti_str = payload.get("jti")
             if not jti_str:
-                return {"success": False, "message": "Token missing jti claim"}
+                return {"success": False, "message": "Token tidak memiliki klaim jti"}
             
             try:
                 jti = UUID(jti_str)
             except ValueError:
-                return {"success": False, "message": "Invalid jti in token"}
+                return {"success": False, "message": "jti dalam token tidak valid"}
             
             # Step 4: Check if token exists in database and is valid
             token_record = await self.token_repo.get_by_jti(jti)
             
             if token_record is None:
-                return {"success": False, "message": "Invalid refresh token"}
+                return {"success": False, "message": "Refresh token tidak valid"}
             
             if token_record.is_revoked:
-                return {"success": False, "message": "Invalid refresh token"}
+                return {"success": False, "message": "Refresh token tidak valid"}
             
             if token_record.is_expired:
-                return {"success": False, "message": "Refresh token expired, please login again"}
+                return {"success": False, "message": "Refresh token sudah kedaluwarsa, silakan login kembali"}
             
             # Step 5: Verify full token (signature, expiration)
             try:
@@ -118,14 +118,14 @@ class TokenRefreshService:
             except ExpiredSignatureError:
                 # Mark as expired in database for cleanup
                 await self.token_repo.revoke(jti)
-                return {"success": False, "message": "Refresh token expired, please login again"}
+                return {"success": False, "message": "Refresh token sudah kedaluwarsa, silakan login kembali"}
             
             # Step 6: Get user info
             user_id = token_record.user_id
             role = payload.get("role")
             
             if not role:
-                return {"success": False, "message": "Token missing role claim"}
+                return {"success": False, "message": "Token tidak memiliki klaim peran (role claim)"}
             
             # Step 7: Generate new token pair
             new_access_token = jwt_auth_service.create_access_token(user_id, role)
@@ -154,7 +154,7 @@ class TokenRefreshService:
                 "success": True,
                 "access_token": new_access_token,
                 "refresh_token": new_refresh_token,
-                "message": "Token refreshed successfully"
+                "message": "Token berhasil diperbarui"
             }
             
         except Exception as e:
@@ -179,7 +179,7 @@ class TokenRefreshService:
             jti_str = payload.get("jti")
             
             if not jti_str:
-                return {"success": False, "message": "Token missing jti claim"}
+                return {"success": False, "message": "Token tidak memiliki klaim jti"}
             
             jti = UUID(jti_str)
             revoked = await self.token_repo.revoke(jti)
@@ -188,7 +188,7 @@ class TokenRefreshService:
                 await self.session.commit()
                 return {"success": True}
             else:
-                return {"success": False, "message": "Token not found or already revoked"}
+                return {"success": False, "message": "Token tidak ditemukan atau sudah dicabut"}
             
         except (InvalidTokenError, ValueError) as e:
             return {"success": False, "message": str(e)}

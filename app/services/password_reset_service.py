@@ -148,7 +148,7 @@ class PasswordResetService:
                 logger.info(f"Password reset requested for non-existent email: {email}")
                 return {
                     "success": True,
-                    "message": "If an account exists with this email, you will receive reset instructions."
+                    "message": "Jika akun dengan email ini ada, Anda akan menerima instruksi pengaturan ulang."
                 }
             
             # Check rate limiting
@@ -161,7 +161,7 @@ class PasswordResetService:
                 logger.warning(f"Rate limit exceeded for password reset: {email}")
                 return {
                     "success": False,
-                    "message": "Too many reset requests. Please try again later.",
+                    "message": "Terlalu banyak permintaan pengaturan ulang. Silakan coba lagi nanti.",
                     "retry_after": 3600  # Seconds
                 }
             
@@ -203,7 +203,7 @@ class PasswordResetService:
             
             return {
                 "success": True,
-                "message": "If an account exists with this email, you will receive reset instructions."
+                "message": "Jika akun dengan email ini ada, Anda akan menerima instruksi pengaturan ulang."
             }
             
         except Exception as e:
@@ -212,7 +212,7 @@ class PasswordResetService:
             # Return generic success to prevent information leakage
             return {
                 "success": True,
-                "message": "If an account exists with this email, you will receive reset instructions."
+                "message": "Jika akun dengan email ini ada, Anda akan menerima instruksi pengaturan ulang."
             }
     
     async def reset_password(
@@ -244,7 +244,7 @@ class PasswordResetService:
             if parsed is None:
                 return {
                     "success": False,
-                    "message": "Invalid reset token."
+                    "message": "Token pengaturan ulang tidak valid."
                 }
             
             token_id, secret = parsed
@@ -255,26 +255,26 @@ class PasswordResetService:
             if reset_token is None:
                 return {
                     "success": False,
-                    "message": "Invalid or expired reset token."
+                    "message": "Token pengaturan ulang tidak valid atau sudah kedaluwarsa."
                 }
             
             if reset_token.is_used:
                 return {
                     "success": False,
-                    "message": "This reset link has already been used."
+                    "message": "Tautan pengaturan ulang ini sudah pernah digunakan."
                 }
             
             if reset_token.is_expired:
                 return {
                     "success": False,
-                    "message": "This reset link has expired. Please request a new one."
+                    "message": "Tautan pengaturan ulang ini sudah kedaluwarsa. Silakan minta tautan baru."
                 }
             
             # Verify the secret against the hash
             if not self._verify_secret(secret, reset_token.token_hash):
                 return {
                     "success": False,
-                    "message": "Invalid reset token."
+                    "message": "Token pengaturan ulang tidak valid."
                 }
             
             # Get user
@@ -306,7 +306,7 @@ class PasswordResetService:
             
             return {
                 "success": True,
-                "message": "Password has been reset successfully. You can now log in with your new password."
+                "message": "Password berhasil diatur ulang. Anda sekarang dapat login dengan password baru Anda."
             }
             
         except Exception as e:
@@ -314,7 +314,7 @@ class PasswordResetService:
             logger.exception("Error resetting password")
             return {
                 "success": False,
-                "message": "An error occurred while resetting your password. Please try again."
+                "message": "Terjadi kesalahan saat mengatur ulang password Anda. Silakan coba lagi."
             }
     
     def _validate_password(self, password: str) -> Optional[str]:

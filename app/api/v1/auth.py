@@ -122,7 +122,7 @@ async def login(
         logging.getLogger(__name__).exception("Login error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred during authentication"
+            detail="Terjadi kesalahan saat otentikasi"
         )
 
 
@@ -175,7 +175,7 @@ async def refresh(
         logging.getLogger(__name__).exception("Token refresh error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred during token refresh"
+            detail="Terjadi kesalahan saat memuat ulang token"
         )
 
 
@@ -273,7 +273,7 @@ async def forgot_password(
         logging.getLogger(__name__).exception("Forgot password error")
         # Return generic success to prevent information leakage
         return ForgotPasswordResponse(
-            message="If an account exists with this email, you will receive reset instructions."
+            message="Jika akun dengan email ini ada, Anda akan menerima instruksi pengaturan ulang."
         )
 
 
@@ -335,7 +335,7 @@ async def reset_password(
         logging.getLogger(__name__).exception("Reset password error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while resetting your password. Please try again."
+            detail="Terjadi kesalahan saat mengatur ulang password Anda. Silakan coba lagi."
         )
 
 
@@ -409,7 +409,7 @@ async def force_change_password(
         logging.getLogger(__name__).exception("Force change password error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while changing your password. Please try again."
+            detail="Terjadi kesalahan saat mengubah password Anda. Silakan coba lagi."
         )
 
 
@@ -466,7 +466,7 @@ async def verify_email(
         logging.getLogger(__name__).exception("Verify email error")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while verifying your email. Please try again."
+            detail="Terjadi kesalahan saat memverifikasi email Anda. Silakan coba lagi."
         )
 
 

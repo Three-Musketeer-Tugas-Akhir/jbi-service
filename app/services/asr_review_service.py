@@ -252,7 +252,7 @@ class ASRReviewService:
             "status": ASRReview.STATUS_APPROVED,
             "reviewer_id": reviewer_id,
             "reviewed_at": datetime.utcnow(),
-            "message": "ASR transcript approved and moved to annotation queue",
+            "message": "Transkrip ASR disetujui dan dipindahkan ke antrean anotasi",
             "moved_to_annotation_queue": True,
             "queue_entry_id": queue_entry.id if queue_entry else None
         }
@@ -338,7 +338,7 @@ class ASRReviewService:
             "status": ASRReview.STATUS_CORRECTED,
             "reviewer_id": reviewer_id,
             "reviewed_at": datetime.utcnow(),
-            "message": "ASR transcript corrected and moved to annotation queue",
+            "message": "Transkrip ASR dikoreksi dan dipindahkan ke antrean anotasi",
             "moved_to_annotation_queue": True,
             "queue_entry_id": queue_entry.id if queue_entry else None
         }
@@ -387,7 +387,7 @@ class ASRReviewService:
             "reviewed_at": datetime.utcnow(),
             "flag_reason": flag_reason,
             "notes": notes,
-            "message": "Segment flagged for reprocessing",
+            "message": "Segmen ditandai untuk diproses ulang",
             "moved_to_annotation_queue": False,
             "queue_entry_id": None
         }
@@ -423,7 +423,7 @@ class ASRReviewService:
             "status": review.status,
             "reviewer_id": None,
             "can_review": True,
-            "message": "Ready for review"
+            "message": "Siap untuk direview"
         }
     
     async def _get_and_validate_review(

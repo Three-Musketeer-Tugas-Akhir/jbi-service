@@ -180,7 +180,7 @@ async def get_asset(
             if user_id_from_token is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid or expired streaming token"
+                    detail="Token streaming tidak valid atau sudah kedaluwarsa"
                 )
             is_streaming_token = True
         else:
@@ -188,7 +188,7 @@ async def get_asset(
             if current_user is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Authentication required"
+                    detail="Otentikasi diperlukan"
                 )
             
             async with async_session() as session:
@@ -201,7 +201,7 @@ async def get_asset(
                     )
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Not authorized to access this resource"
+                        detail="Tidak memiliki izin untuk mengakses sumber daya ini"
                     )
     
     # Stream file from MinIO
@@ -245,7 +245,7 @@ async def get_asset(
                 if start >= file_size:
                     raise HTTPException(
                         status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
-                        detail="Requested Range Not Satisfiable"
+                        detail="Rentang data (Range) yang diminta tidak dapat dipenuhi"
                     )
                 
                 # Clamp end
@@ -296,11 +296,11 @@ async def get_asset(
         if "nosuchkey" in error_msg or "not found" in error_msg:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="File not found"
+                detail="File tidak ditemukan"
             )
         
         logger.error(f"Error streaming asset {path}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve file"
+            detail="Gagal mengambil file"
         )

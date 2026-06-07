@@ -124,7 +124,7 @@ def _format_audit_log_detail_response(log) -> AuditLogDetailResponse:
     "/logs",
     response_model=AuditLogListResponse,
     responses={
-        403: {"description": "Admin access required"},
+        403: {"description": "Akses admin diperlukan"},
         422: {"description": "Invalid query parameters"},
     },
 )
@@ -191,8 +191,8 @@ async def list_audit_logs(
     "/logs/{log_id}",
     response_model=AuditLogDetailResponse,
     responses={
-        403: {"description": "Admin access required"},
-        404: {"description": "Audit log not found"},
+        403: {"description": "Akses admin diperlukan"},
+        404: {"description": "Log audit tidak ditemukan"},
     },
 )
 async def get_audit_log(
@@ -211,7 +211,7 @@ async def get_audit_log(
     if not log:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Audit log not found"
+            detail="Log audit tidak ditemukan"
         )
     
     return _format_audit_log_detail_response(log)
@@ -225,7 +225,7 @@ async def get_audit_log(
     "/stats",
     response_model=AuditStatsSummary,
     responses={
-        403: {"description": "Admin access required"},
+        403: {"description": "Akses admin diperlukan"},
     },
 )
 async def get_audit_stats(
@@ -303,8 +303,8 @@ async def get_audit_stats(
     "/users/{user_id}/activity",
     response_model=UserActivitySummary,
     responses={
-        403: {"description": "Admin access required"},
-        404: {"description": "User not found"},
+        403: {"description": "Akses admin diperlukan"},
+        404: {"description": "Pengguna tidak ditemukan"},
     },
 )
 async def get_user_activity(
@@ -328,7 +328,7 @@ async def get_user_activity(
     if not summary.get("email"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            detail="Pengguna tidak ditemukan"
         )
     
     actions_by_type = [
@@ -354,7 +354,7 @@ async def get_user_activity(
     "/resources/{resource_type}/{resource_id}",
     response_model=ResourceActivitySummary,
     responses={
-        403: {"description": "Admin access required"},
+        403: {"description": "Akses admin diperlukan"},
     },
 )
 async def get_resource_activity(
@@ -415,7 +415,7 @@ async def get_resource_activity(
     "/export",
     response_class=PlainTextResponse,
     responses={
-        403: {"description": "Admin access required"},
+        403: {"description": "Akses admin diperlukan"},
     },
 )
 async def export_audit_logs(
@@ -530,7 +530,7 @@ async def export_audit_logs(
 @router.get(
     "/filters",
     responses={
-        403: {"description": "Admin access required"},
+        403: {"description": "Akses admin diperlukan"},
     },
 )
 async def get_available_filters(

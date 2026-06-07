@@ -59,7 +59,7 @@ async def get_current_user_profile(
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            detail="Pengguna tidak ditemukan"
         )
         
     return _user_to_profile_response(user)

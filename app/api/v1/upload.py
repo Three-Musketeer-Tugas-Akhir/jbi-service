@@ -161,10 +161,10 @@ async def get_upload_status(
         return Response(status_code=200, headers=headers)
         
     except NotFoundError:
-        raise HTTPException(status_code=404, detail="Upload not found")
+        raise HTTPException(status_code=404, detail="Upload tidak ditemukan")
     except Exception as e:
         logger.error(f"Failed to get upload status: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get upload status")
+        raise HTTPException(status_code=500, detail="Gagal mendapatkan status upload")
 
 
 @router.patch("/files/{upload_id}")
@@ -204,7 +204,7 @@ async def upload_chunk(
             raise
 
         if chunk_size == 0:
-            raise HTTPException(status_code=400, detail="Empty chunk body")
+            raise HTTPException(status_code=400, detail="Isi bagian file kosong (Empty chunk body)")
 
         if content_length is not None and chunk_size != content_length:
             logger.warning(
@@ -252,12 +252,12 @@ async def upload_chunk(
         )
 
     except NotFoundError:
-        raise HTTPException(status_code=404, detail="Upload not found")
+        raise HTTPException(status_code=404, detail="Upload tidak ditemukan")
     except ValidationError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except StorageError as e:
         logger.error(f"Storage error uploading chunk: {e}")
-        raise HTTPException(status_code=500, detail="Storage error")
+        raise HTTPException(status_code=500, detail="Kesalahan pada penyimpanan")
     except HTTPException:
         raise
     except Exception as e:
@@ -369,10 +369,10 @@ async def cancel_upload(
         )
         
     except NotFoundError:
-        raise HTTPException(status_code=404, detail="Upload not found")
+        raise HTTPException(status_code=404, detail="Upload tidak ditemukan")
     except Exception as e:
         logger.error(f"Failed to cancel upload: {e}")
-        raise HTTPException(status_code=500, detail="Failed to cancel upload")
+        raise HTTPException(status_code=500, detail="Gagal membatalkan upload")
 
 
 @router.get("/files/{upload_id}/status")
@@ -417,10 +417,10 @@ async def get_detailed_status(
         return result
         
     except NotFoundError:
-        raise HTTPException(status_code=404, detail="Upload not found")
+        raise HTTPException(status_code=404, detail="Upload tidak ditemukan")
     except Exception as e:
         logger.error(f"Failed to get upload status: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get upload status")
+        raise HTTPException(status_code=500, detail="Gagal mendapatkan status upload")
 
 
 @router.post("/cleanup")
@@ -435,7 +435,7 @@ async def cleanup_stale_uploads(
     """
     # Check admin permission
     if not current_user.is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
+        raise HTTPException(status_code=403, detail="Akses admin diperlukan")
     
     try:
         async with async_session() as db:
@@ -450,7 +450,7 @@ async def cleanup_stale_uploads(
         
     except Exception as e:
         logger.error(f"Failed to cleanup uploads: {e}")
-        raise HTTPException(status_code=500, detail="Failed to cleanup uploads")
+        raise HTTPException(status_code=500, detail="Gagal membersihkan upload")
 
 
 from fastapi import BackgroundTasks
@@ -479,25 +479,25 @@ async def start_youtube_download(
     try:
         body = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+        raise HTTPException(status_code=400, detail="Format JSON tidak valid")
 
     url = body.get("url", "").strip()
     category = body.get("category")
     dataset_id = body.get("dataset_id")
 
     if not url:
-        raise HTTPException(status_code=400, detail="YouTube URL is required")
+        raise HTTPException(status_code=400, detail="URL YouTube diperlukan")
 
     if not is_valid_youtube_url(url):
         raise HTTPException(
             status_code=400,
-            detail="Invalid YouTube URL. Must be a youtube.com or youtu.be link.",
+            detail="URL YouTube tidak valid. Harus berupa tautan youtube.com atau youtu.be.",
         )
 
     if category and category not in ("SIBI", "BISINDO"):
         raise HTTPException(
             status_code=400,
-            detail="Category must be 'SIBI' or 'BISINDO'",
+            detail="Kategori harus 'SIBI' atau 'BISINDO'",
         )
     
     # Parse dataset_id
@@ -534,7 +534,7 @@ async def start_youtube_download(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to start YouTube download: {e}")
-        raise HTTPException(status_code=500, detail="Failed to start download")
+        raise HTTPException(status_code=500, detail="Gagal memulai unduhan")
 
 
 @router.get("/youtube/{download_id}")
@@ -552,11 +552,11 @@ async def get_youtube_download_progress(
 
     progress = get_download_progress(download_id)
     if not progress:
-        raise HTTPException(status_code=404, detail="Download not found")
+        raise HTTPException(status_code=404, detail="Unduhan tidak ditemukan")
 
     # Verify ownership
     if progress.user_id != str(current_user.id):
-        raise HTTPException(status_code=404, detail="Download not found")
+        raise HTTPException(status_code=404, detail="Unduhan tidak ditemukan")
 
     return progress.to_dict()
 

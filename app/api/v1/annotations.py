@@ -235,7 +235,7 @@ async def crop_utterance_physically(
     edit = result.scalars().first()
     
     if not edit or not edit.utterance_corrections:
-        raise HTTPException(status_code=404, detail="Active edit not found")
+        raise HTTPException(status_code=404, detail="Sesi pengeditan aktif tidak ditemukan")
         
     utt_list = list(edit.utterance_corrections)
     utt_idx_in_array = None
@@ -247,7 +247,7 @@ async def crop_utterance_physically(
             break
             
     if target_utt is None:
-        raise HTTPException(status_code=404, detail="Utterance index not found in active edit")
+        raise HTTPException(status_code=404, detail="Indeks ucapan (utterance) tidak ditemukan dalam sesi pengeditan aktif")
         
     # Mark as 'OK' synchronously so frontend can lock it instantly
     utt_list[utt_idx_in_array]["status"] = "OK"
@@ -331,7 +331,7 @@ async def get_merged_video_for_utterance(
     queue_entry = await queue_service.queue_repo.get_by_segment(segment_id)
     is_admin = current_user.has_role("admin")
     if not queue_entry or (not is_admin and queue_entry.annotator_id != current_user.id):
-        raise HTTPException(status_code=403, detail="Segment not assigned to you")
+        raise HTTPException(status_code=403, detail="Segmen ini tidak ditugaskan kepada Anda")
     
     # Get job_id
     segment_result = await db.execute(
@@ -339,7 +339,7 @@ async def get_merged_video_for_utterance(
     )
     segment = segment_result.scalar_one_or_none()
     if not segment:
-        raise HTTPException(status_code=404, detail="Segment not found")
+        raise HTTPException(status_code=404, detail="Segmen tidak ditemukan")
     
     # Get or create merged video
     result = await UtteranceMergeService.get_or_create_merged_video(
@@ -349,7 +349,7 @@ async def get_merged_video_for_utterance(
     )
     
     if not result:
-        raise HTTPException(status_code=404, detail="Could not create merged video")
+        raise HTTPException(status_code=404, detail="Tidak dapat membuat video hasil penggabungan")
     
     # Convert direct MinIO URL to proxy URL (browser can't access internal MinIO)
     from app.services.streaming_token_service import streaming_token_service

@@ -288,7 +288,7 @@ class PipelineJobService:
         job = result.scalar_one_or_none()
         
         if not job:
-            return {"error": "Job not found"}
+            return {"error": "Pekerjaan (Job) tidak ditemukan"}
         
         queue_result = await self.db.execute(
             select(QueueJob).where(QueueJob.job_id == job_id).order_by(QueueJob.priority)

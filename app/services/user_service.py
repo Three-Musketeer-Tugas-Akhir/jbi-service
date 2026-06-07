@@ -303,7 +303,7 @@ class UserService:
             logger.exception("Error changing password")
             return {
                 "success": False,
-                "message": "An error occurred while changing your password."
+                "message": "Terjadi kesalahan saat mengubah password Anda."
             }
 
     async def force_change_password(
@@ -402,7 +402,7 @@ class UserService:
             logger.exception("Error in force changing password")
             return {
                 "success": False,
-                "message": "An error occurred while changing your password."
+                "message": "Terjadi kesalahan saat mengubah password Anda."
             }
             
     async def get_password_change_history(self, user_id: UUID) -> dict:
@@ -426,7 +426,7 @@ class UserService:
             logger.exception("Error getting password change history")
             return {
                 "success": False,
-                "message": "An error occurred while fetching password change history."
+                "message": "Terjadi kesalahan saat mengambil riwayat perubahan password."
             }
     
     def _validate_new_password(self, password: str) -> Optional[str]:
@@ -545,7 +545,7 @@ class UserService:
             logger.exception("Error listing users")
             return {
                 "success": False,
-                "message": "An error occurred while listing users."
+                "message": "Terjadi kesalahan saat memuat daftar pengguna."
             }
     
     async def create_user(
@@ -641,7 +641,7 @@ class UserService:
             if await self.repository.email_exists(email):
                 return {
                     "success": False,
-                    "message": "A user with this email address already exists."
+                    "message": "Pengguna dengan alamat email ini sudah terdaftar."
                 }
             
             # Hash password
@@ -673,7 +673,7 @@ class UserService:
             result = {
                 "success": True,
                 "user": user,
-                "message": "User created successfully."
+                "message": "Pengguna berhasil dibuat."
             }
             
             # Include generated password in response if auto-generated
@@ -757,7 +757,7 @@ class UserService:
                     if email_exists:
                         return {
                             "success": False,
-                            "message": "This email address is already in use by another user."
+                            "message": "Alamat email ini sudah digunakan oleh pengguna lain."
                         }
             
             # Validate roles if provided
@@ -793,7 +793,7 @@ class UserService:
                     if len(active_admins) <= 1:
                         return {
                             "success": False,
-                            "message": "Cannot deactivate the last active admin user."
+                            "message": "Tidak dapat menonaktifkan akun admin aktif terakhir."
                         }
             
             # Update user
@@ -808,7 +808,7 @@ class UserService:
             if not updated:
                 return {
                     "success": False,
-                    "message": "Failed to update user."
+                    "message": "Gagal memperbarui pengguna."
                 }
             
             await self.session.commit()
@@ -823,7 +823,7 @@ class UserService:
             result = {
                 "success": True,
                 "user": user,
-                "message": "User updated successfully."
+                "message": "Pengguna berhasil diperbarui."
             }
             
             # Include previous_roles in response if roles were changed
@@ -838,7 +838,7 @@ class UserService:
             logger.exception("Error updating user")
             return {
                 "success": False,
-                "message": "An error occurred while updating the user."
+                "message": "Terjadi kesalahan saat memperbarui pengguna."
             }
     
     async def deactivate_user(
@@ -872,7 +872,7 @@ class UserService:
                 return {
                     "success": False,
                     "error_code": "SELF_DEACTIVATION",
-                    "message": "Cannot deactivate your own account."
+                    "message": "Tidak dapat menonaktifkan akun Anda sendiri."
                 }
             
             # Get target user
@@ -889,7 +889,7 @@ class UserService:
                 return {
                     "success": True,
                     "user": user,
-                    "message": "User is already deactivated.",
+                    "message": "Pengguna sudah dinonaktifkan.",
                     "tokens_revoked": 0
                 }
             
@@ -923,7 +923,7 @@ class UserService:
             return {
                 "success": True,
                 "user": result["user"],
-                "message": "User deactivated successfully.",
+                "message": "Pengguna berhasil dinonaktifkan.",
                 "tokens_revoked": tokens_revoked
             }
             
@@ -934,7 +934,7 @@ class UserService:
             return {
                 "success": False,
                 "error_code": "INTERNAL_ERROR",
-                "message": "An error occurred while deactivating the user."
+                "message": "Terjadi kesalahan saat menonaktifkan pengguna."
             }
     
     async def update_role(
@@ -988,7 +988,7 @@ class UserService:
                 return {
                     "success": False,
                     "error_code": "INACTIVE_USER",
-                    "message": "Cannot modify role of inactive user."
+                    "message": "Tidak dapat mengubah peran pengguna yang tidak aktif."
                 }
             
             # Check for self-modification
@@ -996,7 +996,7 @@ class UserService:
                 return {
                     "success": False,
                     "error_code": "SELF_MODIFICATION",
-                    "message": "Cannot modify your own role."
+                    "message": "Tidak dapat mengubah peran Anda sendiri."
                 }
             
             # Check if role is actually changing
@@ -1029,7 +1029,7 @@ class UserService:
             if not updated:
                 return {
                     "success": False,
-                    "message": "Failed to update user role."
+                    "message": "Gagal memperbarui peran pengguna."
                 }
             
             # Log audit event before commit (same transaction)
@@ -1053,7 +1053,7 @@ class UserService:
                 "success": True,
                 "user": user,
                 "previous_role": old_role,
-                "message": "User role updated successfully."
+                "message": "Peran pengguna berhasil diperbarui."
             }
             
         except Exception as e:
@@ -1062,7 +1062,7 @@ class UserService:
             logger.exception("Error updating user role")
             return {
                 "success": False,
-                "message": "An error occurred while updating the user role."
+                "message": "Terjadi kesalahan saat memperbarui peran pengguna."
             }
     
     async def reactivate_user(self, user_id: UUID) -> dict:
@@ -1088,7 +1088,7 @@ class UserService:
             if user.is_active:
                 return {
                     "success": False,
-                    "message": "User is already active."
+                    "message": "Pengguna sudah aktif."
                 }
             
             # Reactivate the user
@@ -1100,7 +1100,7 @@ class UserService:
             if not updated:
                 return {
                     "success": False,
-                    "message": "Failed to reactivate user."
+                    "message": "Gagal mengaktifkan kembali pengguna."
                 }
             
             await self.session.commit()
@@ -1114,7 +1114,7 @@ class UserService:
             return {
                 "success": True,
                 "user": user,
-                "message": "User reactivated successfully."
+                "message": "Pengguna berhasil diaktifkan kembali."
             }
             
         except Exception as e:
@@ -1123,7 +1123,7 @@ class UserService:
             logger.exception("Error reactivating user")
             return {
                 "success": False,
-                "message": "An error occurred while reactivating the user."
+                "message": "Terjadi kesalahan saat mengaktifkan kembali pengguna."
             }
     
     async def list_users(

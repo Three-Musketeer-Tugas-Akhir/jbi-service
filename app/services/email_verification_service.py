@@ -148,7 +148,7 @@ class EmailVerificationService:
             if user.is_email_verified:
                 return {
                     "success": False,
-                    "message": "Email is already verified."
+                    "message": "Email sudah diverifikasi."
                 }
             
             # Check rate limiting (per day)
@@ -161,7 +161,7 @@ class EmailVerificationService:
                 logger.warning(f"Rate limit exceeded for verification emails: {user.email}")
                 return {
                     "success": False,
-                    "message": "Too many verification requests. Please try again later.",
+                    "message": "Terlalu banyak permintaan verifikasi. Silakan coba lagi nanti.",
                     "retry_after": 86400  # Seconds (24 hours)
                 }
             
@@ -199,12 +199,12 @@ class EmailVerificationService:
                 logger.error(f"Failed to send verification email: {e}")
                 return {
                     "success": False,
-                    "message": "Failed to send verification email. Please try again."
+                    "message": "Gagal mengirim email verifikasi. Silakan coba lagi."
                 }
             
             return {
                 "success": True,
-                "message": "Verification email sent. Please check your inbox."
+                "message": "Email verifikasi telah dikirim. Silakan periksa kotak masuk Anda."
             }
             
         except Exception as e:
@@ -212,7 +212,7 @@ class EmailVerificationService:
             logger.exception("Error sending verification email")
             return {
                 "success": False,
-                "message": "An error occurred. Please try again."
+                "message": "Terjadi kesalahan. Silakan coba lagi."
             }
     
     async def verify_email(
@@ -234,7 +234,7 @@ class EmailVerificationService:
             if parsed is None:
                 return {
                     "success": False,
-                    "message": "Invalid verification token."
+                    "message": "Token verifikasi tidak valid."
                 }
             
             token_id, secret = parsed
@@ -245,26 +245,26 @@ class EmailVerificationService:
             if verification_token is None:
                 return {
                     "success": False,
-                    "message": "Invalid or expired verification token."
+                    "message": "Token verifikasi tidak valid atau sudah kedaluwarsa."
                 }
             
             if verification_token.is_used:
                 return {
                     "success": False,
-                    "message": "This verification link has already been used."
+                    "message": "Tautan verifikasi ini sudah pernah digunakan."
                 }
             
             if verification_token.is_expired:
                 return {
                     "success": False,
-                    "message": "This verification link has expired. Please request a new one."
+                    "message": "Tautan verifikasi ini sudah kedaluwarsa. Silakan minta tautan baru."
                 }
             
             # Verify the secret against the hash
             if not self._verify_secret(secret, verification_token.token_hash):
                 return {
                     "success": False,
-                    "message": "Invalid verification token."
+                    "message": "Token verifikasi tidak valid."
                 }
             
             # Get user
@@ -282,7 +282,7 @@ class EmailVerificationService:
                 await self.session.commit()
                 return {
                     "success": True,
-                    "message": "Email is already verified."
+                    "message": "Email sudah diverifikasi."
                 }
             
             # Mark email as verified
@@ -300,7 +300,7 @@ class EmailVerificationService:
             
             return {
                 "success": True,
-                "message": "Email verified successfully. You can now use all features."
+                "message": "Email berhasil diverifikasi. Anda sekarang dapat menggunakan semua fitur."
             }
             
         except Exception as e:
@@ -308,7 +308,7 @@ class EmailVerificationService:
             logger.exception("Error verifying email")
             return {
                 "success": False,
-                "message": "An error occurred while verifying your email. Please try again."
+                "message": "Terjadi kesalahan saat memverifikasi email Anda. Silakan coba lagi."
             }
     
     async def get_verification_status(
@@ -343,7 +343,7 @@ class EmailVerificationService:
             logger.exception("Error getting verification status")
             return {
                 "success": False,
-                "message": "An error occurred. Please try again."
+                "message": "Terjadi kesalahan. Silakan coba lagi."
             }
 
 

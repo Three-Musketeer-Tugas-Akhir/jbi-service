@@ -1,0 +1,93 @@
+app/services/job_service.py:            "message": "Job cancelled successfully"
+app/services/annotation_submission_service.py:            "message": "Annotation submitted for review",
+app/services/annotation_submission_service.py:                "message": "This segment has not been submitted for review"
+app/services/annotation_submission_service.py:                "message": "Submitted, awaiting review assignment"
+app/services/user_service.py:                    "message": "User tidak ditemukan."
+app/services/user_service.py:                        "message": "Tidak ada perubahan yang dilakukan."
+app/services/user_service.py:                        "message": "Alamat email ini sudah digunakan."
+app/services/user_service.py:                "message": "Profil berhasil diperbarui."
+app/services/user_service.py:                "message": "Terjadi kesalahan saat memperbarui profil Anda."
+app/services/user_service.py:                    "message": "User not found."
+app/services/user_service.py:                    "message": "Current password is incorrect."
+app/services/user_service.py:                "message": "Password changed successfully."
+app/services/user_service.py:                "message": "An error occurred while changing your password."
+app/services/user_service.py:                    "message": "User not found."
+app/services/user_service.py:                    "message": "User is not required to change password."
+app/services/user_service.py:                    "message": "Current password is incorrect."
+app/services/user_service.py:                    "message": "You cannot use the default temporary password format. Please choose a different password."
+app/services/user_service.py:                "message": "Password changed successfully."
+app/services/user_service.py:                "message": "An error occurred while changing your password."
+app/services/user_service.py:                "message": "An error occurred while fetching password change history."
+app/services/user_service.py:                "message": "An error occurred while listing users."
+app/services/user_service.py:                    "message": "A user with this email address already exists."
+app/services/user_service.py:                "message": "User created successfully."
+app/services/user_service.py:                "message": "An error occurred while creating the user."
+app/services/user_service.py:                    "message": "User not found."
+app/services/user_service.py:                            "message": "This email address is already in use by another user."
+app/services/user_service.py:                            "message": "Cannot deactivate the last active admin user."
+app/services/user_service.py:                    "message": "Failed to update user."
+app/services/user_service.py:                "message": "User updated successfully."
+app/services/user_service.py:                "message": "An error occurred while updating the user."
+app/services/user_service.py:                    "message": "Cannot deactivate your own account."
+app/services/user_service.py:                    "message": "User not found."
+app/services/user_service.py:                    "message": "User is already deactivated.",
+app/services/user_service.py:                "message": "User deactivated successfully.",
+app/services/user_service.py:                "message": "An error occurred while deactivating the user."
+app/services/user_service.py:                    "message": "User not found."
+app/services/user_service.py:                    "message": "Cannot modify role of inactive user."
+app/services/user_service.py:                    "message": "Cannot modify your own role."
+app/services/user_service.py:                    "message": "Failed to update user role."
+app/services/user_service.py:                "message": "User role updated successfully."
+app/services/user_service.py:                "message": "An error occurred while updating the user role."
+app/services/user_service.py:                    "message": "User not found."
+app/services/user_service.py:                    "message": "User is already active."
+app/services/user_service.py:                    "message": "Failed to reactivate user."
+app/services/user_service.py:                "message": "User reactivated successfully."
+app/services/user_service.py:                "message": "An error occurred while reactivating the user."
+app/services/email_verification_service.py:                    "message": "User not found."
+app/services/email_verification_service.py:                    "message": "Email is already verified."
+app/services/email_verification_service.py:                    "message": "Too many verification requests. Please try again later.",
+app/services/email_verification_service.py:                    "message": "Failed to send verification email. Please try again."
+app/services/email_verification_service.py:                "message": "Verification email sent. Please check your inbox."
+app/services/email_verification_service.py:                "message": "An error occurred. Please try again."
+app/services/email_verification_service.py:                    "message": "Invalid verification token."
+app/services/email_verification_service.py:                    "message": "Invalid or expired verification token."
+app/services/email_verification_service.py:                    "message": "This verification link has already been used."
+app/services/email_verification_service.py:                    "message": "This verification link has expired. Please request a new one."
+app/services/email_verification_service.py:                    "message": "Invalid verification token."
+app/services/email_verification_service.py:                    "message": "User not found."
+app/services/email_verification_service.py:                    "message": "Email is already verified."
+app/services/email_verification_service.py:                "message": "Email verified successfully. You can now use all features."
+app/services/email_verification_service.py:                "message": "An error occurred while verifying your email. Please try again."
+app/services/email_verification_service.py:                    "message": "User not found."
+app/services/email_verification_service.py:                "message": "An error occurred. Please try again."
+app/services/password_reset_service.py:                    "message": "If an account exists with this email, you will receive reset instructions."
+app/services/password_reset_service.py:                    "message": "Too many reset requests. Please try again later.",
+app/services/password_reset_service.py:                "message": "If an account exists with this email, you will receive reset instructions."
+app/services/password_reset_service.py:                "message": "If an account exists with this email, you will receive reset instructions."
+app/services/password_reset_service.py:                    "message": "Invalid reset token."
+app/services/password_reset_service.py:                    "message": "Invalid or expired reset token."
+app/services/password_reset_service.py:                    "message": "This reset link has already been used."
+app/services/password_reset_service.py:                    "message": "This reset link has expired. Please request a new one."
+app/services/password_reset_service.py:                    "message": "Invalid reset token."
+app/services/password_reset_service.py:                    "message": "User not found."
+app/services/password_reset_service.py:                "message": "Password has been reset successfully. You can now log in with your new password."
+app/services/password_reset_service.py:                "message": "An error occurred while resetting your password. Please try again."
+app/services/token_refresh_service.py:                return {"success": False, "message": "Token missing jti claim"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Token missing exp claim"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Invalid refresh token"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Invalid token type"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Token missing jti claim"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Invalid jti in token"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Invalid refresh token"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Invalid refresh token"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Refresh token expired, please login again"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Refresh token expired, please login again"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Token missing role claim"}
+app/services/token_refresh_service.py:                "message": "Token refreshed successfully"
+app/services/token_refresh_service.py:                return {"success": False, "message": "Token missing jti claim"}
+app/services/token_refresh_service.py:                return {"success": False, "message": "Token not found or already revoked"}
+app/services/asr_review_service.py:            "message": "ASR transcript approved and moved to annotation queue",
+app/services/asr_review_service.py:            "message": "ASR transcript corrected and moved to annotation queue",
+app/services/asr_review_service.py:            "message": "Segment flagged for reprocessing",
+app/services/asr_review_service.py:            "message": "Ready for review"

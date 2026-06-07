@@ -24,7 +24,7 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
     status_code=status.HTTP_200_OK,
     summary="Get dashboard statistics (admin only)",
     responses={
-        403: {"description": "Admin access required"},
+        403: {"description": "Akses admin diperlukan"},
     },
 )
 async def get_dashboard(

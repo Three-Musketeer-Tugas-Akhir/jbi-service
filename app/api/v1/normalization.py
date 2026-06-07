@@ -252,7 +252,7 @@ async def apply_normalization(
     if not ok_utterances:
         raise HTTPException(
             status_code=400,
-            detail="No OK-status utterances found for this job",
+            detail="Tidak ditemukan ucapan (utterance) berstatus OK untuk pekerjaan ini",
         )
 
     # Build normalized map: (segment_id, utterance_index) → (norm_transcript, norm_glosa)

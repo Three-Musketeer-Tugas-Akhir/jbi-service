@@ -1,0 +1,65 @@
+app/api/v1/auth.py:                    detail="Akun dinonaktifkan.",
+app/api/v1/auth.py:                detail="Email atau password salah",
+app/api/v1/auth.py:            detail="An error occurred during authentication"
+app/api/v1/auth.py:            detail="An error occurred during token refresh"
+app/api/v1/auth.py:            detail="An error occurred while resetting your password. Please try again."
+app/api/v1/auth.py:            detail="An error occurred while changing your password. Please try again."
+app/api/v1/auth.py:            detail="An error occurred while verifying your email. Please try again."
+app/api/v1/upload.py:        raise HTTPException(status_code=404, detail="Upload not found")
+app/api/v1/upload.py:        raise HTTPException(status_code=500, detail="Failed to get upload status")
+app/api/v1/upload.py:            raise HTTPException(status_code=400, detail="Empty chunk body")
+app/api/v1/upload.py:        raise HTTPException(status_code=404, detail="Upload not found")
+app/api/v1/upload.py:        raise HTTPException(status_code=500, detail="Storage error")
+app/api/v1/upload.py:        raise HTTPException(status_code=404, detail="Upload not found")
+app/api/v1/upload.py:        raise HTTPException(status_code=500, detail="Failed to cancel upload")
+app/api/v1/upload.py:        raise HTTPException(status_code=404, detail="Upload not found")
+app/api/v1/upload.py:        raise HTTPException(status_code=500, detail="Failed to get upload status")
+app/api/v1/upload.py:        raise HTTPException(status_code=403, detail="Admin access required")
+app/api/v1/upload.py:        raise HTTPException(status_code=500, detail="Failed to cleanup uploads")
+app/api/v1/upload.py:        raise HTTPException(status_code=400, detail="Invalid JSON body")
+app/api/v1/upload.py:        raise HTTPException(status_code=400, detail="YouTube URL is required")
+app/api/v1/upload.py:            detail="Invalid YouTube URL. Must be a youtube.com or youtu.be link.",
+app/api/v1/upload.py:            detail="Category must be 'SIBI' or 'BISINDO'",
+app/api/v1/upload.py:        raise HTTPException(status_code=500, detail="Failed to start download")
+app/api/v1/upload.py:        raise HTTPException(status_code=404, detail="Download not found")
+app/api/v1/upload.py:        raise HTTPException(status_code=404, detail="Download not found")
+app/api/v1/users.py:            detail="User not found"
+app/api/v1/admin_audit.py:            detail="Audit log not found"
+app/api/v1/admin_audit.py:            detail="User not found"
+app/api/v1/admin_annotations.py:        raise HTTPException(status_code=404, detail="Job tidak ditemukan")
+app/api/v1/admin_annotations.py:        raise HTTPException(status_code=404, detail="Annotator tidak ditemukan")
+app/api/v1/admin_annotations.py:        raise HTTPException(status_code=400, detail="User harus berperan sebagai annotator atau admin")
+app/api/v1/admin_annotations.py:            detail="Tidak ada segment yang di-assign untuk job ini. Gunakan /assign-job untuk assign terlebih dahulu."
+app/api/v1/jobs.py:            detail="Either 'file' or 'url' must be provided",
+app/api/v1/jobs.py:        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+app/api/v1/jobs.py:        raise HTTPException(status_code=500, detail="Failed to update category")
+app/api/v1/jobs.py:        raise HTTPException(status_code=500, detail="Failed to start processing")
+app/api/v1/jobs.py:                detail="Cannot determine the failed processing stage. Please use full retry."
+app/api/v1/jobs.py:                detail="Cannot determine failed stage. Please use full retry."
+app/api/v1/jobs.py:             raise HTTPException(status_code=400, detail="Invalid retry mode")
+app/api/v1/jobs.py:        raise HTTPException(status_code=500, detail="Failed to start retry")
+app/api/v1/jobs.py:            detail="No segments to retry. All segments already have transcripts."
+app/api/v1/jobs.py:            detail="All specified segments already have transcripts. Nothing to retry."
+app/api/v1/jobs.py:        raise HTTPException(status_code=500, detail="Failed to queue ASR retry job")
+app/api/v1/jobs.py:            detail="Segment file not found on disk — it may have been cleaned up",
+app/api/v1/jobs.py:        raise HTTPException(status_code=404, detail="Job not found")
+app/api/v1/admin.py:            detail="Either email or both first_name and last_name are required"
+app/api/v1/admin.py:            detail="Role is required"
+app/api/v1/admin.py:                    detail="User with this email already exists"
+app/api/v1/admin.py:            detail="User with this email already exists"
+app/api/v1/admin.py:            detail="An error occurred while creating the user"
+app/api/v1/admin.py:            detail="User not found"
+app/api/v1/admin.py:            detail="User not found"
+app/api/v1/assets.py:                    detail="Invalid or expired streaming token"
+app/api/v1/assets.py:                    detail="Authentication required"
+app/api/v1/assets.py:                        detail="Not authorized to access this resource"
+app/api/v1/assets.py:                        detail="Requested Range Not Satisfiable"
+app/api/v1/assets.py:                detail="File not found"
+app/api/v1/assets.py:            detail="Failed to retrieve file"
+app/api/v1/notifications.py:            detail="Notification not found or access denied"
+app/api/v1/annotations.py:        raise HTTPException(status_code=404, detail="Active edit not found")
+app/api/v1/annotations.py:        raise HTTPException(status_code=404, detail="Utterance index not found in active edit")
+app/api/v1/annotations.py:        raise HTTPException(status_code=403, detail="Segment not assigned to you")
+app/api/v1/annotations.py:        raise HTTPException(status_code=404, detail="Segment not found")
+app/api/v1/annotations.py:        raise HTTPException(status_code=404, detail="Could not create merged video")
+app/api/v1/normalization.py:            detail="No OK-status utterances found for this job",

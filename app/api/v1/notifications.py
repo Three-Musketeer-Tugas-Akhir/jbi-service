@@ -64,7 +64,7 @@ async def mark_notification_as_read(
         from fastapi import HTTPException
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Notification not found or access denied"
+            detail="Notifikasi tidak ditemukan atau akses ditolak"
         )
     
     await db.commit()

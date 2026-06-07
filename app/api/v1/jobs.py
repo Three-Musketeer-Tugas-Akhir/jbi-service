@@ -239,7 +239,7 @@ async def create_job(
         logger.debug("create_job rejected — no file or url provided")
         raise HTTPException(
             status_code=400,
-            detail="Either 'file' or 'url' must be provided",
+            detail="Harus menyediakan 'file' atau 'url'",
         )
     
     # Validate category if provided
@@ -329,7 +329,7 @@ async def _handle_file_upload(job_id: str, file: UploadFile) -> tuple[Path, int]
         logger.debug("_handle_file_upload — file written successfully")
     except IOError:
         logger.exception("Failed to save uploaded file for job %s", job_id)
-        raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+        raise HTTPException(status_code=500, detail="Gagal menyimpan file yang diunggah")
 
     try:
         validate_video_file(str(file_path))
@@ -447,7 +447,7 @@ async def update_job_category(
     # Update category
     success = await JobRepository(session).update_category(job_id, category)
     if not success:
-        raise HTTPException(status_code=500, detail="Failed to update category")
+        raise HTTPException(status_code=500, detail="Gagal memperbarui kategori")
     
     logger.info("Job category updated: job_id=%s, category=%s", job_id, category)
     
@@ -515,7 +515,7 @@ async def start_pipeline_processing(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Failed to start pipeline processing for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail="Failed to start processing")
+        raise HTTPException(status_code=500, detail="Gagal memulai pemrosesan")
 
 
 # ── POST /pipeline/jobs/start-classified ─────────────────────────────────
@@ -634,12 +634,12 @@ async def retry_job(
             # Job never entered pipeline workers (legacy or pre-processing failure)
             raise HTTPException(
                 status_code=400,
-                detail="Cannot determine the failed processing stage. Please use full retry."
+                detail="Tidak dapat menentukan tahapan yang gagal. Silakan lakukan retry penuh (full retry)."
             )
         elif not failed_stage:
             raise HTTPException(
                 status_code=400,
-                detail="Cannot determine failed stage. Please use full retry."
+                detail="Tidak dapat menentukan tahapan yang gagal. Silakan lakukan retry penuh."
             )
 
     retry_service = RetryService(session)
@@ -651,7 +651,7 @@ async def retry_job(
             retried_job = await retry_service.retry_from_stage(job_uuid, failed_stage)
             message = f"Pipeline partial retry started from stage '{failed_stage}'"
         else:
-             raise HTTPException(status_code=400, detail="Invalid retry mode")
+             raise HTTPException(status_code=400, detail="Mode retry tidak valid")
         
         # NOTE: RetryService already commits DB changes before publishing
         # to Kafka. Do NOT add session.commit() here — it could overwrite
@@ -674,7 +674,7 @@ async def retry_job(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error("Failed to retry pipeline job %s (%s): %s", job_id, request.mode, e)
-        raise HTTPException(status_code=500, detail="Failed to start retry")
+        raise HTTPException(status_code=500, detail="Gagal memulai retry")
 
 
 # ── POST /jobs/{job_id}/retry-asr ────────────────────────────────────────
@@ -741,7 +741,7 @@ async def retry_asr(
     if not segments_to_retry:
         raise HTTPException(
             status_code=400,
-            detail="No segments to retry. All segments already have transcripts."
+            detail="Tidak ada segmen untuk di-retry. Semua segmen sudah memiliki transkrip."
         )
     
     # Check which segments already have transcripts (warn but don't skip if explicitly requested)
@@ -758,7 +758,7 @@ async def retry_asr(
     if not segments_missing:
         raise HTTPException(
             status_code=400,
-            detail="All specified segments already have transcripts. Nothing to retry."
+            detail="Semua segmen yang dipilih sudah memiliki transkrip. Tidak ada yang perlu di-retry."
         )
     
     # Update job status to TRANSCRIBING
@@ -780,7 +780,7 @@ async def retry_asr(
         )
     except Exception as e:
         logger.error("Failed to publish ASR retry job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail="Failed to queue ASR retry job")
+        raise HTTPException(status_code=500, detail="Gagal memasukkan pekerjaan retry ASR ke dalam antrean")
     
     return JobRetryASRResponse(
         id=job_id,
@@ -1095,7 +1095,7 @@ async def download_segment(job_id: str, index: int, session: AsyncSession = Depe
         )
         raise HTTPException(
             status_code=404,
-            detail="Segment file not found on disk — it may have been cleaned up",
+            detail="File segmen tidak ditemukan di penyimpanan — mungkin sudah dibersihkan",
         )
 
     return FileResponse(
@@ -2197,7 +2197,7 @@ async def get_dataset_explorer(
     import uuid
     job = await job_repo.get_by_id(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Pekerjaan (Job) tidak ditemukan")
 
     segment_repo = SegmentRepository(db)
     edit_repo = AnnotationEditRepository(db)

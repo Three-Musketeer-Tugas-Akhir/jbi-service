@@ -89,7 +89,7 @@ from app.schemas.auth import AdminCreateUserRequest, PasswordChangeHistoryRespon
     "/users",
     status_code=status.HTTP_201_CREATED,
     responses={
-        403: {"description": "Admin access required"},
+        403: {"description": "Akses admin diperlukan"},
         409: {"description": "User already exists"},
         422: {"description": "Validation error"},
     },
@@ -121,13 +121,13 @@ async def create_user(
     if not email and not (first_name and last_name):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Either email or both first_name and last_name are required"
+            detail="Email atau (nama depan dan nama belakang) wajib diisi"
         )
     
     if not role:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Role is required"
+            detail="Role (Peran) wajib diisi"
         )
     
     try:
@@ -148,7 +148,7 @@ async def create_user(
             if "already exists" in error_msg.lower():
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="User with this email already exists"
+                    detail="Pengguna dengan email ini sudah terdaftar"
                 )
             
             # Other validation errors
@@ -178,13 +178,13 @@ async def create_user(
         await db_session.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="User with this email already exists"
+            detail="Pengguna dengan email ini sudah terdaftar"
         )
     except Exception as e:
         await db_session.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred while creating the user"
+            detail="Terjadi kesalahan saat membuat pengguna"
         )
 
 
@@ -193,8 +193,8 @@ async def create_user(
     response_model=UserRoleUpdateResponse,
     responses={
         400: {"description": "Bad request - self-modification or same role"},
-        403: {"description": "Admin access required"},
-        404: {"description": "User not found"},
+        403: {"description": "Akses admin diperlukan"},
+        404: {"description": "Pengguna tidak ditemukan"},
         422: {"description": "Validation error - invalid role"},
     },
 )
@@ -278,8 +278,8 @@ async def update_user_role(
     response_model=UserDeactivateResponse,
     responses={
         400: {"description": "Cannot deactivate own account"},
-        403: {"description": "Admin access required"},
-        404: {"description": "User not found"},
+        403: {"description": "Akses admin diperlukan"},
+        404: {"description": "Pengguna tidak ditemukan"},
     },
 )
 async def deactivate_user(
@@ -345,7 +345,7 @@ async def deactivate_user(
     "/users",
     response_model=UserListResponse,
     responses={
-        403: {"description": "Admin access required"},
+        403: {"description": "Akses admin diperlukan"},
     },
 )
 async def list_users(
@@ -419,8 +419,8 @@ async def list_users(
     "/users/{user_id}",
     response_model=UserDetailResponse,
     responses={
-        403: {"description": "Admin access required"},
-        404: {"description": "User not found"},
+        403: {"description": "Akses admin diperlukan"},
+        404: {"description": "Pengguna tidak ditemukan"},
     },
 )
 async def get_user(
@@ -442,7 +442,7 @@ async def get_user(
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            detail="Pengguna tidak ditemukan"
         )
     
     # Get primary role
@@ -463,8 +463,8 @@ async def get_user(
     "/users/{user_id}/password-history",
     response_model=PasswordChangeHistoryResponse,
     responses={
-        403: {"description": "Admin access required"},
-        404: {"description": "User not found"},
+        403: {"description": "Akses admin diperlukan"},
+        404: {"description": "Pengguna tidak ditemukan"},
     },
 )
 async def get_user_password_history(
@@ -486,7 +486,7 @@ async def get_user_password_history(
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
+            detail="Pengguna tidak ditemukan"
         )
         
     result = await user_service.get_password_change_history(user_id)
