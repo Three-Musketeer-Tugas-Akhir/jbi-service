@@ -149,51 +149,52 @@ class UserRepository:
         from sqlalchemy.orm import joinedload
         from sqlalchemy import desc, asc
         
+        from app.db.models.auth import Role, user_roles as user_roles_table
+
         # Build base query with roles eager loaded
         base_stmt = select(User).options(joinedload(User.roles))
-        count_stmt = select(func.count(User.id))
-        
-        # Apply filters
+        count_stmt = select(func.count(User.id.distinct()))
+
+        # Apply filters directly in SQL so pagination and total are correct
         filters = []
         if is_active is not None:
             filters.append(User.is_active == is_active)
         if search:
-            filters.append(
-                func.lower(User.email).like(f"%{search.lower()}%")
+            filters.append(func.lower(User.email).like(f"%{search.lower()}%"))
+        if role:
+            # Filter via EXISTS subquery on the join table so only users whose
+            # PRIMARY (first-stored) role matches are returned. Using ANY would
+            # expose users who have multiple roles under every filter they match.
+            role_subq = (
+                select(user_roles_table.c.user_id)
+                .join(Role, user_roles_table.c.role_id == Role.id)
+                .where(Role.name == role)
+                .correlate(User)
             )
-        
+            filters.append(User.id.in_(role_subq))
+
         if filters:
             base_stmt = base_stmt.where(and_(*filters))
             count_stmt = count_stmt.where(and_(*filters))
-        
-        # Get total count (efficient database count)
+
+        # Total count reflects the filtered set (used for correct pagination)
         count_result = await self.session.execute(count_stmt)
         total = count_result.scalar_one()
-        
+
         # Apply sorting
         sort_column = getattr(User, sort_by, User.created_at)
         if sort_order.lower() == "desc":
             base_stmt = base_stmt.order_by(desc(sort_column))
         else:
             base_stmt = base_stmt.order_by(asc(sort_column))
-        
+
         # Apply pagination
         offset = (page - 1) * page_size
         base_stmt = base_stmt.offset(offset).limit(page_size)
-        
-        # Execute query to get users
+
         result = await self.session.execute(base_stmt)
         users = result.scalars().unique().all()
-        
-        # Filter by role in Python (since it's many-to-many)
-        if role:
-            users = [
-                u for u in users 
-                if any(r.name == role for r in u.roles)
-            ]
-            # Adjust total for role filter (approximate for pagination)
-            # In production, use a subquery or materialized view
-        
+
         return list(users), total
     
     async def create_user(
