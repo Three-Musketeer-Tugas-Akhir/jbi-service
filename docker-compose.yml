@@ -23,6 +23,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── Kafka (KRaft mode — no Zookeeper) ────────────────────
@@ -57,6 +62,11 @@ services:
       timeout: 10s
       retries: 10
       start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── Kafka UI (Optional) ──────────────────────────────────
@@ -71,6 +81,11 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── CPU API Service ──────────────────────────────────────
@@ -98,6 +113,11 @@ services:
       - ./model_weights:/app/model_weights:ro
       - uploads_data:/app/storage/uploads
       - outputs_data:/app/storage/outputs
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── GPU API Service ──────────────────────────────────────
@@ -132,6 +152,11 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── Detection Worker (GPU) ───────────────────────────────
@@ -166,6 +191,11 @@ services:
               capabilities: [gpu]
     healthcheck:
       disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── ASR Worker (GPU) ─────────────────────────────────────
@@ -201,6 +231,11 @@ services:
               capabilities: [gpu]
     healthcheck:
       disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── Cropping Worker (GPU) ────────────────────────────────
@@ -235,6 +270,11 @@ services:
               capabilities: [gpu]
     healthcheck:
       disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── Reconciliation Job ───────────────────────────────────
@@ -259,6 +299,11 @@ services:
       - ./model_weights:/app/model_weights
     healthcheck:
       disable: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
   # ── MinIO Object Storage ─────────────────────────────────
@@ -278,6 +323,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
     restart: unless-stopped
 
 volumes:
