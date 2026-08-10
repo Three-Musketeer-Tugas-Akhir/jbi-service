@@ -17,6 +17,9 @@ from app.core.exceptions import NotFoundError, PermissionError
 from app.core.config import settings
 from app.db.models.annotation import AnnotationQueue
 
+# Queue cards show a single truncated line of the segment transcript.
+TRANSCRIPT_PREVIEW_CHARS = 240
+
 
 class AnnotationQueueService:
     """Service for annotation queue operations."""
@@ -34,37 +37,41 @@ class AnnotationQueueService:
         annotator_id: UUID,
         status: Optional[str] = None,
         dataset_id: Optional[UUID] = None,
+        job_id: Optional[UUID] = None,
         page: int = 1,
         page_size: int = 20,
         is_admin: bool = False
     ) -> dict:
-        """Get paginated queue for an annotator, optionally filtered by dataset."""
+        """Get paginated queue for an annotator, optionally filtered by dataset/job."""
         offset = (page - 1) * page_size
-        
+
         # Get queue entries
         entries = await self.queue_repo.get_by_annotator(
             annotator_id=annotator_id,
             status=status,
             dataset_id=dataset_id,
+            job_id=job_id,
             limit=page_size,
             offset=offset,
             is_admin=is_admin
         )
-        
+
         # Get total count
         total = await self.queue_repo.count_by_annotator(
             annotator_id=annotator_id,
             status=status,
             dataset_id=dataset_id,
+            job_id=job_id,
             is_admin=is_admin
         )
         
-        # Build response items
-        items = []
-        for entry in entries:
-            item = await self._build_queue_item(entry)
-            items.append(item)
-        
+        # Build response items from three bulk reads instead of ~4 queries per
+        # entry. A dataset like TVRI puts >100 segments in one annotator's queue
+        # and the sidebar re-polls every 10s, so per-item fan-out is the
+        # difference between one round of queries and several hundred.
+        prefetch = await self._prefetch_queue_context(entries)
+        items = [self._build_queue_item_from(entry, prefetch) for entry in entries]
+
         pages = (total + page_size - 1) // page_size
         
         return {
@@ -184,6 +191,7 @@ class AnnotationQueueService:
         return {
             "segment_id": segment.id,
             "job_id": segment.job_id,
+            "segment_index": segment.segment_index,
             "original_filename": job.original_filename if job else "Unknown",
             "video_url": video_url,
             "video_duration": None,  # TODO: Calculate from video metadata
@@ -207,13 +215,86 @@ class AnnotationQueueService:
             "priority": queue_entry.priority
         }
     
+    async def _prefetch_queue_context(self, entries) -> dict:
+        """Bulk-load the segments, jobs and active edits a page of queue entries needs.
+
+        Three queries total, independent of page size. Only the newest active edit
+        per (segment, editor) is kept, matching
+        ``AnnotationEditRepository.get_latest_active_by_segment``.
+        """
+        from sqlalchemy.orm import selectinload
+        from app.db.models.pipeline import PipelineSegment, PipelineJob
+        from app.db.models.annotation import AnnotationEdit
+
+        segment_ids = [e.segment_id for e in entries]
+        if not segment_ids:
+            return {"segments": {}, "jobs": {}, "edits": {}}
+
+        segments = (
+            await self.db.execute(
+                select(PipelineSegment)
+                .options(selectinload(PipelineSegment.transcripts))
+                .where(PipelineSegment.id.in_(segment_ids))
+            )
+        ).scalars().all()
+        segments_by_id = {s.id: s for s in segments}
+
+        job_ids = {s.job_id for s in segments}
+        jobs_by_id = {}
+        if job_ids:
+            jobs = (
+                await self.db.execute(
+                    select(PipelineJob).where(PipelineJob.id.in_(job_ids))
+                )
+            ).scalars().all()
+            jobs_by_id = {j.id: j for j in jobs}
+
+        edits = (
+            await self.db.execute(
+                select(AnnotationEdit)
+                .where(
+                    AnnotationEdit.segment_id.in_(segment_ids),
+                    AnnotationEdit.status.in_([
+                        AnnotationEdit.STATUS_DRAFT,
+                        AnnotationEdit.STATUS_PENDING,
+                        AnnotationEdit.STATUS_SUBMITTED,
+                    ]),
+                    AnnotationEdit.is_deleted == False,
+                )
+                .order_by(AnnotationEdit.edited_at.desc())
+            )
+        ).scalars().all()
+        edits_by_key = {}
+        for edit in edits:
+            key = (edit.segment_id, edit.editor_id)
+            if key not in edits_by_key:  # ordered desc — first seen is the latest
+                edits_by_key[key] = edit
+
+        return {"segments": segments_by_id, "jobs": jobs_by_id, "edits": edits_by_key}
+
+    def _build_queue_item_from(self, entry, prefetch: dict) -> dict:
+        """Build a queue item response from pre-loaded context."""
+        segment = prefetch["segments"].get(entry.segment_id)
+        job = prefetch["jobs"].get(segment.job_id) if segment else None
+        latest_edit = prefetch["edits"].get((entry.segment_id, entry.annotator_id))
+        return self._queue_item_dict(entry, segment, job, latest_edit)
+
     async def _build_queue_item(self, entry) -> dict:
         """Build a queue item response with metadata and active edit information."""
         segment = await self.segment_repo.get_by_id_with_transcripts(entry.segment_id)
         job = None
         if segment:
             job = await self.job_repo.get_by_id(segment.job_id)
-        
+
+        # Get latest ACTIVE edit (DRAFT, PENDING, SUBMITTED) - Option B
+        latest_edit = await self.edit_repo.get_latest_active_by_segment(
+            segment_id=entry.segment_id,
+            editor_id=entry.annotator_id
+        )
+        return self._queue_item_dict(entry, segment, job, latest_edit)
+
+    def _queue_item_dict(self, entry, segment, job, latest_edit) -> dict:
+        """Shape a queue item response from already-resolved records."""
         # Get preview URL via assets endpoint with streaming token
         video_preview_url = ""
         if segment and segment.cropped_video_path:
@@ -222,15 +303,14 @@ class AnnotationQueueService:
             )
             video_preview_url = f"{settings.api_v1_prefix}/assets/{segment.cropped_video_path}?token={token}"
         
-        # Get transcript info using computed properties
+        # Get transcript info using computed properties.
+        # asr_text concatenates every utterance in the segment; the queue card only
+        # renders a one-line preview, and a TVRI segment can hold 300+ utterances,
+        # so the full text would push the polled list response into the megabytes.
         utterance_count = len(segment.transcripts) if segment and segment.transcripts else 0
         transcript_text = segment.asr_text if segment else None
-        
-        # Get latest ACTIVE edit (DRAFT, PENDING, SUBMITTED) - Option B
-        latest_edit = await self.edit_repo.get_latest_active_by_segment(
-            segment_id=entry.segment_id,
-            editor_id=entry.annotator_id
-        )
+        if transcript_text and len(transcript_text) > TRANSCRIPT_PREVIEW_CHARS:
+            transcript_text = transcript_text[:TRANSCRIPT_PREVIEW_CHARS].rstrip() + "…"
 
         # Count resolved utterances (OK or FAILED/skipped) in the active edit so
         # the queue card can show a real "X/Y kalimat" progress bar for in-progress
@@ -246,6 +326,7 @@ class AnnotationQueueService:
             "id": entry.id,
             "segment_id": entry.segment_id,
             "job_id": segment.job_id if segment else None,
+            "segment_index": segment.segment_index if segment else None,
             "original_filename": job.original_filename if job else "Unknown",
             "video_preview_url": video_preview_url,
             "status": entry.status,

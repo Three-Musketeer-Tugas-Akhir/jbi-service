@@ -49,6 +49,10 @@ class QueueItemResponse(QueueItemBase):
     """Queue item response with metadata and active edit information."""
     id: UUID
     job_id: UUID
+    segment_index: Optional[int] = Field(
+        None,
+        description="Index of this segment within its job — the canonical ordering key"
+    )
     original_filename: str
     video_preview_url: str
     transcript_text: Optional[str] = None
@@ -96,8 +100,12 @@ class SegmentDetailResponse(BaseModel):
     """Complete segment details for annotation interface."""
     segment_id: UUID
     job_id: UUID
+    segment_index: Optional[int] = Field(
+        None,
+        description="Index of this segment within its job — the canonical ordering key"
+    )
     original_filename: str
-    
+
     # Video
     video_url: str
     video_duration: Optional[float] = None

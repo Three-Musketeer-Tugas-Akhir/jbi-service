@@ -20,6 +20,7 @@ class AnnotationQueueRepository:
         annotator_id: UUID,
         status: Optional[str] = None,
         dataset_id: Optional[UUID] = None,
+        job_id: Optional[UUID] = None,
         limit: int = 20,
         offset: int = 0,
         is_admin: bool = False
@@ -27,30 +28,41 @@ class AnnotationQueueRepository:
         """Get queue entries for an annotator, optionally filtered by dataset. If is_admin is true, gets all entries."""
         from app.db.models.pipeline import PipelineSegment, PipelineJob
 
-        query = select(AnnotationQueue)
+        # Always join the segment: it carries the tiebreaker the ordering needs.
+        # A bulk assignment writes near-identical assigned_at values, so
+        # (priority, assigned_at) alone leaves row order up to the planner — the
+        # same job would then straddle pages differently on every poll.
+        query = (
+            select(AnnotationQueue)
+            .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
+        )
         if not is_admin:
             query = query.where(AnnotationQueue.annotator_id == annotator_id)
-        
+
         if status:
             status_list = [s.strip() for s in status.split(",")]
             if len(status_list) > 1:
                 query = query.where(AnnotationQueue.status.in_(status_list))
             else:
                 query = query.where(AnnotationQueue.status == status)
-        
+
+        if job_id:
+            query = query.where(PipelineSegment.job_id == job_id)
+
         if dataset_id:
             query = (
                 query
-                .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
                 .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
                 .where(PipelineJob.dataset_id == dataset_id)
             )
-        
+
         query = query.order_by(
             AnnotationQueue.priority.desc(),
-            AnnotationQueue.assigned_at.asc()
+            AnnotationQueue.assigned_at.asc(),
+            PipelineSegment.job_id.asc(),
+            PipelineSegment.segment_index.asc(),
         ).limit(limit).offset(offset)
-        
+
         result = await self.db.execute(query)
         return result.scalars().all()
     
@@ -117,6 +129,7 @@ class AnnotationQueueRepository:
         annotator_id: UUID,
         status: Optional[str] = None,
         dataset_id: Optional[UUID] = None,
+        job_id: Optional[UUID] = None,
         is_admin: bool = False
     ) -> int:
         """Count queue entries for an annotator, optionally filtered by dataset. If is_admin is true, count all."""
@@ -125,21 +138,28 @@ class AnnotationQueueRepository:
         query = select(func.count(AnnotationQueue.id))
         if not is_admin:
             query = query.where(AnnotationQueue.annotator_id == annotator_id)
-        
+
         if status:
             status_list = [s.strip() for s in status.split(",")]
             if len(status_list) > 1:
                 query = query.where(AnnotationQueue.status.in_(status_list))
             else:
                 query = query.where(AnnotationQueue.status == status)
-        
+
+        if job_id or dataset_id:
+            query = query.join(
+                PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id
+            )
+
+        if job_id:
+            query = query.where(PipelineSegment.job_id == job_id)
+
         if dataset_id:
             query = (
                 query
-                .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
                 .join(PipelineJob, PipelineSegment.job_id == PipelineJob.id)
                 .where(PipelineJob.dataset_id == dataset_id)
             )
-        
+
         result = await self.db.execute(query)
         return result.scalar()

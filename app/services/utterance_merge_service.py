@@ -40,16 +40,26 @@ class UtteranceMergeService:
     async def get_or_create_merged_video(
         job_id: uuid.UUID,
         segment_id: uuid.UUID,
-        utterance_index: int
+        utterance_index: int,
+        include_prev: bool = False
     ) -> Optional[dict]:
         """
         Get existing merged video or create a new one.
-        
+
+        With ``include_prev`` the tape becomes ``[orphan tail of N-1 | N | N+1]``
+        so the annotator can trim in backwards over material the previous
+        sentence released. That variant is never persisted in the transcript
+        columns — those belong to the canonical two-clip tape — so it is
+        regenerated on each request and stored under a separate ``_lb`` key.
+
         Returns dict with:
             merged_video_url: str — presigned URL for playback
             merged_video_path: str — MinIO key
             video_n_duration: float — duration of utterance N (for marker)
             total_duration: float — total duration of merged video
+            head_offset: float — annotator's own recoverable head trim-in
+            prev_offset: float — orphan tail actually prepended (0 unless include_prev)
+            prev_available: float — orphan tail available to prepend
         """
         minio_service = get_minio_service()
 
@@ -66,8 +76,34 @@ class UtteranceMergeService:
                 logger.error(f"Current transcript/video not found for {segment_id} utt {utterance_index}")
                 return None
 
-            # 2. Check if merged video already exists
-            if curr_transcript.merged_video_path:
+            # 1b. Segment is needed by both the orphan lookup and the next lookup
+            segment_result = await db.execute(
+                select(PipelineSegment).where(PipelineSegment.id == segment_id)
+            )
+            segment = segment_result.scalar_one_or_none()
+            if not segment:
+                logger.error(f"Segment {segment_id} not found")
+                return None
+
+            # 1c. How much of N-1's tail is orphaned and available to prepend.
+            # Reported on every call so the FE can enable its lookback button
+            # without a second round trip.
+            prev_transcript, prev_effective_end, prev_available = await _prev_orphan_geometry(
+                db, segment, utterance_index
+            )
+
+            # Nothing to prepend — fall back to the canonical tape (and its cache).
+            if include_prev and prev_available <= 0.0:
+                logger.info(
+                    f"Lookback requested for {segment_id} utt {utterance_index} "
+                    f"but no orphan tail is available; serving canonical tape"
+                )
+                include_prev = False
+
+            # 2. Check if merged video already exists.
+            # The cache holds the canonical [N | N+1] tape only — the lookback
+            # variant carries a different left edge, so it bypasses this.
+            if curr_transcript.merged_video_path and not include_prev:
                 try:
                     url = await minio_service.generate_presigned_url(
                         curr_transcript.merged_video_path, expiry=3600
@@ -85,20 +121,14 @@ class UtteranceMergeService:
                         "video_n_duration": curr_transcript.video_n_duration or 0.0,
                         "total_duration": curr_transcript.merged_video_duration or 0.0,
                         "head_offset": head_offset,
+                        "prev_offset": 0.0,
+                        "prev_available": prev_available,
                     }
                 except Exception as e:
                     logger.warning(f"Failed to generate URL for existing merged video: {e}")
                     # Fall through to recreate
 
             # 3. Find next utterance (same segment or next segment, same job)
-            segment_result = await db.execute(
-                select(PipelineSegment).where(PipelineSegment.id == segment_id)
-            )
-            segment = segment_result.scalar_one_or_none()
-            if not segment:
-                logger.error(f"Segment {segment_id} not found")
-                return None
-
             next_result = await db.execute(
                 select(PipelineTranscript)
                 .join(PipelineSegment, PipelineTranscript.segment_id == PipelineSegment.id)
@@ -113,8 +143,10 @@ class UtteranceMergeService:
             )
             next_transcript = next_result.scalar_one_or_none()
 
-            # 4. If no next utterance, return current video only (single video)
-            if not next_transcript or not next_transcript.video_path:
+            has_next = bool(next_transcript and next_transcript.video_path)
+
+            # 4. No next utterance and nothing to prepend — the raw clip is the tape
+            if not has_next and not include_prev:
                 logger.info(f"No next utterance found for {segment_id} utt {utterance_index}, returning single video")
                 curr_url = await minio_service.generate_presigned_url(curr_transcript.video_path, expiry=3600)
                 return {
@@ -124,20 +156,32 @@ class UtteranceMergeService:
                     "total_duration": (curr_transcript.end - curr_transcript.start),
                     "is_single_video": True,
                     "head_offset": 0.0,
+                    "prev_offset": 0.0,
+                    "prev_available": prev_available,
                 }
 
-            # 5. Download both videos to temp files
+            # 5. Download the clips this tape is built from.
+            # Temp names carry a per-request nonce: get_video_duration caches by
+            # path and never invalidates, so a fixed name would serve the previous
+            # merge's duration after a re-trim changed the file underneath it.
+            nonce = uuid.uuid4().hex[:8]
+            base_tmp = f"{segment_id}_utt_{utterance_index}_{nonce}"
             curr_presigned = await minio_service.generate_presigned_url(curr_transcript.video_path, expiry=3600)
-            next_presigned = await minio_service.generate_presigned_url(next_transcript.video_path, expiry=3600)
 
             tmp_dir = tempfile.gettempdir()
-            curr_tmp = os.path.join(tmp_dir, f"{segment_id}_utt_{utterance_index}_curr.mp4")
-            next_tmp = os.path.join(tmp_dir, f"{segment_id}_utt_{utterance_index}_next.mp4")
-            merged_tmp = os.path.join(tmp_dir, f"{segment_id}_utt_{utterance_index}_merged.mp4")
+            curr_tmp = os.path.join(tmp_dir, f"{base_tmp}_curr.mp4")
+            next_tmp = os.path.join(tmp_dir, f"{base_tmp}_next.mp4")
+            prev_tmp = os.path.join(tmp_dir, f"{base_tmp}_prev.mp4")
+            prev_tail_tmp = os.path.join(tmp_dir, f"{base_tmp}_prevtail.mp4")
+            merged_tmp = os.path.join(tmp_dir, f"{base_tmp}_merged.mp4")
 
             try:
                 await _download_file(curr_presigned, curr_tmp)
-                await _download_file(next_presigned, next_tmp)
+                if has_next:
+                    next_presigned = await minio_service.generate_presigned_url(
+                        next_transcript.video_path, expiry=3600
+                    )
+                    await _download_file(next_presigned, next_tmp)
 
                 # ══════════════════════════════════════════════════════════
                 # RESPONSIVE MERGE REGENERATION
@@ -178,19 +222,89 @@ class UtteranceMergeService:
                         os.remove(curr_tmp)
                         curr_tmp = tmp_cropped
 
+                # ══════════════════════════════════════════════════════════
+                # LOOKBACK PREPEND — the orphan tail of utterance N-1.
+                # When N-1 was shortened, [prev_effective_end, prev.end] belongs
+                # to nobody: N-1 released it and N's floor sits past it. CV2 tiles
+                # consecutive clips exactly, so that tail is physically adjacent
+                # to N's head and can be prepended, letting the start handle trim
+                # in backwards over it. N-1 itself is never modified — this only
+                # reclaims what it already gave up, so nothing is duplicated.
+                # ══════════════════════════════════════════════════════════
+                prev_offset = 0.0
+                if include_prev and prev_transcript is not None and prev_available > 0.0:
+                    prev_presigned = await minio_service.generate_presigned_url(
+                        prev_transcript.video_path, expiry=3600
+                    )
+                    await _download_file(prev_presigned, prev_tmp)
+
+                    # Seek to where N-1's annotated end falls inside its own clip and
+                    # take everything after it. end_time=9999 runs to the physical end
+                    # so a clip slightly longer than its nominal range is not truncated.
+                    tail_local_start = max(0.0, prev_effective_end - prev_transcript.start)
+                    ok = await run_ffmpeg_crop(
+                        prev_tmp, prev_tail_tmp,
+                        start_time=tail_local_start, end_time=9999,
+                        use_input_seeking=False, config=config
+                    )
+                    if ok and os.path.exists(prev_tail_tmp):
+                        from app.pipeline.utils.video import get_video_duration
+                        # Report the PHYSICAL tail length — the FE anchors the tape's
+                        # left edge on it, so a nominal value would misplace the ruler.
+                        prev_offset = await get_video_duration(prev_tail_tmp) or 0.0
+                        logger.info(
+                            f"Prepending {prev_offset:.2f}s orphan tail from utt "
+                            f"{prev_transcript.utterance_index} of segment {prev_transcript.segment_id}"
+                        )
+                    else:
+                        logger.warning("Failed to crop orphan tail; serving tape without lookback")
+
                 # 6. Merge using FFmpeg
-                success = await run_ffmpeg_concat(
-                    input_paths=[curr_tmp, next_tmp],
-                    output_path=merged_tmp,
-                    config=config
+                concat_inputs = []
+                if prev_offset > 0.0:
+                    concat_inputs.append(prev_tail_tmp)
+                concat_inputs.append(curr_tmp)
+                if has_next:
+                    concat_inputs.append(next_tmp)
+
+                # Lookback was requested but the tail could not be cut and there is
+                # no N+1 either — the tape is just clip N. Fall back to the plain
+                # single-video response instead of caching a one-clip "merge".
+                if len(concat_inputs) == 1:
+                    logger.warning(
+                        f"Nothing to concat for {segment_id} utt {utterance_index}; "
+                        f"returning single video"
+                    )
+                    curr_url = await minio_service.generate_presigned_url(
+                        curr_transcript.video_path, expiry=3600
+                    )
+                    return {
+                        "merged_video_url": curr_url,
+                        "merged_video_path": curr_transcript.video_path,
+                        "video_n_duration": 0.0,
+                        "total_duration": (curr_transcript.end - curr_transcript.start),
+                        "is_single_video": True,
+                        "head_offset": 0.0,
+                        "prev_offset": 0.0,
+                        "prev_available": prev_available,
+                    }
+                else:
+                    success = await run_ffmpeg_concat(
+                        input_paths=concat_inputs,
+                        output_path=merged_tmp,
+                        config=config
+                    )
+                    if not success or not os.path.exists(merged_tmp):
+                        logger.error("FFmpeg concat failed for merge")
+                        return None
+
+                # 7. Upload merged video to MinIO.
+                # The lookback tape has a different left edge, so it lives under
+                # its own key and never overwrites the canonical cached tape.
+                merged_key = (
+                    f"jobs/{job_id}/utterances_merged/"
+                    f"{segment_id}_utt_{utterance_index}{'_lb' if prev_offset > 0.0 else ''}.mp4"
                 )
-
-                if not success or not os.path.exists(merged_tmp):
-                    logger.error("FFmpeg concat failed for merge")
-                    return None
-
-                # 7. Upload merged video to MinIO
-                merged_key = f"jobs/{job_id}/utterances_merged/{segment_id}_utt_{utterance_index}.mp4"
                 with open(merged_tmp, "rb") as f:
                     await minio_service.upload_file(f, merged_key)
 
@@ -199,18 +313,22 @@ class UtteranceMergeService:
                 curr_duration = await get_video_duration(curr_tmp)
                 merged_duration = await get_video_duration(merged_tmp)
 
-                # 9. Update database
-                curr_transcript.merged_video_path = merged_key
-                curr_transcript.merged_video_duration = merged_duration
-                curr_transcript.video_n_duration = curr_duration
-                await db.commit()
+                # 9. Update database — canonical tape only. The lookback variant is
+                # regenerated per request, so persisting it would poison the cache
+                # that the normal [N | N+1] view reads.
+                if prev_offset <= 0.0:
+                    curr_transcript.merged_video_path = merged_key
+                    curr_transcript.merged_video_duration = merged_duration
+                    curr_transcript.video_n_duration = curr_duration
+                    await db.commit()
 
                 # 10. Generate presigned URL
                 merged_url = await minio_service.generate_presigned_url(merged_key, expiry=3600)
 
                 logger.info(
                     f"Created merged video for {segment_id} utt {utterance_index}: "
-                    f"duration={merged_duration:.2f}s, n_duration={curr_duration:.2f}s"
+                    f"duration={merged_duration:.2f}s, n_duration={curr_duration:.2f}s, "
+                    f"prev_offset={prev_offset:.2f}s"
                 )
 
                 return {
@@ -220,11 +338,13 @@ class UtteranceMergeService:
                     "total_duration": merged_duration,
                     "is_single_video": False,
                     "head_offset": head_offset,
+                    "prev_offset": prev_offset,
+                    "prev_available": prev_available,
                 }
 
             finally:
                 # Cleanup temp files
-                for path in [curr_tmp, next_tmp, merged_tmp]:
+                for path in [curr_tmp, next_tmp, prev_tmp, prev_tail_tmp, merged_tmp]:
                     try:
                         if os.path.exists(path):
                             os.remove(path)
@@ -626,6 +746,65 @@ async def _edit_front_geometry(
             head_offset = max(0.0, edit_start - floor)
             return floor_offset, head_offset
     return 0.0, 0.0
+
+
+async def _prev_orphan_geometry(
+    db,
+    segment: PipelineSegment,
+    utterance_index: int,
+) -> tuple:
+    """Geometry of the ORPHAN TAIL left behind by the previous utterance.
+
+    When the annotator shortens utterance N-1 (drags its end handle to the left),
+    the released region ``[new_end, prev_transcript.end]`` belongs to nobody: N-1
+    gave it up and N cannot reach it, because N's tape floor sits at N's own CV2
+    clip head. Since CV2 tiles consecutive clips exactly in the common case
+    (``E_i = A_{i+1} + 1.0 = S_{i+1}``, see cropping_worker), that orphan sits
+    physically adjacent to N's head and can be prepended to N's tape.
+
+    Returns ``(prev_transcript, prev_effective_end, orphan_seconds)``.
+    ``orphan_seconds`` is 0.0 when there is no previous utterance, when N-1 was
+    never shortened, or when N-1 was trimmed OUT instead (the cascade already
+    owns that case by pushing N's floor forward).
+    """
+    prev_result = await db.execute(
+        select(PipelineTranscript)
+        .join(PipelineSegment, PipelineTranscript.segment_id == PipelineSegment.id)
+        .where(PipelineSegment.job_id == segment.job_id)
+        .where(
+            (PipelineSegment.segment_index < segment.segment_index) |
+            ((PipelineSegment.segment_index == segment.segment_index) &
+             (PipelineTranscript.utterance_index < utterance_index))
+        )
+        .order_by(PipelineSegment.segment_index.desc(), PipelineTranscript.utterance_index.desc())
+        .limit(1)
+    )
+    prev_transcript = prev_result.scalar_one_or_none()
+    if not prev_transcript or not prev_transcript.video_path:
+        return None, 0.0, 0.0
+
+    # The annotated end lives in N-1's own AnnotationEdit, which may belong to a
+    # different segment than N when N is the first utterance of its segment.
+    prev_effective_end = prev_transcript.end
+    edit_result = await db.execute(
+        select(AnnotationEdit).where(
+            AnnotationEdit.segment_id == prev_transcript.segment_id,
+            AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+            AnnotationEdit.is_deleted == False
+        ).order_by(AnnotationEdit.edited_at.desc())
+    )
+    prev_edit = edit_result.scalars().first()
+    if prev_edit and prev_edit.utterance_corrections:
+        for utt in prev_edit.utterance_corrections:
+            if utt.get("utterance_index") == prev_transcript.utterance_index:
+                prev_effective_end = utt.get("end", prev_transcript.end)
+                break
+
+    prev_duration = max(0.0, prev_transcript.end - prev_transcript.start)
+    orphan = max(0.0, prev_transcript.end - prev_effective_end)
+    orphan = min(orphan, prev_duration)
+
+    return prev_transcript, prev_effective_end, orphan
 
 
 async def _download_file(url: str, dest_path: str) -> None:

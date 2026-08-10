@@ -588,7 +588,7 @@ class UserService:
                 
                 # Auto-generate email if not provided
                 if not email:
-                    email = f"{first_name_clean.lower()}.{last_name_clean.lower()}@gestura.ai"
+                    email = f"{first_name_clean.lower()}.{last_name_clean.lower()}@anotasi.ai"
                 
                 # Auto-generate password if not provided
                 if not password:

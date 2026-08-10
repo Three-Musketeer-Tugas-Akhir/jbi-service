@@ -25,6 +25,7 @@ from app.db.session import async_session_maker
 from app.db.models.pipeline import PipelineSegment, PipelineTranscript
 from app.db.models.annotation import AnnotationEdit
 from app.services.minio_service import get_minio_service
+from app.services.utterance_merge_service import _prev_orphan_geometry
 from app.pipeline.utils.video import run_ffmpeg_crop, run_ffmpeg_concat, FFmpegConfig
 
 logger = logging.getLogger(__name__)
@@ -152,18 +153,40 @@ class UtteranceCroppingService:
                 orig_duration = max(0.01, orig_end - orig_start)
                 
                 # ══════════════════════════════════════════════════════════
-                # IMPROVEMENT 4: Allow trim-in (start_time != orig_start)
-                # No longer clamp start_time to orig_start. Instead, compute
-                # relative_start naturally so FFmpeg seeks into the video.
+                # BACKWARD TRIM-IN (lookback)
+                # A start before this clip's head can only be honoured from the
+                # ORPHAN TAIL of utterance N-1 — the stretch N-1 released when its
+                # own annotator trimmed in. Anything beyond that still belongs to
+                # N-1, so it stays off limits and start_time is clamped to it.
+                # The reclaimed piece is prepended as Part Z after the normal crop
+                # below has produced this clip's own contribution.
                 # ══════════════════════════════════════════════════════════
+                prev_transcript = None
+                prev_effective_end = 0.0
+                prev_orphan = 0.0
+                clamped_left = 0.0
                 if start_time < orig_start:
-                    logger.warning(
-                        f"Trim-in before orig_start for utt {utterance_index}: "
-                        f"start={start_time:.3f} but orig_start={orig_start:.3f}. "
-                        f"Clamping to orig_start."
+                    left_overlap = orig_start - start_time
+                    prev_transcript, prev_effective_end, prev_orphan = await _prev_orphan_geometry(
+                        db, segment, utterance_index
                     )
+                    clamped_left = min(left_overlap, prev_orphan)
+                    if clamped_left > 0.0:
+                        logger.info(
+                            f"Backward trim-in for utt {utterance_index}: requested "
+                            f"{left_overlap:.3f}s before orig_start, reclaiming "
+                            f"{clamped_left:.3f}s of orphan tail from utt "
+                            f"{prev_transcript.utterance_index}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Trim-in before orig_start for utt {utterance_index}: "
+                            f"start={start_time:.3f} but orig_start={orig_start:.3f} and no "
+                            f"orphan tail is available. Clamping to orig_start."
+                        )
+                    # Downstream math stays anchored on this clip's own head.
                     start_time = orig_start
-                
+
                 requested_duration = abs(end_time - start_time)
                 relative_start = max(0.0, start_time - orig_start)  # seek into CV2
                 remaining_in_video = max(0.01, orig_duration - relative_start)
@@ -345,6 +368,56 @@ class UtteranceCroppingService:
                     # the next video. The unified idempotent cascade below applies it.
                     final_overlap = clamped_overlap
 
+                # ══════════════════════════════════════════════════════════
+                # PART Z: prepend the reclaimed orphan tail of utterance N-1.
+                # Mirror of the Part A / Part B forward cross-crop above, running
+                # after it so both directions can apply to the same crop.
+                # N-1's own record is never touched: this only takes back what it
+                # already released, so there is no cascade and no duplication.
+                # ══════════════════════════════════════════════════════════
+                if clamped_left > 0.0 and prev_transcript is not None:
+                    prev_video_url = await minio_service.generate_presigned_url(
+                        prev_transcript.video_path, expiry=3600
+                    )
+                    # Take the LAST clamped_left seconds of N-1's clip — the piece
+                    # physically adjacent to this clip's head. Never earlier than
+                    # the orphan boundary, which is still N-1's own material.
+                    prev_clip_duration = max(0.01, prev_transcript.end - prev_transcript.start)
+                    tail_local_start = max(0.0, prev_effective_end - prev_transcript.start)
+                    z_start = max(tail_local_start, prev_clip_duration - clamped_left)
+
+                    tmp_part_z = f"/tmp/{segment_id}_utt_{utterance_index}_partZ.mp4"
+                    success_z = await run_ffmpeg_crop(
+                        input_path=prev_video_url,
+                        output_path=tmp_part_z,
+                        start_time=z_start,
+                        end_time=prev_clip_duration,
+                        use_input_seeking=False,
+                        config=config
+                    )
+
+                    if success_z:
+                        tmp_with_z = f"/tmp/{segment_id}_utt_{utterance_index}_withZ.mp4"
+                        success_z_merge = await run_ffmpeg_concat(
+                            input_paths=[tmp_part_z, tmp_output],
+                            output_path=tmp_with_z,
+                            config=config
+                        )
+                        _cleanup_tmp(tmp_part_z)
+                        if success_z_merge:
+                            _cleanup_tmp(tmp_output)
+                            tmp_output = tmp_with_z
+                        else:
+                            _cleanup_tmp(tmp_with_z)
+                            logger.warning(
+                                "Part Z concat failed; saving crop without the reclaimed lookback"
+                            )
+                            clamped_left = 0.0
+                    else:
+                        _cleanup_tmp(tmp_part_z)
+                        logger.warning("Part Z crop failed; saving crop without the reclaimed lookback")
+                        clamped_left = 0.0
+
                 # Upload video
                 upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
                 with open(tmp_output, "rb") as f:
@@ -354,6 +427,9 @@ class UtteranceCroppingService:
                 
                 utt_list[utt_idx_in_array]["cropped_video_path"] = upload_key
                 utt_list[utt_idx_in_array]["status"] = "OK"
+                # Record how much orphan tail this crop reclaimed, so a revert can
+                # tell an ordinary trim apart from one that reached backwards.
+                utt_list[utt_idx_in_array]["pre_trim_snapshot"]["consumed_from_prev"] = clamped_left
 
                 edit.utterance_corrections = utt_list
                 flag_modified(edit, "utterance_corrections")

@@ -52,14 +52,18 @@ async def get_annotation_queue(
         description="Filter by status: ASSIGNED, IN_PROGRESS, COMPLETED"
     ),
     dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
+    job_id: Optional[str] = Query(
+        None,
+        description="Filter by pipeline job ID — returns only that job's segments"
+    ),
     page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    page_size: int = Query(20, ge=1, le=500, description="Items per page"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get the annotation queue for the current annotator.
-    
+
     Returns segments assigned to the annotator with metadata
     and pre-signed URLs for video access.
     """
@@ -70,11 +74,19 @@ async def get_annotation_queue(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid dataset_id: {dataset_id}")
 
+    job_uuid = None
+    if job_id:
+        try:
+            job_uuid = _uuid.UUID(job_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid job_id: {job_id}")
+
     service = AnnotationQueueService(db)
     result = await service.get_annotator_queue(
         annotator_id=current_user.id,
         status=status,
         dataset_id=dataset_uuid,
+        job_id=job_uuid,
         page=page,
         page_size=page_size,
         is_admin=current_user.has_role("admin")
@@ -309,17 +321,24 @@ async def revert_utterance_trim(
 async def get_merged_video_for_utterance(
     segment_id: UUID,
     utterance_index: int,
+    include_prev: bool = False,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "annotator"))
 ):
     """
     Get merged video for an utterance (video-editor-sibi style).
-    
+
     The merged video concatenates utterance N with utterance N+1 so the annotator
     can see the transition and decide where utterance N should end.
-    
+
     If the merge already exists, returns the cached video.
     If not, creates the merge on-the-fly and caches it.
+
+    With ``include_prev=true`` the tape is prefixed with the orphan tail of
+    utterance N-1 — the stretch its own annotator released by trimming in — so
+    the start handle can be dragged backwards over it. ``prev_available`` in the
+    response reports how many seconds that would add, and is returned on every
+    call so the client can decide whether to offer the option at all.
     """
     from app.services.annotation_queue_service import AnnotationQueueService
     from app.services.utterance_merge_service import UtteranceMergeService
@@ -345,7 +364,8 @@ async def get_merged_video_for_utterance(
     result = await UtteranceMergeService.get_or_create_merged_video(
         job_id=segment.job_id,
         segment_id=segment_id,
-        utterance_index=utterance_index
+        utterance_index=utterance_index,
+        include_prev=include_prev
     )
     
     if not result:

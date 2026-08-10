@@ -353,6 +353,45 @@ class VoiceAnnotationService:
             else JobStatus.NEEDS_VOICE_ANNOTATION
         )
 
+        # Never pull a job back out of READY_FOR_ANNOTATION once JBI annotation has
+        # started on it. The gate exists to stop unverified transcripts reaching
+        # annotators; after assignment it would only strand work in progress — the
+        # job would vanish from the admin assignment view and reassign would refuse
+        # it, while the queue rows keep the annotator working. This matters for
+        # pre-annotated datasets (TVRI), whose transcripts are imported already
+        # human-verified but still trip KBBI on proper nouns.
+        if flagged > 0:
+            from app.db.models.annotation import AnnotationQueue
+
+            assigned = (
+                await self.db.execute(
+                    select(func.count(AnnotationQueue.id))
+                    .join(PipelineSegment, AnnotationQueue.segment_id == PipelineSegment.id)
+                    .where(PipelineSegment.job_id == job_id)
+                )
+            ).scalar() or 0
+            if assigned > 0:
+                logger.info(
+                    "Job %s has %d JBI assignments — keeping status, not downgrading "
+                    "to %s despite %d flagged utterances",
+                    job_id, assigned, JobStatus.NEEDS_VOICE_ANNOTATION, flagged,
+                )
+                await self.db.execute(
+                    update(PipelineJob)
+                    .where(PipelineJob.id == job_id)
+                    .values(
+                        clean_utterance_count=clean,
+                        flagged_utterance_count=flagged,
+                    )
+                )
+                await self.db.flush()
+                job_status = (
+                    await self.db.execute(
+                        select(PipelineJob.status).where(PipelineJob.id == job_id)
+                    )
+                ).scalar()
+                return {"clean": clean, "flagged": flagged, "status": job_status}
+
         await self.db.execute(
             update(PipelineJob)
             .where(PipelineJob.id == job_id)
