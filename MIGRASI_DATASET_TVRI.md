@@ -218,57 +218,86 @@ Dua perbaikan tambahan yang ikut sekalian karena skala TVRI membuatnya terasa:
 
 ---
 
-## 5. Menyiapkan klip video dari Google Drive
+## 5. Mengambil klip video dari Google Drive
 
-Importer butuh satu folder datar berisi file `.mp4` dengan **nama persis seperti
-kolom A**. Langkahnya:
+**Tidak perlu rclone, tidak perlu Drive API, tidak perlu kredensial.** Nama file
+di kolom A bukan teks biasa — tiap sel menyimpan **hyperlink** berisi file-id
+Drive langsung:
 
-### 5a. Buat daftar file yang dibutuhkan
-
-```bash
-python scripts/import_tvri_dataset.py \
-  --xlsx "dataset TVRI/Annotator Sign Video + Transcript BISINDO.xlsx" \
-  --category BISINDO --dry-run \
-  --manifest /tmp/tvri_bisindo_clips.txt
-
-python scripts/import_tvri_dataset.py \
-  --xlsx "dataset TVRI/Annotator Sign Video + Transcript SIBI.xlsx" \
-  --category SIBI --dry-run \
-  --manifest /tmp/tvri_sibi_clips.txt
+```
+cell.value      MEM001M-20191111Z103928_0_0.40_7.66.mp4
+cell.hyperlink  https://drive.google.com/file/d/1vptZrYn7vxMiRpG8KcoA4wR5oEKFy8bW
 ```
 
-Hasilnya 7.200 dan 6.141 nama file. Simpan — ini juga alat verifikasi setelah
-download.
+Ketiga belas ribu file itu dapat diunduh satu per satu lewat id-nya. Sudah
+diverifikasi: **13.341 link, semuanya unik, semuanya bisa diakses publik**,
+rata-rata 162 KB, total hanya **±2 GB**.
 
-### 5b. Download dari Drive
+Perhatikan: `openpyxl.load_workbook(..., read_only=True)` **membuang**
+hyperlink. Ekstraksi id wajib memakai mode normal.
 
-Pakai `rclone` (paling tahan untuk belasan ribu file kecil):
-
-```bash
-rclone config                       # sekali saja, buat remote bernama gdrive
-rclone copy "gdrive:TVRI/BISINDO" /data/tvri/bisindo \
-  --drive-shared-with-me --transfers 8 --checkers 16 --progress
-```
-
-Kalau folder Drive-nya bertingkat per siaran, ratakan dulu:
+### 5a. Ekstrak peta id (butuh openpyxl — jalankan di laptop)
 
 ```bash
-mkdir -p /data/tvri/bisindo_flat
-find /data/tvri/bisindo -name '*.mp4' -exec mv -n {} /data/tvri/bisindo_flat/ \;
+python scripts/download_tvri_clips.py \
+  --xlsx "dataset TVRI/Annotator Sign Video + Transcript BISINDO.xlsx" --category BISINDO \
+  --xlsx "dataset TVRI/Annotator Sign Video + Transcript SIBI.xlsx"    --category SIBI \
+  --write-manifest manifest.tsv
 ```
 
-### 5c. Verifikasi kelengkapan sebelum impor
+Menghasilkan 13.341 baris `kategori<TAB>namafile<TAB>driveid`.
+
+### 5b. Kirim workbook + manifest ke server
 
 ```bash
-cd /data/tvri/bisindo_flat
-ls > /tmp/have.txt
-comm -23 <(sort /tmp/tvri_bisindo_clips.txt) <(sort /tmp/have.txt) > /tmp/missing.txt
-wc -l /tmp/missing.txt        # harapan: 0
+cd "dataset TVRI"
+tar czf - *.xlsx -C /path/ke manifest.tsv | \
+  ssh user@server "mkdir -p ~/tvri_data/clips && tar xzf - -C ~/tvri_data"
 ```
 
-File yang hilang tidak menggagalkan impor — barisnya tetap masuk DB dengan
-`video_path` menunjuk key yang benar, jadi klipnya bisa diunggah menyusul ke key
-yang sama. Tapi selama belum ada, kalimat itu tidak bisa dibuka di workspace.
+### 5c. Unduh di server
+
+Setengah unduh hanya butuh Python stdlib, jadi berjalan langsung di host tanpa
+dependensi apa pun:
+
+```bash
+nohup setsid python3 scripts/download_tvri_clips.py \
+  --manifest ~/tvri_data/manifest.tsv \
+  --out-dir ~/tvri_data/clips \
+  --workers 10 > /tmp/dl.log 2>&1 &
+```
+
+Hasilnya `~/tvri_data/clips/BISINDO/` dan `~/tvri_data/clips/SIBI/`.
+Laju ±5 file/detik → sekitar 45 menit untuk semuanya.
+
+**Resumable**: file yang sudah ada dan berbentuk MP4 valid akan dilewati, jadi
+kalau terputus cukup jalankan perintah yang sama lagi. Penulisan bersifat atomik
+(`.part` lalu rename), jadi proses yang dibunuh tidak meninggalkan file separuh.
+
+### 5d. Verifikasi kelengkapan SEBELUM impor
+
+```bash
+find ~/tvri_data/clips/BISINDO -name '*.mp4' | wc -l   # harus 7200
+find ~/tvri_data/clips/SIBI    -name '*.mp4' | wc -l   # harus 6141
+```
+
+> **Wajib lengkap dulu.** Importer melewati rekaman yang sudah punya job, jadi
+> kalau diimpor saat unduhan belum selesai, klip yang menyusul **tidak akan
+> pernah terisi** oleh re-run. Baris tetap masuk DB dengan `video_path` menunjuk
+> key yang benar, tapi `cropped_video_path` di draft dikosongkan dan kalimat itu
+> tidak bisa dibuka di workspace.
+
+### 5e. Mount ke container
+
+Container `api-gpu` tidak melihat `~/tvri_data` secara default. Tambahkan di
+`docker-compose.yml` pada `api-gpu`:
+
+```yaml
+    volumes:
+      - /home/erdefi/tvri_data:/srv/tvri:ro
+```
+
+lalu `make docker-up-gpu` supaya container dibuat ulang dengan mount tersebut.
 
 ---
 
@@ -277,25 +306,15 @@ yang sama. Tapi selama belum ada, kalimat itu tidak bisa dibuka di workspace.
 Skrip ini memakai koneksi DB dan MinIO dari environment aplikasi, jadi
 **jalankan di dalam container API di server**, bukan dari laptop.
 
-### 6a. Kirim workbook + klip ke server
+Persiapan data dan mount-nya sudah dijelaskan di §5b–5e.
 
-```bash
-scp "dataset TVRI/Annotator Sign Video + Transcript BISINDO.xlsx" user@server:/srv/tvri/
-rsync -av --progress /data/tvri/bisindo_flat/ user@server:/srv/tvri/clips_bisindo/
-```
-
-Lalu mount foldernya ke container (tambahkan di `docker-compose.yml` service
-`api` / `api-gpu`, atau pakai `docker cp` untuk sekali jalan):
-
-```yaml
-    volumes:
-      - /srv/tvri:/srv/tvri:ro
-```
+> Server ini memakai **profile `gpu`**, jadi nama service-nya **`api-gpu`**,
+> bukan `api`. Cek dengan `docker compose ps` kalau ragu.
 
 ### 6b. Dry run — tidak menulis apa pun
 
 ```bash
-docker compose exec -T api python scripts/import_tvri_dataset.py \
+docker compose exec -T api-gpu python scripts/import_tvri_dataset.py \
   --xlsx "/srv/tvri/Annotator Sign Video + Transcript BISINDO.xlsx" \
   --category BISINDO --dry-run
 ```
@@ -309,17 +328,17 @@ INFO Parsed …BISINDO.xlsx: 24 recordings, 121 segments, 7200 utterances (2399 
 ### 6c. Impor sungguhan
 
 ```bash
-docker compose exec -T api python scripts/import_tvri_dataset.py \
+docker compose exec -T api-gpu python scripts/import_tvri_dataset.py \
   --xlsx "/srv/tvri/Annotator Sign Video + Transcript BISINDO.xlsx" \
   --category BISINDO \
   --dataset-name "TVRI 2026" \
-  --clips-dir /srv/tvri/clips_bisindo
+  --clips-dir /srv/tvri/clips/BISINDO
 
-docker compose exec -T api python scripts/import_tvri_dataset.py \
+docker compose exec -T api-gpu python scripts/import_tvri_dataset.py \
   --xlsx "/srv/tvri/Annotator Sign Video + Transcript SIBI.xlsx" \
   --category SIBI \
   --dataset-name "TVRI 2026" \
-  --clips-dir /srv/tvri/clips_sibi
+  --clips-dir /srv/tvri/clips/SIBI
 ```
 
 > **Nama dataset tidak boleh mengandung kata "inews"** — itulah yang memicu mode
@@ -453,7 +472,7 @@ sini. **Cek ini dulu sebelum apa pun:**
 
 ```bash
 ffprobe -v error -select_streams a -show_entries stream=codec_name \
-  -of csv=p=0 /srv/tvri/clips_bisindo/MEM001M-20191111Z103928_0_0.40_7.66.mp4
+  -of csv=p=0 /srv/tvri/clips/BISINDO/MEM001M-20191111Z103928_0_0.40_7.66.mp4
 ```
 
 - Keluar `aac` (atau codec lain) → **aman**, lanjutkan.
@@ -468,17 +487,17 @@ klipnya bisu.
 
 ```bash
 # 1. Analisis dulu — tidak menulis apa pun
-docker compose exec -T api python scripts/generate_tvri_wav.py \
+docker compose exec -T api-gpu python scripts/generate_tvri_wav.py \
   --xlsx "/srv/tvri/Annotator Sign Video + Transcript BISINDO.xlsx" \
   --dataset-name "TVRI 2026" \
-  --clips-dir /srv/tvri/clips_bisindo \
+  --clips-dir /srv/tvri/clips/BISINDO \
   --report-only
 
 # 2. Sungguhan
-docker compose exec -T api python scripts/generate_tvri_wav.py \
+docker compose exec -T api-gpu python scripts/generate_tvri_wav.py \
   --xlsx "/srv/tvri/Annotator Sign Video + Transcript BISINDO.xlsx" \
   --dataset-name "TVRI 2026" \
-  --clips-dir /srv/tvri/clips_bisindo
+  --clips-dir /srv/tvri/clips/BISINDO
 
 # 3. Ulangi untuk SIBI
 ```
@@ -533,7 +552,7 @@ Harapan: BISINDO 4801 / 2399, SIBI 5270 / 871.
 ### C. Klip benar-benar ada di MinIO
 
 ```bash
-docker compose exec -T api python -c "
+docker compose exec -T api-gpu python -c "
 import asyncio
 from app.services.minio_service import get_minio_service
 m = get_minio_service()
@@ -652,7 +671,7 @@ COMMIT;
 Objek MinIO tidak ikut terhapus:
 
 ```bash
-docker compose exec -T api python -c "
+docker compose exec -T api-gpu python -c "
 import asyncio
 from app.services.minio_service import get_minio_service
 print(asyncio.run(get_minio_service().delete_objects_by_prefix('jobs/<JOB_ID>/')))"
