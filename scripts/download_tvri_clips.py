@@ -47,7 +47,10 @@ DOWNLOAD_URL = "https://drive.google.com/uc?export=download&id={fid}"
 # check keeps a stray HTML page from being written out as a .mp4.
 HTML_SNIFF = (b"<!DOCTYPE", b"<html", b"<HTML")
 
-_print_lock = threading.Lock()
+# Reentrant on purpose: the worker holds this while updating counters and then
+# calls log(), which takes it again. A plain Lock deadlocks the thread against
+# itself on the first progress line, and every other worker piles up behind it.
+_print_lock = threading.RLock()
 
 
 def log(msg: str) -> None:
