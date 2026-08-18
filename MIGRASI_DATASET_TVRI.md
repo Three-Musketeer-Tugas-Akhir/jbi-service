@@ -6,7 +6,11 @@ langkah persis untuk menginjeksikan datanya.
 
 **Jawaban singkat soal deploy: tidak ada `ALTER TABLE` dan tidak ada migrasi
 Alembic.** Yang dibutuhkan hanya `git pull` + rebuild Docker, lalu menjalankan
-satu skrip importer di dalam container API.
+skrip importer di dalam container API.
+
+Rebuild-nya **wajib**, bukan sekadar restart: `requirements.txt` bertambah
+`openpyxl` (dipakai kedua skrip untuk membaca workbook). `ffmpeg` sendiri sudah
+ada di image sejak awal.
 
 ---
 
@@ -308,18 +312,23 @@ INFO Parsed …BISINDO.xlsx: 24 recordings, 121 segments, 7200 utterances (2399 
 docker compose exec -T api python scripts/import_tvri_dataset.py \
   --xlsx "/srv/tvri/Annotator Sign Video + Transcript BISINDO.xlsx" \
   --category BISINDO \
-  --dataset-name "TVRI BISINDO" \
+  --dataset-name "TVRI 2026" \
   --clips-dir /srv/tvri/clips_bisindo
 
 docker compose exec -T api python scripts/import_tvri_dataset.py \
   --xlsx "/srv/tvri/Annotator Sign Video + Transcript SIBI.xlsx" \
   --category SIBI \
-  --dataset-name "TVRI SIBI" \
+  --dataset-name "TVRI 2026" \
   --clips-dir /srv/tvri/clips_sibi
 ```
 
 > **Nama dataset tidak boleh mengandung kata "inews"** — itulah yang memicu mode
 > read-only untuk Pipeline/Klasifikasi dan penguncian glosa.
+
+Kedua bahasa isyarat masuk ke **satu** dataset `TVRI 2026` (yang sudah ada di
+server) dan dibedakan lewat kolom `pipeline_jobs.category`. Ini aman karena
+tidak ada satu pun ID rekaman yang dipakai oleh BISINDO dan SIBI sekaligus —
+sudah diperiksa: 24 rekaman masing-masing, irisan nol.
 
 Tiap rekaman di-commit terpisah, jadi kalau prosesnya terputus, jalankan ulang
 perintah yang sama: rekaman yang sudah masuk akan dilewati (dicek dari
@@ -364,22 +373,145 @@ Selain itu:
 
 ---
 
-## 7. Verifikasi setelah impor
+## 7. WAV per kalimat (objektif internal 3 & 4)
+
+Dataset TVRI tidak menyertakan WAV sama sekali. `pipeline_transcripts.audio_path`
+diisi `NULL` oleh importer, dan halaman Anotasi Suara menampilkan *"Audio WAV
+belum tersedia"*. Skrip `scripts/generate_tvri_wav.py` yang mengisinya.
+
+### Kenapa tidak sekadar memotong audio dari klipnya
+
+Tiap baris membawa **dua** rentang waktu yang berbeda:
+
+```
+Rentang Waktu Audio : 21.98s -> 25.14s      <- yang DIUCAPKAN
+Rentang Waktu JBI   : 22.98  -> 26.50       <- yang ADA DI KLIP
+```
+
+Bedanya karena CV2 menggeser tiap klip non-pertama maju satu detik
+(`S_i = A_i + 1.0`) untuk menangkap jeda penerjemah. Di dataset ini
+selisihnya **tepat 1,00 detik untuk 95% baris** (6.871 dari 7.200 BISINDO,
+5.831 dari 6.141 SIBI).
+
+Artinya: **memotong audio klip dari awal sampai akhir akan membuang satu detik
+pertama ucapan** — biasanya satu-dua kata pertama — di hampir setiap kalimat.
+Itu jelas tidak bisa dipakai sebagai ground truth suara.
+
+### Cara yang dipakai: rekonstruksi dari rantai klip
+
+Detik yang hilang itu tidak benar-benar hilang. CV2 juga menyusun klip
+berurutan tanpa lubang (`E_i = A_{i+1} + 1.0 = S_{i+1}`), jadi audio milik
+kalimat N justru duduk di **ekor klip N-1**. Menelusuri mundur rantai klip
+merekonstruksi jendela ucapan yang persis:
+
+| | jendela audio tercakup penuh | tidak penuh |
+|---|---|---|
+| BISINDO | **7.185 (99,8%)** | 15 |
+| SIBI | **6.125 (99,7%)** | 16 |
+
+31 kalimat sisanya adalah anomali entri di sheet (misal klip 1,2 detik dengan
+rentang audio 28 detik). Skrip melaporkannya, bukan mendiamkannya.
+
+Jadi **tidak perlu mengunduh apa pun selain klip yang sudah diunduh untuk
+impor**. Tidak perlu rekaman siaran asli, tidak perlu API, tidak ada biaya
+tambahan.
+
+> Ini juga satu-satunya jalan yang tersedia: rentang waktu di workbook relatif
+> terhadap **segmen**, sedangkan workbook tidak mencatat di detik ke berapa tiap
+> segmen mulai di dalam siaran. Jadi rekaman siaran asli pun tidak cukup tanpa
+> offset segmen.
+
+### Cara kerja teknisnya
+
+Per segmen, satu lintasan:
+
+1. `ffmpeg -vn` tiap klip sekali → PCM 16 kHz mono (format yang sama dengan
+   `VideoProcessor.extract_audio` untuk iNews)
+2. buffer PCM disusun di **timeline segmen**, tiap klip ditempatkan pada offset
+   nominalnya; jeda antar klip diisi silence supaya waktu lokal == waktu segmen
+3. tiap kalimat dipotong dari buffer itu dengan `[audio_start, audio_end]` —
+   ini murni pemotongan byte, tanpa ffmpeg lagi
+4. diunggah ke `jobs/{job}/audio/{segment_id}_utt_{i}.wav`, lalu
+   `pipeline_transcripts.audio_path` diisi
+
+Biayanya: satu decode ffmpeg pendek per klip (±13.300 untuk seluruh dataset),
+selebihnya operasi memori.
+
+**Kenapa offset nominal, bukan disambung berurutan:** hasil decode AAC beberapa
+puluh milidetik lebih panjang dari rentang nominalnya (padding encoder). Diukur
+±19 ms per klip — kalau klip disambung ujung-ke-ujung, pada segmen TVRI berisi
+341 klip errornya menumpuk jadi beberapa detik dan semua potongan berikutnya
+meleset. Dengan menempatkan tiap klip di offset nominalnya, error terkurung di
+dalam satu klip. Diuji pada klip sintetis yang nada audionya menyandi
+timestamp-nya sendiri: hasilnya presisi sub-frame (error ≤13 ms, dan itu batas
+resolusi alat ukurnya).
+
+### PRASYARAT: klip harus punya track audio
+
+Ini satu-satunya asumsi yang belum bisa saya verifikasi — klipnya belum ada di
+sini. **Cek ini dulu sebelum apa pun:**
+
+```bash
+ffprobe -v error -select_streams a -show_entries stream=codec_name \
+  -of csv=p=0 /srv/tvri/clips_bisindo/MEM001M-20191111Z103928_0_0.40_7.66.mp4
+```
+
+- Keluar `aac` (atau codec lain) → **aman**, lanjutkan.
+- Keluar kosong → klipnya bisu. Pendekatan ini tidak bisa dipakai dan kita perlu
+  rekaman siaran asli **beserta** offset tiap segmen. Beri tahu saya kalau ini
+  yang terjadi.
+
+Skrip juga memeriksa ini sendiri dan berhenti tanpa menulis apa pun kalau
+klipnya bisu.
+
+### Menjalankan
+
+```bash
+# 1. Analisis dulu — tidak menulis apa pun
+docker compose exec -T api python scripts/generate_tvri_wav.py \
+  --xlsx "/srv/tvri/Annotator Sign Video + Transcript BISINDO.xlsx" \
+  --dataset-name "TVRI 2026" \
+  --clips-dir /srv/tvri/clips_bisindo \
+  --report-only
+
+# 2. Sungguhan
+docker compose exec -T api python scripts/generate_tvri_wav.py \
+  --xlsx "/srv/tvri/Annotator Sign Video + Transcript BISINDO.xlsx" \
+  --dataset-name "TVRI 2026" \
+  --clips-dir /srv/tvri/clips_bisindo
+
+# 3. Ulangi untuk SIBI
+```
+
+Harus dijalankan **setelah** importer, karena skrip ini mencari job berdasarkan
+dataset + `original_filename`. Aman diulang: menjalankan lagi hanya menimpa WAV
+dengan isi yang sama.
+
+### Bug yang ikut diperbaiki
+
+`app/api/v1/assets.py` mengizinkan ekstensi `.wav` tapi **tidak punya entri MIME
+untuk wav**, jadi WAV disajikan sebagai `application/octet-stream` — elemen
+`<audio src>` tidak mau memutarnya. Ini juga memengaruhi WAV iNews yang sudah
+ada, bukan hanya TVRI. Sekarang `wav`/`mp3`/`m4a` dipetakan dengan benar.
+
+---
+
+## 8. Verifikasi setelah impor
 
 ### A. Angka di DB
 
 ```sql
-SELECT d.name, count(DISTINCT j.id) AS jobs,
+SELECT d.name, j.category, count(DISTINCT j.id) AS jobs,
        count(DISTINCT s.id) AS segments, count(t.id) AS utterances
 FROM datasets d
 JOIN pipeline_jobs j        ON j.dataset_id = d.id
 JOIN pipeline_segments s    ON s.job_id = j.id
 JOIN pipeline_transcripts t ON t.segment_id = s.id
-WHERE d.name LIKE 'TVRI%'
-GROUP BY d.name;
+WHERE d.name = 'TVRI 2026'
+GROUP BY d.name, j.category;
 ```
 
-Harapan: `TVRI BISINDO` → 24 / 121 / 7200, `TVRI SIBI` → 24 / 100 / 6141.
+Harapan: `BISINDO` → 24 / 121 / 7200, `SIBI` → 24 / 100 / 6141.
 
 ### B. Sebaran status kalimat
 
@@ -408,9 +540,31 @@ m = get_minio_service()
 print(asyncio.run(m.object_exists('jobs/<JOB_ID>/utterances/<SEGMENT_ID>_utt_0.mp4')))"
 ```
 
-### D. Lewat UI
+### D. WAV terisi
 
-1. Pilih dataset **TVRI BISINDO** di pemilih dataset.
+```sql
+SELECT d.name,
+       count(*) FILTER (WHERE t.audio_path IS NOT NULL) AS ada_wav,
+       count(*) FILTER (WHERE t.audio_path IS NULL)     AS belum
+FROM datasets d
+JOIN pipeline_jobs j        ON j.dataset_id = d.id
+JOIN pipeline_segments s    ON s.job_id = j.id
+JOIN pipeline_transcripts t ON t.segment_id = s.id
+WHERE d.name LIKE 'TVRI%'
+GROUP BY d.name;
+```
+
+Lalu dengarkan satu file lewat browser (harus terunduh sebagai `audio/wav`,
+bukan `application/octet-stream`):
+
+```bash
+curl -sI "https://<api>/api/v1/assets/jobs/<JOB_ID>/audio/<SEGMENT_ID>_utt_0.wav" \
+  | grep -i content-type
+```
+
+### E. Lewat UI
+
+1. Pilih dataset **TVRI 2026** di pemilih dataset.
 2. Buka **Pipeline** dan **Klasifikasi** → harus tampil keterangan read-only,
    bukan kanvas pipeline.
 3. Assign satu job ke annotator lewat **Admin → Assign JBI** (job harus muncul
@@ -426,12 +580,12 @@ print(asyncio.run(m.object_exists('jobs/<JOB_ID>/utterances/<SEGMENT_ID>_utt_0.m
 
 ---
 
-## 8. Yang belum dikerjakan
+## 9. Yang belum dikerjakan
 
 | Hal | Status |
 |---|---|
 | Objektif 1 & 2 (gabung dataset) | importer + perbaikan siap; menunggu file klip dari Drive |
-| Objektif 3 & 4 (lengkapi WAV) | **belum** — `pipeline_transcripts.audio_path` diisi `NULL` |
+| Objektif 3 & 4 (lengkapi WAV) | skrip siap & logikanya teruji; **tergantung klip punya track audio** (§7) |
 | Objektif 5 & 6 (annotator assignment) | tidak dikerjakan sesuai permintaan; tersedia via `--annotator-email` atau halaman Admin → Assign JBI |
 | Objektif 7 & 8 (penyelarasan) | jalur kerjanya sudah terverifikasi, tinggal dijalankan annotator |
 | Uji end-to-end di data nyata | **belum** — belum ada klip untuk diuji |
@@ -444,28 +598,39 @@ sekarang belum dikerjakan.
 
 ---
 
-## 9. Deploy
+## 10. Deploy
 
-Tidak ada perubahan skema, jadi urutannya:
+Tidak ada perubahan skema. Kolom yang dipakai skrip semuanya sudah ada:
+`pipeline_transcripts.audio_path` sejak migrasi `017`, `pipeline_jobs.dataset_id`
+sejak `021`, dan `tvri_source` hanya key JSON tambahan di dalam
+`annotation_edits.utterance_corrections` yang tipenya sudah JSONB.
 
 ```bash
 # di server, folder repo BE
 cd <folder-jbi-service>
 git pull
-docker compose --profile cpu up -d --build     # atau --profile gpu
+
+# cek profile mana yang dipakai
+docker compose ps
+
+docker compose --profile cpu up -d --build     # kalau service-nya "api"
+docker compose --profile gpu up -d --build     # kalau service-nya "api-gpu"
 ```
+
+`--build` **wajib** — `requirements.txt` bertambah `openpyxl`. Tanpa rebuild,
+kedua skrip akan gagal dengan `ModuleNotFoundError`.
 
 FE ada di repo terpisah; push ke GitHub sudah cukup kalau auto-deploy Vercel
 aktif. **Deploy BE dulu, FE menyusul** — FE baru mengirim `job_id` ke endpoint
 antrian, yang akan diabaikan BE lama sehingga job TVRI besar gagal termuat.
 
-Perubahan ini satu batch dengan dua dokumen lain yang juga belum di-push:
+Perubahan ini satu batch dengan dua dokumen lain:
 
 - [`LOOKBACK_TRIM_IN.md`](./LOOKBACK_TRIM_IN.md) — tanpa SQL
 - [`MIGRASI_GESTURA_KE_ANOTASI.md`](./MIGRASI_GESTURA_KE_ANOTASI.md) — **ada SQL
-  manual**, jalankan juga kalau di-push bersamaan
+  manual**, jalankan juga kalau belum pernah dijalankan
 
-## 10. Rollback
+## 11. Rollback
 
 Kode: `git revert` + rebuild, tidak ada data yang perlu dipulihkan.
 
@@ -475,12 +640,12 @@ menghapus seluruh job/segmen/transkrip/edit-nya lewat cascade FK:
 ```sql
 -- CEK DULU jumlahnya, ini menghapus seluruh isi dataset
 SELECT count(*) FROM pipeline_jobs
-WHERE dataset_id = (SELECT id FROM datasets WHERE name = 'TVRI BISINDO');
+WHERE dataset_id = (SELECT id FROM datasets WHERE name = 'TVRI 2026');
 
 BEGIN;
 DELETE FROM pipeline_jobs
-WHERE dataset_id = (SELECT id FROM datasets WHERE name = 'TVRI BISINDO');
-DELETE FROM datasets WHERE name = 'TVRI BISINDO';
+WHERE dataset_id = (SELECT id FROM datasets WHERE name = 'TVRI 2026');
+DELETE FROM datasets WHERE name = 'TVRI 2026';
 COMMIT;
 ```
 

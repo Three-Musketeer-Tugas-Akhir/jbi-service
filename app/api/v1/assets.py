@@ -102,6 +102,12 @@ def get_content_type(filename: str) -> str:
         'mkv': 'video/x-matroska',
         'mov': 'video/quicktime',
         'webm': 'video/webm',
+        # .wav is in ALLOWED_EXTENSIONS but was missing here, so utterance audio
+        # was served as application/octet-stream — an <audio src> element will
+        # not play that, which is why the voice annotation player stayed silent.
+        'wav': 'audio/wav',
+        'mp3': 'audio/mpeg',
+        'm4a': 'audio/mp4',
         'json': 'application/json',
         'txt': 'text/plain',
     }
