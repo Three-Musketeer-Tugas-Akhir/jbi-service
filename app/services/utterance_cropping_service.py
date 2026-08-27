@@ -434,16 +434,45 @@ class UtteranceCroppingService:
 
                 # Upload video
                 upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
+
+                # ══════════════════════════════════════════════════════════
+                # BACK UP WHATEVER IS CURRENTLY AT upload_key BEFORE OVERWRITING
+                # For a bulk-imported dataset (TVRI), that key already holds the
+                # delivered clip from import time, not a blank slot -- and every
+                # crop (this one included) always writes to this SAME
+                # deterministic key, so without a backup the previous content is
+                # gone the instant this upload lands. /revert restores the
+                # utterance_corrections row, but with nothing backed up it would
+                # keep pointing at this same key while its bytes now hold the
+                # WRONG (just-cropped) footage. One backup slot is enough since
+                # revert only ever steps back a single crop.
+                # ══════════════════════════════════════════════════════════
+                backup_key = None
+                if await minio_service.object_exists(upload_key):
+                    backup_key = (
+                        f"jobs/{segment.job_id}/utterances_synced_backup/"
+                        f"{segment_id}_utt_{utterance_index}.mp4"
+                    )
+                    try:
+                        await minio_service.copy_object(upload_key, backup_key)
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not back up {upload_key} before crop; revert will "
+                            f"only be able to restore metadata, not video content: {e}"
+                        )
+                        backup_key = None
+
                 with open(tmp_output, "rb") as f:
                     await minio_service.upload_file(f, upload_key)
-                
+
                 _cleanup_tmp(tmp_output)
-                
+
                 utt_list[utt_idx_in_array]["cropped_video_path"] = upload_key
                 utt_list[utt_idx_in_array]["status"] = "OK"
                 # Record how much orphan tail this crop reclaimed, so a revert can
                 # tell an ordinary trim apart from one that reached backwards.
                 utt_list[utt_idx_in_array]["pre_trim_snapshot"]["consumed_from_prev"] = clamped_left
+                utt_list[utt_idx_in_array]["pre_trim_snapshot"]["backup_video_path"] = backup_key
 
                 edit.utterance_corrections = utt_list
                 flag_modified(edit, "utterance_corrections")
@@ -549,10 +578,30 @@ class UtteranceCroppingService:
             # 2. Restore current utterance from snapshot
             old_start = target_utt.get("start")
             old_end = target_utt.get("end")
-            
+
+            # The crop being undone overwrote whatever was at cropped_video_path
+            # (for a bulk-imported dataset, that was the delivered clip itself,
+            # not an empty slot). Restoring start/end/status alone would leave
+            # this key pointing at footage that no longer matches them. Copy the
+            # pre-crop bytes back before touching the metadata below.
+            backup_path = snapshot.get("backup_video_path")
+            restored_video_path = snapshot.get("cropped_video_path")
+            if backup_path and restored_video_path:
+                minio_service = get_minio_service()
+                try:
+                    await minio_service.copy_object(backup_path, restored_video_path)
+                    # Consumed -- and each crop only ever keeps one backup slot
+                    # per utterance, so leaving it around just wastes storage.
+                    await minio_service.delete_object(backup_path)
+                except Exception as e:
+                    logger.warning(
+                        f"Revert for utt {utterance_index}: could not restore video "
+                        f"bytes from backup {backup_path}: {e}"
+                    )
+
             utt_list[target_idx]["start"] = snapshot["start"]
             utt_list[target_idx]["end"] = snapshot["end"]
-            utt_list[target_idx]["cropped_video_path"] = snapshot.get("cropped_video_path")
+            utt_list[target_idx]["cropped_video_path"] = restored_video_path
             utt_list[target_idx]["status"] = "DRAFT"
             # Remove the snapshot after using it
             utt_list[target_idx].pop("pre_trim_snapshot", None)

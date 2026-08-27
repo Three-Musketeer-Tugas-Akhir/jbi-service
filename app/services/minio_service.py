@@ -15,6 +15,7 @@ import threading
 from typing import BinaryIO, Union
 
 from minio import Minio
+from minio.commonconfig import CopySource
 from minio.error import S3Error
 from urllib3.exceptions import MaxRetryError
 
@@ -364,6 +365,37 @@ class MinIOService:
                 f"MinIO unavailable while checking object {object_name}: {e}"
             )
     
+    def _copy_object_sync(self, source_name: str, dest_name: str) -> None:
+        self._client.copy_object(
+            self._bucket_name,
+            dest_name,
+            CopySource(self._bucket_name, source_name),
+        )
+
+    async def copy_object(self, source_name: str, dest_name: str) -> None:
+        """
+        Server-side copy within the same bucket (no download/re-upload).
+
+        Used to back up an utterance's delivered clip before a crop overwrites
+        it, and to restore that backup on revert.
+
+        Args:
+            source_name: Existing object path to copy from
+            dest_name: Object path to copy to (overwritten if it exists)
+
+        Raises:
+            StorageError: If the copy fails (including a missing source)
+            StorageUnavailableError: If MinIO is unavailable
+        """
+        try:
+            await asyncio.to_thread(self._copy_object_sync, source_name, dest_name)
+        except S3Error as e:
+            raise StorageError(f"Failed to copy {source_name} -> {dest_name}: {e}")
+        except MaxRetryError as e:
+            raise StorageUnavailableError(
+                f"MinIO unavailable while copying {source_name} -> {dest_name}: {e}"
+            )
+
     def _get_object_size_sync(self, object_name: str) -> int:
         """Synchronous size retrieval."""
         stat = self._client.stat_object(
