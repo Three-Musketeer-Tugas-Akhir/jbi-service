@@ -103,22 +103,28 @@ async def get_annotation_queue(
 async def get_segment_for_annotation(
     segment_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "annotator"))
+    current_user: User = Depends(require_role("admin", "annotator", "curator"))
 ):
     """
     Get complete details for a segment to annotate.
-    
+
     Includes:
     - Pre-signed video URL (1 hour expiry)
     - ASR transcript and timestamps
     - Edit history
     - Current values (ASR or latest approved edit)
+
+    Curators reach this to view a submitted segment before approving/rejecting
+    it -- they never have their own queue entry for it, so they're granted the
+    same bypass as admin on the "must be the assigned annotator" check below.
+    They get no additional write access from this: /draft, /crop and /revert
+    all still require role annotator/admin.
     """
     service = AnnotationQueueService(db)
     result = await service.get_segment_for_annotation(
         segment_id=segment_id,
         annotator_id=current_user.id,
-        is_admin=current_user.has_role("admin")
+        is_admin=current_user.has_role("admin") or current_user.has_role("curator")
     )
     return result
 
@@ -323,7 +329,7 @@ async def get_merged_video_for_utterance(
     utterance_index: int,
     include_prev: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "annotator"))
+    current_user: User = Depends(require_role("admin", "annotator", "curator"))
 ):
     """
     Get merged video for an utterance (video-editor-sibi style).
@@ -345,10 +351,11 @@ async def get_merged_video_for_utterance(
     from app.db.models.pipeline import PipelineSegment
     from sqlalchemy import select
     
-    # Verify assignment (admins may view any segment, e.g. reviewing submissions)
+    # Verify assignment (admins and curators may view any segment -- curators
+    # have no queue entry of their own for it, they're reviewing someone else's)
     queue_service = AnnotationQueueService(db)
     queue_entry = await queue_service.queue_repo.get_by_segment(segment_id)
-    is_admin = current_user.has_role("admin")
+    is_admin = current_user.has_role("admin") or current_user.has_role("curator")
     if not queue_entry or (not is_admin and queue_entry.annotator_id != current_user.id):
         raise HTTPException(status_code=403, detail="Segmen ini tidak ditugaskan kepada Anda")
     
@@ -600,12 +607,17 @@ async def list_my_submissions(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_role("admin", "annotator"))
+    current_user: User = Depends(require_role("admin", "annotator", "curator"))
 ):
     """
     List all annotations submitted by the current user.
-    
+
     Returns paginated list with review status for each submission.
+
+    Curators use this as their review queue -- they have no queue entries of
+    their own (they never do JBI annotation work), so is_admin's existing
+    "ignore the annotator_id filter, return everyone's" behavior is reused
+    for them here rather than adding a second parallel code path.
     """
     service = AnnotationSubmissionService(db)
     result = await service.list_my_submissions(
@@ -613,7 +625,7 @@ async def list_my_submissions(
         status=status,
         page=page,
         page_size=page_size,
-        is_admin=current_user.has_role("admin")
+        is_admin=current_user.has_role("admin") or current_user.has_role("curator")
     )
     return result
 
