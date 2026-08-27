@@ -24,7 +24,16 @@ class UtteranceCorrection(BaseModel):
     end: float = Field(..., gt=0)
     cropped_video_path: Optional[str] = Field(None, description="Path to physically cropped video")
     status: Optional[str] = Field(None, description="Status of the utterance (e.g. OK)")
-    
+    can_revert: Optional[bool] = Field(
+        None,
+        description=(
+            "Server-computed: true when this utterance has a pending pre_trim_snapshot "
+            "that POST /{segment_id}/utterances/{utterance_index}/revert can restore. "
+            "Read-only — the client never sets this; it is ignored on incoming requests "
+            "(SaveDraftRequest) and only meaningful on responses."
+        ),
+    )
+
     @model_validator(mode='after')
     def validate_timestamps(self):
         if self.start >= self.end:

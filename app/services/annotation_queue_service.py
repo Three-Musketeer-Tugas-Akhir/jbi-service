@@ -185,7 +185,13 @@ class AnnotationQueueService:
                     "start": u["start"],
                     "end": u["end"],
                     "cropped_video_path": cv_path,
-                    "status": u.get("status")
+                    "status": u.get("status"),
+                    # Drives the "Batalkan Trim" button — only meaningful when a
+                    # pre_trim_snapshot is actually pending (see create_draft /
+                    # crop_and_upload). Bare bool() is correct here: the empty
+                    # dict {} a stale carry-forward could theoretically leave
+                    # behind is falsy same as None.
+                    "can_revert": bool(u.get("pre_trim_snapshot")),
                 })
         
         return {
