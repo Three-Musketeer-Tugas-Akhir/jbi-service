@@ -129,13 +129,27 @@ class UtteranceCroppingService:
                         }
                         break
                 
-                utt_list[utt_idx_in_array]["pre_trim_snapshot"] = {
-                    "start": utt_list[utt_idx_in_array].get("start"),
-                    "end": utt_list[utt_idx_in_array].get("end"),
-                    "cropped_video_path": utt_list[utt_idx_in_array].get("cropped_video_path"),
-                    "next_utterance": next_utt_snapshot,
-                    "trimmed_at": datetime.utcnow().isoformat(),
-                }
+                # The draft-save that necessarily preceded this crop (the /crop
+                # endpoint takes no start/end of its own -- it only crops to
+                # whatever the latest draft already holds) already stashed the
+                # true PRE-trim start/end in create_draft, since by the time
+                # THIS code runs those fields have already been overwritten
+                # with the new target values. Reuse that snapshot and just fill
+                # in next_utterance, which only becomes knowable here. The
+                # inline fallback below only fires for a crop triggered without
+                # a preceding draft-save (not the normal FE flow).
+                existing_snapshot = utt_list[utt_idx_in_array].get("pre_trim_snapshot")
+                if existing_snapshot:
+                    existing_snapshot["next_utterance"] = next_utt_snapshot
+                    utt_list[utt_idx_in_array]["pre_trim_snapshot"] = existing_snapshot
+                else:
+                    utt_list[utt_idx_in_array]["pre_trim_snapshot"] = {
+                        "start": utt_list[utt_idx_in_array].get("start"),
+                        "end": utt_list[utt_idx_in_array].get("end"),
+                        "cropped_video_path": utt_list[utt_idx_in_array].get("cropped_video_path"),
+                        "next_utterance": next_utt_snapshot,
+                        "trimmed_at": datetime.utcnow().isoformat(),
+                    }
                 
                 curr_video_url = await minio_service.generate_presigned_url(curr_transcript.video_path, expiry=3600)
                 

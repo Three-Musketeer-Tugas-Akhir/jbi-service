@@ -315,14 +315,22 @@ class AnnotationEditService:
         )
         existing_draft = existing_result.scalars().first()
 
-        # Carry forward cropped_video_path from the existing draft when the
-        # incoming payload omits it (defensive against older clients), then
-        # sanitize so only raw MinIO object keys are stored.
+        # Carry-forward source: the segment's current state regardless of who
+        # wrote it, NOT just this editor's own row. A bulk importer (e.g. the
+        # TVRI seed data) creates its initial draft with editor_id=None, which
+        # `existing_draft` above never matches -- on an annotator's very first
+        # save for such a segment, keying off `existing_draft` here would treat
+        # every utterance as having no prior state. Harmless for
+        # cropped_video_path/floor (their seeded defaults already equal what
+        # the fallback below produces), but NOT harmless for pre_trim_snapshot:
+        # without a real "before" value, a first-ever trim leaves /revert with
+        # nothing genuine to restore.
+        latest_segment_edit = await self.edit_repo.get_latest_by_segment(segment_id)
         prev_map = {}
-        if existing_draft and existing_draft.utterance_corrections:
+        if latest_segment_edit and latest_segment_edit.utterance_corrections:
             prev_map = {
                 u.get("utterance_index"): u
-                for u in existing_draft.utterance_corrections
+                for u in latest_segment_edit.utterance_corrections
             }
         for d in utterance_dicts:
             prev = prev_map.get(d.get("utterance_index"))
@@ -336,6 +344,36 @@ class AnnotationEditService:
             # would stop hiding the head owned by the previous sentence.
             if d.get("floor") is None and prev is not None and prev.get("floor") is not None:
                 d["floor"] = prev["floor"]
+            # Pre-trim snapshot: stash "before" the moment start/end actually
+            # change, so /revert has a real state to restore. crop_and_upload
+            # used to take this snapshot itself, but by then the draft-save
+            # above had already overwritten start/end with the NEW (target)
+            # values -- so the snapshot always equalled what was about to be
+            # cropped to, making revert a silent no-op. The schema never round
+            # -trips pre_trim_snapshot back from the client (same as floor).
+            #
+            # A snapshot is only carried forward untouched while `prev` is
+            # still mid-drag (status != OK) -- once a crop has actually
+            # committed that prior state (status == OK), it becomes the new
+            # baseline: the NEXT divergence starts a fresh snapshot from it.
+            # Otherwise /revert on a second trim would silently undo the first
+            # one too, reaching all the way back past a crop the annotator
+            # already confirmed as correct.
+            if prev is not None:
+                prev_committed = prev.get("status") == "OK"
+                if prev.get("pre_trim_snapshot") and not prev_committed:
+                    d["pre_trim_snapshot"] = prev["pre_trim_snapshot"]
+                elif (
+                    abs(d.get("start", 0.0) - prev.get("start", 0.0)) > 1e-6
+                    or abs(d.get("end", 0.0) - prev.get("end", 0.0)) > 1e-6
+                ):
+                    d["pre_trim_snapshot"] = {
+                        "start": prev.get("start"),
+                        "end": prev.get("end"),
+                        "cropped_video_path": prev.get("cropped_video_path"),
+                        "next_utterance": None,  # filled in by crop_and_upload if a crop follows
+                        "trimmed_at": datetime.utcnow().isoformat(),
+                    }
 
         if existing_draft:
             existing_draft.old_text = old_text
