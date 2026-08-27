@@ -32,6 +32,8 @@ from app.schemas.annotation import (
 )
 from app.services.annotation_submission_service import AnnotationSubmissionService
 from app.repositories.annotation_review_repository import AnnotationReviewRepository
+from app.repositories.annotation_edit_repository import AnnotationEditRepository
+from app.db.models.annotation import AnnotationEdit
 from app.repositories.job_repository import JobRepository
 from app.services.notification_service import NotificationService
 from app.core.exceptions import NotFoundError
@@ -711,15 +713,26 @@ async def reject_annotation_review(
     review = await review_repo.get_by_id(review_id)
     if not review:
         raise NotFoundError(f"Review '{review_id}' not found")
-    
+
     await review_repo.update_status(
         review_id=review_id,
         status="REJECTED",
         curator_id=current_user.id,
         feedback=action_data.feedback
     )
+
+    # Unstick the underlying edit. submit_for_review() blocks on ANY edit row
+    # for the segment still marked SUBMITTED (AnnotationEditRepository.
+    # has_submitted_edit), and this reject only touched the review row —
+    # the edit itself was left at SUBMITTED from the original submission.
+    # Left alone, the annotator's next submit attempt 409s forever, even
+    # after saving a fresh draft with the requested fix. Flip it to the
+    # edit's own REJECTED status so has_submitted_edit() stops matching it.
+    edit_repo = AnnotationEditRepository(db)
+    await edit_repo.update_status(review.edit_id, AnnotationEdit.STATUS_REJECTED)
+
     await db.commit()
-    
+
     return {
         "review_id": review_id,
         "status": "REJECTED",
