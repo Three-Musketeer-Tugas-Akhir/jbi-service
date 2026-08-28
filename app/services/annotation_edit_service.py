@@ -367,11 +367,31 @@ class AnnotationEditService:
                     abs(d.get("start", 0.0) - prev.get("start", 0.0)) > 1e-6
                     or abs(d.get("end", 0.0) - prev.get("end", 0.0)) > 1e-6
                 ):
+                    # Capture the NEIGHBOUR's pre-trim state here too, for the
+                    # same reason the target's is captured here: trimming N
+                    # cascades into N+1's start, and by the time crop_and_upload
+                    # runs, this very draft-save has already written the new
+                    # cascaded value. crop_and_upload reads N+1 from the (already
+                    # mutated) list, so it recorded the POST-cascade start and
+                    # /revert then "restored" N+1 to exactly where it already
+                    # was — leaving an orphan gap between N's restored end and
+                    # N+1's still-shifted start. prev_map is the pre-save state,
+                    # so it still holds the true "before" value.
+                    prev_next = prev_map.get((d.get("utterance_index") or 0) + 1)
                     d["pre_trim_snapshot"] = {
                         "start": prev.get("start"),
                         "end": prev.get("end"),
                         "cropped_video_path": prev.get("cropped_video_path"),
-                        "next_utterance": None,  # filled in by crop_and_upload if a crop follows
+                        "next_utterance": (
+                            {
+                                "start": prev_next.get("start"),
+                                "end": prev_next.get("end"),
+                                "cropped_video_path": prev_next.get("cropped_video_path"),
+                                "status": prev_next.get("status"),
+                            }
+                            if prev_next is not None
+                            else None
+                        ),
                         "trimmed_at": datetime.utcnow().isoformat(),
                     }
 

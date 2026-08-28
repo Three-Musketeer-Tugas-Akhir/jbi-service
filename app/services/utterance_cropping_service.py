@@ -140,7 +140,13 @@ class UtteranceCroppingService:
                 # a preceding draft-save (not the normal FE flow).
                 existing_snapshot = utt_list[utt_idx_in_array].get("pre_trim_snapshot")
                 if existing_snapshot:
-                    existing_snapshot["next_utterance"] = next_utt_snapshot
+                    # Only fill next_utterance if create_draft could not. The value
+                    # computed above is read from utt_list, which the preceding
+                    # draft-save has ALREADY cascaded, so it holds N+1's post-trim
+                    # start — restoring from it is a no-op. create_draft captures
+                    # the genuine pre-trim neighbour, so never clobber that.
+                    if existing_snapshot.get("next_utterance") is None:
+                        existing_snapshot["next_utterance"] = next_utt_snapshot
                     utt_list[utt_idx_in_array]["pre_trim_snapshot"] = existing_snapshot
                 else:
                     utt_list[utt_idx_in_array]["pre_trim_snapshot"] = {
