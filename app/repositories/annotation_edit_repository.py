@@ -2,7 +2,7 @@
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models.annotation import AnnotationEdit
@@ -68,20 +68,32 @@ class AnnotationEditRepository:
     ) -> Optional[AnnotationEdit]:
         """
         Get latest active edit (DRAFT, PENDING, or SUBMITTED) for a segment by editor.
-        
+
         Excludes APPROVED and REJECTED edits as they are considered complete.
         This is useful for the annotation queue to show work in progress.
+
+        Matches the editor's own rows OR an unowned (editor_id IS NULL) one: a
+        bulk importer such as the TVRI seed writes its initial DRAFT with no
+        editor, and filtering strictly on editor_id made the queue report 0/N
+        progress for work that plainly exists. The editor's own row wins when
+        both are present.
         """
         query = select(AnnotationEdit).where(
             AnnotationEdit.segment_id == segment_id,
-            AnnotationEdit.editor_id == editor_id,
+            or_(
+                AnnotationEdit.editor_id == editor_id,
+                AnnotationEdit.editor_id.is_(None),
+            ),
             AnnotationEdit.status.in_([
                 AnnotationEdit.STATUS_DRAFT,
                 AnnotationEdit.STATUS_PENDING,
                 AnnotationEdit.STATUS_SUBMITTED
             ]),
             AnnotationEdit.is_deleted == False
-        ).order_by(desc(AnnotationEdit.edited_at)).limit(1)
+        ).order_by(
+            AnnotationEdit.editor_id.is_(None).asc(),  # own row before the seed
+            desc(AnnotationEdit.edited_at)
+        ).limit(1)
         
         result = await self.db.execute(query)
         return result.scalar_one_or_none()

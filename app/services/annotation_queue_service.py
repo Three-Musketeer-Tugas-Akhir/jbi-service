@@ -283,6 +283,15 @@ class AnnotationQueueService:
         segment = prefetch["segments"].get(entry.segment_id)
         job = prefetch["jobs"].get(segment.job_id) if segment else None
         latest_edit = prefetch["edits"].get((entry.segment_id, entry.annotator_id))
+        if latest_edit is None:
+            # Fall back to the unowned seed draft. A bulk importer (the TVRI
+            # dataset) writes its initial DRAFT with editor_id=None, so keying
+            # strictly on the assigned annotator finds nothing and the card
+            # reports 0/N progress with has_active_work=False — even when the
+            # segment already carries hundreds of resolved utterances. The
+            # workspace reads the same rows via get_latest_by_segment (no
+            # editor filter), which is why the two views disagreed.
+            latest_edit = prefetch["edits"].get((entry.segment_id, None))
         return self._queue_item_dict(entry, segment, job, latest_edit)
 
     async def _build_queue_item(self, entry) -> dict:
