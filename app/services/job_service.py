@@ -290,7 +290,8 @@ class JobService:
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
         page: int = 1,
-        page_size: int = 20
+        page_size: int = 20,
+        dataset_id: Optional[str] = None,
     ) -> dict:
         """
         List jobs with pagination and filtering.
@@ -319,6 +320,8 @@ class JobService:
             conditions.append(PipelineJob.created_at >= from_date)
         if to_date:
             conditions.append(PipelineJob.created_at <= to_date)
+        if dataset_id:
+            conditions.append(PipelineJob.dataset_id == UUID(dataset_id))
         
         # Count total
         count_query = select(func.count(PipelineJob.id))

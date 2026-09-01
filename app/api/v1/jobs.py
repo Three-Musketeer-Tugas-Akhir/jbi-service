@@ -1339,6 +1339,7 @@ async def list_jobs_pipeline(
     status: Optional[str] = Query(None, description="Filter by job status"),
     from_date: Optional[str] = Query(None, description="Start date (ISO 8601)"),
     to_date: Optional[str] = Query(None, description="End date (ISO 8601)"),
+    dataset_id: Optional[str] = Query(None, description="Filter by dataset ID"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     db: AsyncSession = Depends(get_db),
@@ -1356,6 +1357,14 @@ async def list_jobs_pipeline(
     try:
         job_service = get_job_service(db, job_repo)
         
+        if dataset_id:
+            try:
+                uuid.UUID(dataset_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, detail=f"Invalid dataset_id: {dataset_id}"
+                )
+
         result = await job_service.list_jobs(
             current_user_id=str(current_user.id),
             is_admin=current_user.is_admin,
@@ -1363,7 +1372,8 @@ async def list_jobs_pipeline(
             from_date=from_date,
             to_date=to_date,
             page=page,
-            page_size=page_size
+            page_size=page_size,
+            dataset_id=dataset_id,
         )
         
         # Convert items to Pydantic models
