@@ -116,11 +116,21 @@ class TextNormalizer:
         # Longest-first ordering matters: Python's alternation takes the first
         # branch that matches, so "ngomong-ngomong" must be offered before
         # "ngomong" or the compound would only be half-replaced.
+        # Hyphen-aware boundaries instead of \b. SIBI finger-spelling writes a
+        # word as single letters joined by hyphens ("S-P-B-U"), and \b treats a
+        # hyphen as a boundary, so every one of those letters looked like a
+        # standalone word. The dictionary legitimately maps some single letters
+        # ("u" -> "kamu", "g" -> "tidak"), which turned "S-P-B-U" into
+        # "s-p-b kamu" — silently corrupting the gloss.
+        #
+        # Refusing a match that touches a hyphen protects finger-spelling while
+        # still rewriting the same word standing on its own, and still matches
+        # hyphenated KEYS like "ngomong-ngomong" (nothing adjoins those ends).
         self._slang_pattern = None
         if self.slang_dict:
             alternatives = sorted(self.slang_dict, key=len, reverse=True)
             self._slang_pattern = re.compile(
-                r"\b(" + "|".join(re.escape(a) for a in alternatives) + r")\b"
+                r"(?<![\w-])(" + "|".join(re.escape(a) for a in alternatives) + r")(?![\w-])"
             )
 
     # -----------------------------------------------------------------------
