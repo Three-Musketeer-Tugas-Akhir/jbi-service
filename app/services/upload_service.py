@@ -44,19 +44,33 @@ class UploadService:
     """Service for handling Tus Protocol chunked uploads."""
     
     # Constants
-    # 4MB per chunk. The browser reaches this API through the frontend's proxy
-    # rewrite, which rejects large request bodies with a 502
-    # (ROUTER_EXTERNAL_TARGET_ERROR) — so a PATCH bigger than this never
-    # arrives at all. Measured against the deployed proxy: 4MB succeeded on
-    # every attempt, 6MB and 8MB were intermittent, and everything from 9MB up
-    # failed outright. The previous 50MB meant every chunk of every local
-    # upload 502'd, which is why local upload never worked while the
-    # server-side YouTube path (no browser request body) did.
+    # Chunk size is squeezed between two hard limits, and the old 50MB broke
+    # the upper one so no local upload could ever finish:
+    #
+    #  * Upper — the browser reaches this API through the frontend's proxy
+    #    rewrite, which rejects large request bodies with a 502
+    #    (ROUTER_EXTERNAL_TARGET_ERROR) before they arrive. Measured on the
+    #    deployed proxy: <=8MB mostly succeeds, 9MB and above always fails.
+    #  * Lower — assemble_file() joins the chunks with MinIO compose_object,
+    #    an S3 multipart copy, and S3 requires every part except the last to
+    #    be at least 5 MiB. A 4MB chunk uploads fine and then fails assembly
+    #    with "size 4194304 must be greater than 5242880".
+    #
+    # 7 MiB sits between the two with margin on both sides. The proxy also
+    # throws occasional 502s at any size in this range; the client retries.
     #
     # Clients are told this value via the Upload-Chunk-Size response header on
     # create; do not hardcode it separately on the client.
-    DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024
+    MIN_S3_PART_SIZE = 5 * 1024 * 1024  # S3/MinIO multipart floor
+    DEFAULT_CHUNK_SIZE = 7 * 1024 * 1024
     MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
+
+    # Guard the S3 floor explicitly: dropping DEFAULT_CHUNK_SIZE below 5 MiB
+    # again would upload fine and only fail later, during assembly.
+    assert DEFAULT_CHUNK_SIZE >= MIN_S3_PART_SIZE, (
+        f"DEFAULT_CHUNK_SIZE ({DEFAULT_CHUNK_SIZE}) must be >= the S3 multipart "
+        f"minimum ({MIN_S3_PART_SIZE}); compose_object rejects smaller parts."
+    )
     TEMP_BUCKET = "temp-uploads"
     FINAL_BUCKET = settings.minio_bucket_name
     UPLOAD_EXPIRY_HOURS = 24
