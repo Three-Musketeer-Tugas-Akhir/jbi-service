@@ -130,6 +130,30 @@ async def _collect_ok_utterances(
 # ---------------------------------------------------------------------------
 
 @router.get(
+    "/normalization/slang-dictionary",
+    summary="The slang → baku dictionary the normalizer actually applies",
+    tags=["Normalization"],
+)
+async def get_slang_dictionary(
+    current_user=Depends(require_curator),
+):
+    """Expose the real slang dictionary used by the normalizer.
+
+    The curation UI shows a "Kamus Slang → Baku" panel so a curator can see why
+    a word was rewritten. That panel used to be a hardcoded list of 14 pairs in
+    the frontend, which silently disagreed with the ~1.3k entries the backend
+    actually applies. Serving it from the same file the normalizer loads keeps
+    the two from drifting apart again.
+    """
+    normalizer = TextNormalizer()
+    entries = [
+        {"slang": slang, "standard": standard}
+        for slang, standard in sorted(normalizer.slang_dict.items())
+    ]
+    return {"total": len(entries), "entries": entries}
+
+
+@router.get(
     "/normalization/segments/{job_id}",
     response_model=AutoNormalizeResponse,
     summary="Get current normalization state for a job's OK utterances",

@@ -108,6 +108,21 @@ class TextNormalizer:
         self.sibi_entities = _load_sibi_entities()
         self.sibi_finger_spelling = _load_sibi_finger_spelling()
 
+        # One alternation compiled once, instead of one regex per entry compiled
+        # and run on every call. The dictionary grew from 139 to ~1.3k entries,
+        # which would otherwise mean ~1.3k compiles plus ~1.3k full-string scans
+        # for EVERY sentence — and a job can hold hundreds of sentences.
+        #
+        # Longest-first ordering matters: Python's alternation takes the first
+        # branch that matches, so "ngomong-ngomong" must be offered before
+        # "ngomong" or the compound would only be half-replaced.
+        self._slang_pattern = None
+        if self.slang_dict:
+            alternatives = sorted(self.slang_dict, key=len, reverse=True)
+            self._slang_pattern = re.compile(
+                r"\b(" + "|".join(re.escape(a) for a in alternatives) + r")\b"
+            )
+
     # -----------------------------------------------------------------------
     # Public API
     # -----------------------------------------------------------------------
@@ -221,13 +236,19 @@ class TextNormalizer:
         return pattern.sub(_replace_number_match, text)
 
     def _step_slang(self, text: str) -> str:
-        """Replace slang words with standard Indonesian equivalents."""
-        result = text
-        # Sort by length descending to avoid partial replacements
-        for slang, standard in sorted(self.slang_dict.items(), key=lambda x: -len(x[0])):
-            pattern = re.compile(r"\b" + re.escape(slang) + r"\b")
-            result = pattern.sub(standard, result)
-        return result
+        """Replace slang words with standard Indonesian equivalents.
+
+        Single pass over the text. The previous implementation substituted the
+        whole dictionary sequentially, so a word produced by one replacement
+        could be rewritten again by a later entry. The dictionary is now
+        chain-flattened (no value is itself a key), which makes one pass both
+        correct and idempotent.
+        """
+        if not self._slang_pattern:
+            return text
+        return self._slang_pattern.sub(
+            lambda m: self.slang_dict.get(m.group(0), m.group(0)), text
+        )
 
     def _step_filler(self, text: str) -> str:
         """Remove filler words."""
