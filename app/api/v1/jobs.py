@@ -1387,6 +1387,10 @@ async def list_jobs_pipeline(
             total_pages=result["total_pages"]
         )
         
+    except HTTPException:
+        # Deliberate responses (e.g. 400 for a malformed dataset_id) must not be
+        # swallowed by the catch-all below and re-reported as a 500.
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
