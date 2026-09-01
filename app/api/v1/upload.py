@@ -300,19 +300,32 @@ async def _assemble_and_create_job(
                 )
                 return
             
-            # Assemble file
-            final_key = await upload_service.assemble_file(upload)
-            upload.final_key = final_key
-            
-            # Get user
+            # Load the user BEFORE assembling.
+            #
+            # assemble_file() assigns upload.job_id so it can build the final
+            # MinIO key (jobs/<job_id>/original/...), but the matching
+            # pipeline_jobs row is not inserted until create_pipeline_job()
+            # below. Any query issued in between triggers a SQLAlchemy
+            # autoflush, which writes that pending uploads.job_id and trips
+            # uploads_job_id_fkey — the job does not exist yet.
+            #
+            # This lookup used to sit after assemble_file() and was exactly
+            # that query, so every chunked upload died here: the bytes landed
+            # in MinIO, the DB write failed, and the upload was left stuck at
+            # "assembling" forever while the client polled for a completion
+            # that could never come.
             from sqlalchemy import select
             from app.db.models import User
             result = await db.execute(select(User).where(User.id == user_id))
             user = result.scalar_one_or_none()
-            
+
             if not user:
                 raise Exception(f"User {user_id} not found")
-            
+
+            # Assemble file
+            final_key = await upload_service.assemble_file(upload)
+            upload.final_key = final_key
+
             # Create pipeline job (pass dataset_id from upload metadata)
             job = await pipeline_service.create_pipeline_job(
                 upload, user, dataset_id=upload.dataset_id
@@ -334,8 +347,15 @@ async def _assemble_and_create_job(
             
         except Exception as e:
             logger.error(f"Failed to assemble upload {upload_id}: {e}", exc_info=True)
-            # Mark upload as failed
+            # Mark upload as failed.
+            #
+            # Roll back first: if the failure came from a flush, the session is
+            # poisoned and every further statement raises "transaction has been
+            # rolled back", so this handler failed too and left the row at
+            # "assembling". The client then polls a status that never changes
+            # instead of being told the upload failed.
             try:
+                await db.rollback()
                 upload = await upload_service.get_upload(upload_id, user_id)
                 upload.status = "failed"
                 await db.commit()
