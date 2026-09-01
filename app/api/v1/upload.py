@@ -98,6 +98,11 @@ async def create_upload(
                 "Tus-Resumable": "1.0.0",
                 "Tus-Version": "1.0.0",
                 "Tus-Max-Size": str(UploadService.MAX_FILE_SIZE),
+                # The server owns the chunk size: chunk_index is derived as
+                # offset // upload.chunk_size, so a client guessing a different
+                # size sends offsets that fail validation. Advertise it rather
+                # than letting both sides hardcode it and drift.
+                "Upload-Chunk-Size": str(upload.chunk_size),
                 "Content-Length": "0",
             }
         )

@@ -44,7 +44,18 @@ class UploadService:
     """Service for handling Tus Protocol chunked uploads."""
     
     # Constants
-    DEFAULT_CHUNK_SIZE = 50 * 1024 * 1024  # 50MB per chunk (5× fewer round-trips for 1GB files)
+    # 4MB per chunk. The browser reaches this API through the frontend's proxy
+    # rewrite, which rejects large request bodies with a 502
+    # (ROUTER_EXTERNAL_TARGET_ERROR) — so a PATCH bigger than this never
+    # arrives at all. Measured against the deployed proxy: 4MB succeeded on
+    # every attempt, 6MB and 8MB were intermittent, and everything from 9MB up
+    # failed outright. The previous 50MB meant every chunk of every local
+    # upload 502'd, which is why local upload never worked while the
+    # server-side YouTube path (no browser request body) did.
+    #
+    # Clients are told this value via the Upload-Chunk-Size response header on
+    # create; do not hardcode it separately on the client.
+    DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024
     MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024  # 10GB
     TEMP_BUCKET = "temp-uploads"
     FINAL_BUCKET = settings.minio_bucket_name
