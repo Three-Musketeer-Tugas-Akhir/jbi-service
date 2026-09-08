@@ -192,6 +192,12 @@ class AnnotationQueueService:
                     # dict {} a stale carry-forward could theoretically leave
                     # behind is falsy same as None.
                     "can_revert": bool(u.get("pre_trim_snapshot")),
+                    # Annotator's note for a case that trimming cannot fix, and
+                    # the flag asking a curator to look at it. Stored on save, so
+                    # they have to be returned here or the workspace shows an
+                    # empty box on reload and the note looks lost.
+                    "note": u.get("note"),
+                    "needs_review": u.get("needs_review"),
                 })
         
         return {

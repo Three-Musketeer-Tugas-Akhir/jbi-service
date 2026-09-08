@@ -363,21 +363,26 @@ class AnnotationEditService:
             # cropped to, making revert a silent no-op. The schema never round
             # -trips pre_trim_snapshot back from the client (same as floor).
             #
-            # A snapshot is only carried forward untouched while `prev` is
-            # still mid-drag (status != OK) -- once a crop has actually
-            # committed that prior state (status == OK), it becomes the new
-            # baseline: the NEXT divergence starts a fresh snapshot from it.
-            # Otherwise /revert on a second trim would silently undo the first
-            # one too, reaching all the way back past a crop the annotator
-            # already confirmed as correct.
+            # Once a crop has committed a state (status == OK), that state becomes
+            # the new baseline: the NEXT divergence starts a fresh snapshot from
+            # it, so /revert on a second trim cannot reach back past a crop the
+            # annotator already confirmed.
+            #
+            # A save that does NOT move start/end must keep whatever snapshot is
+            # on file. The client re-sends every utterance of the job on each
+            # save, so an unchanged, already-OK sentence was passing through here
+            # on every later save and, with neither branch matching, silently
+            # lost its snapshot -- which is why finishing one sentence made all
+            # the earlier ones permanently un-revertible.
             if prev is not None:
                 prev_committed = prev.get("status") == "OK"
-                if prev.get("pre_trim_snapshot") and not prev_committed:
-                    d["pre_trim_snapshot"] = prev["pre_trim_snapshot"]
-                elif (
+                trim_moved = (
                     abs(d.get("start", 0.0) - prev.get("start", 0.0)) > 1e-6
                     or abs(d.get("end", 0.0) - prev.get("end", 0.0)) > 1e-6
-                ):
+                )
+                if prev.get("pre_trim_snapshot") and (not prev_committed or not trim_moved):
+                    d["pre_trim_snapshot"] = prev["pre_trim_snapshot"]
+                elif trim_moved:
                     # Capture the NEIGHBOUR's pre-trim state here too, for the
                     # same reason the target's is captured here: trimming N
                     # cascades into N+1's start, and by the time crop_and_upload
