@@ -2468,6 +2468,17 @@ async def download_dataset_zip(
                     # Include even DRAFT utterances (not just OK) for flexibility
                     # utt_status = u_corr.get("status", "DRAFT")
 
+                    # MERGED means an earlier sentence was extended over this row
+                    # and swallowed it whole, so it has no footage of its own left.
+                    # Exporting it would emit an empty clip and, worse, duplicate
+                    # the glosa of the sentence that absorbed it.
+                    if u_corr.get("status") == "MERGED":
+                        logger.info(
+                            f"ZIP skip utt {transcript.utterance_index} of segment "
+                            f"{segment.segment_index}: merged into an earlier sentence"
+                        )
+                        continue
+
                     # 1. Video (Cropped by JBI) — always the post-annotation clip
                     # from utterances_synced, never the pre-annotation source.
                     cv_path = await _resolve_synced_video_path(

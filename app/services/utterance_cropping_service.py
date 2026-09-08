@@ -25,7 +25,11 @@ from app.db.session import async_session_maker
 from app.db.models.pipeline import PipelineSegment, PipelineTranscript
 from app.db.models.annotation import AnnotationEdit
 from app.services.minio_service import get_minio_service
-from app.services.utterance_merge_service import _prev_orphan_geometry
+from app.services.utterance_merge_service import (
+    _prev_orphan_geometry,
+    MAX_LOOKAHEAD,
+    PrevGeometry,
+)
 from app.pipeline.utils.video import run_ffmpeg_crop, run_ffmpeg_concat, FFmpegConfig
 
 logger = logging.getLogger(__name__)
@@ -38,7 +42,8 @@ class UtteranceCroppingService:
         utterance_index: int,
         start_time: float,
         end_time: float,
-        edit_id: Optional[uuid.UUID] = None
+        edit_id: Optional[uuid.UUID] = None,
+        cascade: bool = True
     ):
         """
         Background task to crop the utterance video and upload it to MinIO.
@@ -51,6 +56,11 @@ class UtteranceCroppingService:
         - Supports trim-in (start_time != orig_start)
         - Records cascade_info audit trail
         - Deep cascade invalidation beyond N+1
+
+        ``cascade=False`` suppresses the neighbour updates. It is used for the
+        re-cut of a sentence that was just shortened to feed the one after it:
+        that sentence's neighbours were already settled by the crop that
+        triggered it, and running the cascade again would undo them.
         """
         minio_service = get_minio_service()
         
@@ -174,35 +184,41 @@ class UtteranceCroppingService:
                 
                 # ══════════════════════════════════════════════════════════
                 # BACKWARD TRIM-IN (lookback)
-                # A start before this clip's head can only be honoured from the
-                # ORPHAN TAIL of utterance N-1 — the stretch N-1 released when its
-                # own annotator trimmed in. Anything beyond that still belongs to
-                # N-1, so it stays off limits and start_time is clamped to it.
-                # The reclaimed piece is prepended as Part Z after the normal crop
-                # below has produced this clip's own contribution.
+                # A start before this clip's head is served from utterance N-1, in
+                # two tiers. First the ORPHAN TAIL — the stretch N-1 released when
+                # its own annotator trimmed in — which costs nothing because N-1
+                # already wrote it off. Past that comes material N-1 still OWNS:
+                # taking it is allowed, but it must be paid for by shortening N-1's
+                # own end and re-cropping it (the left cascade below). Beyond
+                # ``reach`` (which always leaves N-1 a minimum) the request is
+                # clamped. The reclaimed piece is prepended as Part Z after the
+                # normal crop has produced this clip's own contribution.
                 # ══════════════════════════════════════════════════════════
+                prev_geom = None
                 prev_transcript = None
-                prev_effective_end = 0.0
-                prev_orphan = 0.0
                 clamped_left = 0.0
+                borrowed_from_prev = 0.0
                 if start_time < orig_start:
                     left_overlap = orig_start - start_time
-                    prev_transcript, prev_effective_end, prev_orphan = await _prev_orphan_geometry(
-                        db, segment, utterance_index
-                    )
-                    clamped_left = min(left_overlap, prev_orphan)
+                    prev_geom = await _prev_orphan_geometry(db, segment, utterance_index)
+                    prev_transcript = prev_geom.transcript
+                    clamped_left = min(left_overlap, prev_geom.reach)
+                    # Anything past the free orphan is borrowed from N-1 itself.
+                    borrowed_from_prev = max(0.0, clamped_left - prev_geom.orphan)
                     if clamped_left > 0.0:
                         logger.info(
                             f"Backward trim-in for utt {utterance_index}: requested "
                             f"{left_overlap:.3f}s before orig_start, reclaiming "
-                            f"{clamped_left:.3f}s of orphan tail from utt "
-                            f"{prev_transcript.utterance_index}"
+                            f"{clamped_left:.3f}s from utt "
+                            f"{prev_transcript.utterance_index} "
+                            f"({min(clamped_left, prev_geom.orphan):.3f}s orphan + "
+                            f"{borrowed_from_prev:.3f}s borrowed)"
                         )
                     else:
                         logger.warning(
                             f"Trim-in before orig_start for utt {utterance_index}: "
-                            f"start={start_time:.3f} but orig_start={orig_start:.3f} and no "
-                            f"orphan tail is available. Clamping to orig_start."
+                            f"start={start_time:.3f} but orig_start={orig_start:.3f} and "
+                            f"nothing is reachable behind it. Clamping to orig_start."
                         )
                     # Downstream math stays anchored on this clip's own head.
                     start_time = orig_start
@@ -228,6 +244,7 @@ class UtteranceCroppingService:
                 
                 cascade_affected = []  # Track affected utterances for audit trail
                 final_overlap = 0.0    # Seconds this crop consumed from the head of the NEXT video
+                consumed: list = []    # Following clips this crop ate into, in order
 
                 if right_overlap <= 0 and not skip_part_a:
                     # ══════════════════════════════════════════════
@@ -254,35 +271,36 @@ class UtteranceCroppingService:
                     # Trim-out to right (possibly with trim-in from left too)
                     # ══════════════════════════════════════════════
                     logger.info(f"Cross-segment merge for utt {utterance_index}: overlap={right_overlap:.2f}s")
-                    
-                    # Find next transcript (can be same segment or next segment)
-                    next_result = await db.execute(
-                        select(PipelineTranscript)
-                        .join(PipelineSegment, PipelineTranscript.segment_id == PipelineSegment.id)
-                        .where(PipelineSegment.job_id == segment.job_id)
-                        .where(
-                            (PipelineSegment.segment_index > segment.segment_index) |
-                            ((PipelineSegment.segment_index == segment.segment_index) & 
-                             (PipelineTranscript.utterance_index > curr_transcript.utterance_index))
-                        )
-                        .order_by(PipelineSegment.segment_index.asc(), PipelineTranscript.utterance_index.asc())
-                        .limit(1)
+
+                    # Which following clips this spill reaches, and how deeply. More
+                    # than one can be involved because the footage the annotator
+                    # needs is sometimes not in the very next row but two or three
+                    # further on, with rows in between too short to work with. Those
+                    # in-between rows get swallowed whole (see the cascade below).
+                    consumed = await _plan_forward_consumption(
+                        db, segment, curr_transcript.utterance_index, right_overlap
                     )
-                    next_transcript = next_result.scalar_one_or_none()
-                    
-                    if not next_transcript or not next_transcript.video_path:
+
+                    if not consumed:
                         logger.error("Next utterance video not found. Cannot merge.")
                         await _mark_failed(db, edit, utt_list, utt_idx_in_array)
                         return
-                    
-                    # Clamp right_overlap to next video's duration
-                    next_duration = max(0.01, next_transcript.end - next_transcript.start)
-                    clamped_overlap = min(right_overlap, next_duration)
-                    
-                    next_video_url = await minio_service.generate_presigned_url(
-                        next_transcript.video_path, expiry=3600
-                    )
-                    
+
+                    # Total actually obtainable — the request is clamped to it when
+                    # the annotator drags past the last available clip.
+                    clamped_overlap = sum(c["taken"] for c in consumed)
+                    next_transcript = consumed[0]["transcript"]
+                    next_duration = consumed[0]["duration"]
+
+                    next_video_urls = []
+                    for c in consumed:
+                        next_video_urls.append(
+                            await minio_service.generate_presigned_url(
+                                c["transcript"].video_path, expiry=3600
+                            )
+                        )
+                    next_video_url = next_video_urls[0]
+
                     # Edge case: if remaining Part A is too small to be a valid video,
                     # use video-editor-sibi approach: merge full videos first, then crop.
                     # This avoids concatenating a tiny partial clip which FFmpeg rejects.
@@ -295,22 +313,23 @@ class UtteranceCroppingService:
                             f"using merge-then-crop approach (video-editor-sibi style)"
                         )
                         
-                        # Approach: concat FULL current + FULL next video, then crop from merged.
-                        # This is how video-editor-sibi handles cross-video trim seamlessly.
+                        # Approach: concat FULL current + every consumed video, then
+                        # crop from merged. This is how video-editor-sibi handles
+                        # cross-video trim seamlessly.
                         tmp_merged = f"/tmp/{segment_id}_utt_{utterance_index}_merged.mp4"
                         success_merge = await run_ffmpeg_concat(
-                            input_paths=[curr_video_url, next_video_url],
+                            input_paths=[curr_video_url, *next_video_urls],
                             output_path=tmp_merged,
                             config=config
                         )
-                        
+
                         tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
                         if success_merge:
                             # Crop from the merged file: [relative_start, relative_start + requested]
-                            # Cap at what merged can provide (part_a_duration + next_duration)
+                            # Cap at what merged can actually provide.
                             crop_end = min(
                                 relative_start + requested_duration,
-                                part_a_duration + next_duration
+                                part_a_duration + sum(c["duration"] for c in consumed)
                             )
                             success = await run_ffmpeg_crop(
                                 input_path=tmp_merged,
@@ -354,32 +373,45 @@ class UtteranceCroppingService:
                             config=config
                         )
                         
-                        # Part B: Next video from 0 to clamped_overlap
-                        tmp_part_b = f"/tmp/{segment_id}_utt_{utterance_index}_partB.mp4"
-                        success_b = await run_ffmpeg_crop(
-                            input_path=next_video_url,
-                            output_path=tmp_part_b,
-                            start_time=0.0,
-                            end_time=clamped_overlap,
-                            use_input_seeking=False,
-                            config=config
-                        )
-                        
+                        # Part B: one piece per consumed clip. A clip taken whole is
+                        # used as-is; only the final, partly-taken one is cropped.
+                        part_b_paths = []
+                        success_b = True
+                        for i, c in enumerate(consumed):
+                            if c["fully"]:
+                                part_b_paths.append(next_video_urls[i])
+                                continue
+                            tmp_part_b = f"/tmp/{segment_id}_utt_{utterance_index}_partB{i}.mp4"
+                            success_b = await run_ffmpeg_crop(
+                                input_path=next_video_urls[i],
+                                output_path=tmp_part_b,
+                                start_time=0.0,
+                                end_time=c["taken"],
+                                use_input_seeking=False,
+                                config=config
+                            )
+                            if not success_b:
+                                break
+                            part_b_paths.append(tmp_part_b)
+
+                        # Only the cropped pieces are ours to delete; the rest are URLs.
+                        tmp_b_files = [p for p in part_b_paths if p.startswith("/tmp/")]
+
                         if not (success_a and success_b):
-                            _cleanup_tmp(tmp_part_a, tmp_part_b)
+                            _cleanup_tmp(tmp_part_a, *tmp_b_files)
                             await _mark_failed(db, edit, utt_list, utt_idx_in_array)
                             return
-                        
+
                         # Merge
                         tmp_output = f"/tmp/{segment_id}_utt_{utterance_index}.mp4"
                         success_merge = await run_ffmpeg_concat(
-                            input_paths=[tmp_part_a, tmp_part_b],
+                            input_paths=[tmp_part_a, *part_b_paths],
                             output_path=tmp_output,
                             config=config
                         )
-                        
-                        _cleanup_tmp(tmp_part_a, tmp_part_b)
-                        
+
+                        _cleanup_tmp(tmp_part_a, *tmp_b_files)
+
                         if not success_merge:
                             await _mark_failed(db, edit, utt_list, utt_idx_in_array)
                             return
@@ -400,11 +432,12 @@ class UtteranceCroppingService:
                         prev_transcript.video_path, expiry=3600
                     )
                     # Take the LAST clamped_left seconds of N-1's clip — the piece
-                    # physically adjacent to this clip's head. Never earlier than
-                    # the orphan boundary, which is still N-1's own material.
+                    # physically adjacent to this clip's head. Never earlier than the
+                    # borrow floor, which is the minimum N-1 must keep for itself.
                     prev_clip_duration = max(0.01, prev_transcript.end - prev_transcript.start)
-                    tail_local_start = max(0.0, prev_effective_end - prev_transcript.start)
-                    z_start = max(tail_local_start, prev_clip_duration - clamped_left)
+                    orphan_local_start = max(0.0, prev_geom.effective_end - prev_transcript.start)
+                    borrow_floor = max(0.0, orphan_local_start - prev_geom.borrowable)
+                    z_start = max(borrow_floor, prev_clip_duration - clamped_left)
 
                     tmp_part_z = f"/tmp/{segment_id}_utt_{utterance_index}_partZ.mp4"
                     success_z = await run_ffmpeg_crop(
@@ -432,11 +465,14 @@ class UtteranceCroppingService:
                             logger.warning(
                                 "Part Z concat failed; saving crop without the reclaimed lookback"
                             )
+                            # Nothing was reclaimed, so N-1 must not be charged for it.
                             clamped_left = 0.0
+                            borrowed_from_prev = 0.0
                     else:
                         _cleanup_tmp(tmp_part_z)
                         logger.warning("Part Z crop failed; saving crop without the reclaimed lookback")
                         clamped_left = 0.0
+                        borrowed_from_prev = 0.0
 
                 # Upload video
                 upload_key = f"jobs/{segment.job_id}/utterances_synced/{segment_id}_utt_{utterance_index}.mp4"
@@ -497,14 +533,32 @@ class UtteranceCroppingService:
 
                 # ══════════════════════════════════════════════════════════
                 # IDEMPOTENT CASCADE (REPLACE semantics)
-                # Pin the next utterance's working start to exactly the head this
-                # crop consumed (final_overlap). final_overlap == 0 resets it to
-                # base — so re-trimming N smaller, even down to no spill, always
-                # pulls N+1 back and never strands a gap of lost content.
+                # Pin each following utterance's working start to exactly the head
+                # this crop consumed. An empty ``consumed`` resets them to base — so
+                # re-trimming N smaller, even down to no spill, always pulls the
+                # neighbours back and never strands a gap of lost content, and a row
+                # that was swallowed whole is un-swallowed the same way.
                 # ══════════════════════════════════════════════════════════
-                cascade_affected = await _cascade_set_next_start(
-                    db, segment, utterance_index, final_overlap
-                )
+                cascade_affected = []
+                if cascade:
+                    cascade_affected = await _cascade_consume_forward(
+                        db, segment, utterance_index, consumed
+                    )
+
+                # ══════════════════════════════════════════════════════════
+                # LEFT CASCADE — pay utterance N-1 for what was borrowed from it.
+                # Only the part beyond its released orphan is charged; the orphan
+                # itself was already written off. N-1 loses exactly that many
+                # seconds off its end and is re-cropped so its stored video matches
+                # its new range. Without this the same footage would sit in BOTH
+                # sentences' exported clips.
+                # ══════════════════════════════════════════════════════════
+                if cascade and borrowed_from_prev > 0.0 and prev_geom is not None and prev_transcript is not None:
+                    left_affected = await _shorten_prev_utterance(
+                        db, prev_geom, borrowed_from_prev
+                    )
+                    if left_affected:
+                        cascade_affected.append(left_affected)
 
                 # ══════════════════════════════════════════════════════════
                 # IMPROVEMENT 3: Record cascade audit trail
@@ -623,9 +677,34 @@ class UtteranceCroppingService:
                         if utt_list[i].get("status") == "OK":
                             utt_list[i]["status"] = "DRAFT"
                         break
-            
+
             edit.utterance_corrections = utt_list
             flag_modified(edit, "utterance_corrections")
+            await db.commit()
+
+            # 3b. Re-settle every following row against the RESTORED range. The
+            # snapshot only carries N+1, but a crop can swallow several rows whole
+            # on its way to a later one, and those must be released too. Deriving
+            # the claim from the restored end (rather than replaying the snapshot)
+            # keeps this correct at any depth and leaves a still-legitimate spill
+            # from an earlier, un-reverted crop in place.
+            segment_row = (await db.execute(
+                select(PipelineSegment).where(PipelineSegment.id == segment_id)
+            )).scalar_one_or_none()
+            curr_transcript = (await db.execute(
+                select(PipelineTranscript).where(
+                    PipelineTranscript.segment_id == segment_id,
+                    PipelineTranscript.utterance_index == utterance_index
+                )
+            )).scalar_one_or_none()
+            if segment_row is not None and curr_transcript is not None:
+                restored_overlap = max(0.0, snapshot["end"] - curr_transcript.end)
+                await _cascade_consume_forward(
+                    db, segment_row, utterance_index,
+                    await _plan_forward_consumption(
+                        db, segment_row, utterance_index, restored_overlap
+                    ),
+                )
             
             # 4. Record revert in cascade_info audit trail
             revert_entry = {
@@ -674,31 +753,19 @@ async def _mark_failed(db, edit, utt_list, utt_idx):
     await db.commit()
 
 
-async def _cascade_set_next_start(
-    db, segment: PipelineSegment, curr_utterance_index: int, final_overlap: float
+async def _plan_forward_consumption(
+    db, segment: PipelineSegment, curr_utterance_index: int, overlap: float
 ) -> list:
-    """Idempotent cascade (REPLACE semantics) on the next utterance's FLOOR.
+    """Which following clips an ``overlap``-second spill eats into, and how deeply.
 
-    After utterance N is cropped consuming ``final_overlap`` seconds from the head
-    of the next video, pin the NEXT utterance's ``floor`` to exactly
-    ``transcript_base + final_overlap`` and carry its annotation ``start`` along
-    while preserving the annotator's own head trim-in (``start - floor``).
-
-    Because the floor is computed from the immutable transcript base (never from
-    the previous floor), this is fully idempotent in BOTH directions:
-      - re-trim N larger  -> N+1 floor moves further forward
-      - re-trim N smaller -> N+1 floor moves back
-      - re-trim N to no spill (final_overlap == 0) -> N+1 floor resets to base
-    so a shrink never strands a gap of lost content between N and N+1.
-
-    The floor is what the look-ahead merge physically crops from N+1's head (the
-    region owned by N, hidden from N+1). The annotator's own trim-in beyond the
-    floor stays as a recoverable gray head. PipelineTranscript.start is never
-    mutated. Returns the list of affected utterances for the audit trail.
+    Walks forward taking whole clips until the spill is covered; the last one is
+    usually only partly taken. Shared by the crop (to build the video) and the
+    revert (to work out which rows the restored range still claims), so both
+    always agree on where a spill lands.
     """
-    affected = []
+    if overlap <= 1e-6:
+        return []
 
-    # Find the next utterance in the chain (same segment, else next segment).
     next_result = await db.execute(
         select(PipelineTranscript)
         .join(PipelineSegment, PipelineTranscript.segment_id == PipelineSegment.id)
@@ -709,74 +776,264 @@ async def _cascade_set_next_start(
              (PipelineTranscript.utterance_index > curr_utterance_index))
         )
         .order_by(PipelineSegment.segment_index.asc(), PipelineTranscript.utterance_index.asc())
-        .limit(1)
+        .limit(MAX_LOOKAHEAD)
     )
-    transcript = next_result.scalar_one_or_none()
-    if not transcript:
+    following = [t for t in next_result.scalars().all() if t.video_path]
+
+    consumed = []
+    remaining = overlap
+    for t in following:
+        if remaining <= 1e-6:
+            break
+        t_duration = max(0.01, t.end - t.start)
+        take = min(remaining, t_duration)
+        consumed.append({
+            "transcript": t,
+            "taken": take,
+            "fully": take >= t_duration - 1e-6,
+            "duration": t_duration,
+        })
+        remaining -= take
+    return consumed
+
+
+async def _cascade_consume_forward(
+    db, segment: PipelineSegment, curr_utterance_index: int, consumed: list
+) -> list:
+    """Idempotent cascade (REPLACE semantics) on the FLOORS of the following rows.
+
+    After utterance N is cropped, each following utterance it ate into gets its
+    ``floor`` pinned to exactly how much of its own head N took:
+
+      - taken in part  -> ``floor = transcript_base + taken``, still annotatable
+      - taken whole    -> ``floor = transcript_end`` and ``status = MERGED``; the
+        row has no footage of its own left, so it is skipped on export and shown
+        as absorbed in the workspace
+
+    Rows past the consumed run are reset to base, which is what makes shrinking
+    reversible: a row swallowed by an earlier crop is un-swallowed as soon as the
+    crop no longer reaches it. Because every floor is computed from the immutable
+    transcript base (never from the previous floor), the whole walk is idempotent
+    in both directions.
+
+    The floor is what the look-ahead merge physically crops from a row's head (the
+    region owned by N, hidden from that row). The annotator's own trim-in beyond
+    the floor stays as a recoverable gray head. PipelineTranscript.start is never
+    mutated. Returns the list of affected utterances for the audit trail.
+    """
+    affected = []
+
+    # Walk further than the crop could possibly have reached, so rows left MERGED
+    # by a previous, longer crop are found and released.
+    horizon = MAX_LOOKAHEAD + 3
+    following_result = await db.execute(
+        select(PipelineTranscript)
+        .join(PipelineSegment, PipelineTranscript.segment_id == PipelineSegment.id)
+        .where(PipelineSegment.job_id == segment.job_id)
+        .where(
+            (PipelineSegment.segment_index > segment.segment_index) |
+            ((PipelineSegment.segment_index == segment.segment_index) &
+             (PipelineTranscript.utterance_index > curr_utterance_index))
+        )
+        .order_by(PipelineSegment.segment_index.asc(), PipelineTranscript.utterance_index.asc())
+        .limit(horizon)
+    )
+    following = following_result.scalars().all()
+    if not following:
         return affected
 
-    next_segment_id = transcript.segment_id
-    next_utterance_index = transcript.utterance_index
-    base_start = transcript.start                      # immutable original
-    # The cascade owns the FLOOR (how much of N+1's head this sentence consumed),
-    # not the annotation start. The annotator's own head trim-in (start - floor)
-    # is preserved on top, so it survives N being re-trimmed.
-    new_floor = base_start + max(0.0, final_overlap)
+    taken_by_id = {c["transcript"].id: c for c in consumed}
+
+    # One edit per segment; the run can span a segment boundary.
+    edits_by_segment: dict = {}
+
+    async def _edit_for(seg_id):
+        if seg_id not in edits_by_segment:
+            res = await db.execute(
+                select(AnnotationEdit).where(
+                    AnnotationEdit.segment_id == seg_id,
+                    AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
+                    AnnotationEdit.is_deleted == False
+                ).order_by(AnnotationEdit.edited_at.desc())
+            )
+            edits_by_segment[seg_id] = res.scalars().first()
+        return edits_by_segment[seg_id]
+
+    for transcript in following:
+        entry = taken_by_id.get(transcript.id)
+        base_start = transcript.start                  # immutable original
+
+        if entry is not None:
+            fully = entry["fully"]
+            new_floor = transcript.end if fully else base_start + max(0.0, entry["taken"])
+        else:
+            fully = False
+            new_floor = base_start
+
+        edit = await _edit_for(transcript.segment_id)
+        if not edit or not edit.utterance_corrections:
+            # Nothing to reset here and nothing consumed -> the run is over.
+            if entry is None:
+                break
+            continue
+
+        utt_list = list(edit.utterance_corrections)
+        row_changed = False
+        for i, utt in enumerate(utt_list):
+            if utt.get("utterance_index") != transcript.utterance_index:
+                continue
+
+            old_floor = utt.get("floor", base_start)
+            old_start = utt.get("start", base_start)
+            old_status = utt.get("status")
+
+            # Preserve the annotator's own head trim-in (the part of start beyond
+            # the floor) while re-pinning the cascade floor.
+            user_delta = max(0.0, old_start - old_floor)
+            new_start = new_floor + user_delta
+            end_val = utt.get("end", transcript.end)
+            if not fully and new_start >= end_val:
+                new_start = end_val - 0.1
+
+            new_status = old_status
+            if fully:
+                new_status = "MERGED"
+            elif old_status in ("MERGED", "OK"):
+                # Released from an earlier swallow, or its head moved — either way
+                # it needs looking at again.
+                new_status = "DRAFT"
+
+            geometry_moved = (
+                abs(new_floor - old_floor) > 1e-6 or abs(new_start - old_start) > 1e-6
+            )
+            if geometry_moved or new_status != old_status:
+                utt_list[i]["floor"] = new_floor
+                utt_list[i]["start"] = new_start
+                utt_list[i]["status"] = new_status
+                # This row's head changed -> its physical crop is stale.
+                utt_list[i]["cropped_video_path"] = None
+                edit.utterance_corrections = utt_list
+                flag_modified(edit, "utterance_corrections")
+                row_changed = True
+                affected.append({
+                    "utterance_index": transcript.utterance_index,
+                    "segment_id": str(transcript.segment_id),
+                    "old_start": old_start,
+                    "new_start": new_start,
+                    "new_floor": new_floor,
+                    "status": new_status,
+                    "action": "merged_into_prev" if fully else "floor_set",
+                })
+            break
+
+        # A row's head changed -> its own look-ahead merge is stale.
+        if row_changed and transcript.merged_video_path:
+            transcript.merged_video_path = None
+            transcript.merged_video_duration = None
+            transcript.video_n_duration = None
+
+        # Past the consumed run, the first untouched row means everything beyond
+        # it is untouched too — nothing downstream could still be stale.
+        if entry is None and not row_changed:
+            break
+
+    await db.commit()
+    return affected
+
+
+async def _shorten_prev_utterance(
+    db, prev_geom: PrevGeometry, borrowed: float
+) -> Optional[dict]:
+    """LEFT CASCADE — hand ``borrowed`` seconds of utterance N-1 over to N.
+
+    The mirror of the forward cascade, and the only path that shortens a sentence
+    other than the one being annotated. It runs when a backward trim-in reached
+    past N-1's released orphan into footage N-1 still owned: N-1's ``end`` moves
+    left by exactly that much, and its clip is re-cropped so the stored video
+    matches its new range instead of still containing the handed-over footage.
+
+    N-1 is left as DRAFT — its boundary was decided by someone annotating a
+    different sentence, so it is worth a second look. Returns an audit entry, or
+    None when there was nothing to charge.
+    """
+    prev_transcript = prev_geom.transcript
+    if prev_transcript is None or borrowed <= 0.0:
+        return None
+
+    new_end = prev_geom.effective_end - borrowed
+    # Never take a sentence below the floor the geometry promised to keep.
+    if new_end <= prev_geom.effective_start + 1e-6:
+        logger.warning(
+            f"Refusing to shorten utt {prev_transcript.utterance_index} below its "
+            f"own start (borrowed={borrowed:.3f}s); skipping left cascade"
+        )
+        return None
 
     edit_result = await db.execute(
         select(AnnotationEdit).where(
-            AnnotationEdit.segment_id == next_segment_id,
+            AnnotationEdit.segment_id == prev_transcript.segment_id,
             AnnotationEdit.status.in_(["DRAFT", "PENDING"]),
             AnnotationEdit.is_deleted == False
         ).order_by(AnnotationEdit.edited_at.desc())
     )
-    next_edit = edit_result.scalars().first()
+    prev_edit = edit_result.scalars().first()
+    if not prev_edit or not prev_edit.utterance_corrections:
+        logger.warning(
+            f"No active edit for segment {prev_transcript.segment_id}; "
+            f"cannot charge the borrowed lookback to utt {prev_transcript.utterance_index}"
+        )
+        return None
 
-    changed = False
-    if next_edit and next_edit.utterance_corrections:
-        next_utt_list = list(next_edit.utterance_corrections)
-        for i, utt in enumerate(next_utt_list):
-            if utt.get("utterance_index") == next_utterance_index:
-                old_floor = utt.get("floor", base_start)
-                old_start = utt.get("start", base_start)
-                # Preserve the annotator's own head trim-in (the part of start
-                # beyond the floor) while re-pinning the cascade floor.
-                user_delta = max(0.0, old_start - old_floor)
-                new_start = new_floor + user_delta
-                # Keep start strictly before end.
-                end_val = utt.get("end", transcript.end)
-                if new_start >= end_val:
-                    new_start = end_val - 0.1
-                if abs(new_floor - old_floor) > 1e-6 or abs(new_start - old_start) > 1e-6:
-                    next_utt_list[i]["floor"] = new_floor
-                    next_utt_list[i]["start"] = new_start
-                    # The head of N+1 changed -> its physical crop is stale.
-                    next_utt_list[i]["cropped_video_path"] = None
-                    if next_utt_list[i].get("status") == "OK":
-                        next_utt_list[i]["status"] = "DRAFT"
-                    next_edit.utterance_corrections = next_utt_list
-                    flag_modified(next_edit, "utterance_corrections")
-                    changed = True
-                    affected.append({
-                        "utterance_index": next_utterance_index,
-                        "segment_id": str(next_segment_id),
-                        "old_start": old_start,
-                        "new_start": new_start,
-                        "new_floor": new_floor,
-                        "action": "floor_set",
-                    })
-                break
+    prev_list = list(prev_edit.utterance_corrections)
+    old_end = None
+    for i, utt in enumerate(prev_list):
+        if utt.get("utterance_index") != prev_transcript.utterance_index:
+            continue
+        old_end = utt.get("end", prev_transcript.end)
+        prev_list[i]["end"] = new_end
+        prev_list[i]["status"] = "DRAFT"
+        # Its stored clip still holds the footage just handed over.
+        prev_list[i]["cropped_video_path"] = None
+        prev_edit.utterance_corrections = prev_list
+        flag_modified(prev_edit, "utterance_corrections")
+        break
 
-    # N+1's head changed -> its own look-ahead merge (N+1 + N+2) is stale.
-    # (N's merge, which also contains N+1, is cleared by the caller.) Downstream
-    # merges (N+2 + N+3, ...) do not contain N+1, so they stay valid.
-    if changed and transcript.merged_video_path:
-        transcript.merged_video_path = None
-        transcript.merged_video_duration = None
-        transcript.video_n_duration = None
+    if old_end is None:
+        return None
+
+    # Its look-ahead tape ends at the old boundary.
+    if prev_transcript.merged_video_path:
+        prev_transcript.merged_video_path = None
+        prev_transcript.merged_video_duration = None
+        prev_transcript.video_n_duration = None
 
     await db.commit()
-    return affected
+
+    logger.info(
+        f"Left cascade: utt {prev_transcript.utterance_index} of segment "
+        f"{prev_transcript.segment_id} shortened {old_end:.3f} -> {new_end:.3f} "
+        f"({borrowed:.3f}s handed over); re-cropping it"
+    )
+
+    # Re-cut N-1 to its new range. cascade=False because the forward cascade from
+    # N-1 would re-pin N's floor and wipe the backward start we just saved — and
+    # N's geometry is already correct, having just been written by the caller.
+    await UtteranceCroppingService.crop_and_upload(
+        segment_id=prev_transcript.segment_id,
+        utterance_index=prev_transcript.utterance_index,
+        start_time=prev_geom.effective_start,
+        end_time=new_end,
+        cascade=False,
+    )
+
+    return {
+        "utterance_index": prev_transcript.utterance_index,
+        "segment_id": str(prev_transcript.segment_id),
+        "old_end": old_end,
+        "new_end": new_end,
+        "borrowed_seconds": borrowed,
+        "action": "shortened_for_next",
+    }
 
 
 def _cleanup_tmp(*paths):

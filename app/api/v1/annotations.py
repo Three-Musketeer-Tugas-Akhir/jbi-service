@@ -330,6 +330,7 @@ async def get_merged_video_for_utterance(
     segment_id: UUID,
     utterance_index: int,
     include_prev: bool = False,
+    lookahead: int = Query(1, ge=1, le=3, description="Clips after N to append to the tape"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role("admin", "annotator", "curator"))
 ):
@@ -342,11 +343,19 @@ async def get_merged_video_for_utterance(
     If the merge already exists, returns the cached video.
     If not, creates the merge on-the-fly and caches it.
 
-    With ``include_prev=true`` the tape is prefixed with the orphan tail of
-    utterance N-1 — the stretch its own annotator released by trimming in — so
-    the start handle can be dragged backwards over it. ``prev_available`` in the
-    response reports how many seconds that would add, and is returned on every
-    call so the client can decide whether to offer the option at all.
+    With ``include_prev=true`` the tape is prefixed with what utterance N-1 holds
+    behind it, so the start handle can be dragged backwards. That prefix has two
+    parts, reported separately because they cost different things: the orphan
+    (``prev_available``, released by N-1's own trim-in, free to take) and the
+    borrowable stretch (``prev_borrowable``, still owned by N-1 — reaching into it
+    shortens N-1 and forces it to be re-cropped).
+
+    With ``lookahead`` > 1 the tape appends N+2 … N+k, for when the footage the
+    annotator needs is not in the next clip but two or three rows further on.
+    ``lookahead_available`` reports how many following clips actually exist.
+
+    Both counts are returned on every call so the client can decide whether to
+    offer either option at all, without a second round trip.
     """
     from app.services.annotation_queue_service import AnnotationQueueService
     from app.services.utterance_merge_service import UtteranceMergeService
@@ -374,7 +383,8 @@ async def get_merged_video_for_utterance(
         job_id=segment.job_id,
         segment_id=segment_id,
         utterance_index=utterance_index,
-        include_prev=include_prev
+        include_prev=include_prev,
+        lookahead=lookahead
     )
     
     if not result:

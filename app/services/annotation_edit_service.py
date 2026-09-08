@@ -344,6 +344,17 @@ class AnnotationEditService:
             # would stop hiding the head owned by the previous sentence.
             if d.get("floor") is None and prev is not None and prev.get("floor") is not None:
                 d["floor"] = prev["floor"]
+            # MERGED is server-owned: the cascade sets it when an earlier sentence
+            # is extended over this row and swallows it whole. A client that loaded
+            # the segment before that happened would otherwise silently clear it on
+            # its next save. Only the cascade (or a revert) releases the row again.
+            if prev is not None and prev.get("status") == "MERGED" and d.get("status") != "MERGED":
+                d["status"] = "MERGED"
+            # Annotator note / review flag: keep whatever is on file when the client
+            # does not send them, so an older client cannot wipe them.
+            for carried in ("note", "needs_review"):
+                if d.get(carried) is None and prev is not None and prev.get(carried) is not None:
+                    d[carried] = prev[carried]
             # Pre-trim snapshot: stash "before" the moment start/end actually
             # change, so /revert has a real state to restore. crop_and_upload
             # used to take this snapshot itself, but by then the draft-save

@@ -33,9 +33,30 @@ class UtteranceCorrection(BaseModel):
             "(SaveDraftRequest) and only meaningful on responses."
         ),
     )
+    note: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description=(
+            "Free-text note from the annotator, for a case they could not resolve by "
+            "trimming — the needed footage sitting several rows away, a sign split "
+            "across a boundary, and so on. Carried through save/load so a curator can "
+            "pick it up later."
+        ),
+    )
+    needs_review: Optional[bool] = Field(
+        None,
+        description=(
+            "Annotator flag: this sentence needs a second pair of eyes. Set alongside "
+            "``note`` when the workspace alone cannot fix the alignment."
+        ),
+    )
 
     @model_validator(mode='after')
     def validate_timestamps(self):
+        # A MERGED row was swallowed whole by the sentence before it, so it has no
+        # span of its own left and the start < end rule does not apply to it.
+        if self.status == "MERGED":
+            return self
         if self.start >= self.end:
             raise ValueError("Start must be less than end")
         return self
