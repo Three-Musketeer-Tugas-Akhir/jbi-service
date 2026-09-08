@@ -2331,6 +2331,14 @@ async def get_dataset_explorer(
 async def download_dataset_zip(
     job_id: str,
     layout: str = Query("file", description="ZIP folder layout: 'file' (group by file type) or 'sentence' (group by sentence)"),
+    include_drafts: bool = Query(
+        False,
+        description=(
+            "Include segments whose annotation is still a DRAFT. Off by default: "
+            "an export is a published artefact, and a draft is work the annotator "
+            "has not finalised. Turn on only to pull an in-progress snapshot."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_user),
     job_repo: JobRepository = Depends(get_job_repository),
@@ -2441,18 +2449,38 @@ async def download_dataset_zip(
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             global_idx = 1
             files_added = 0
+            # A finalised segment is one the annotator has submitted. A DRAFT is
+            # work in progress and is excluded unless explicitly asked for, so an
+            # export cannot publish half-aligned material as though it were done.
+            exportable_statuses = [
+                AnnotationEdit.STATUS_PENDING,
+                AnnotationEdit.STATUS_SUBMITTED,
+                AnnotationEdit.STATUS_APPROVED,
+            ]
+            if include_drafts:
+                exportable_statuses.append(AnnotationEdit.STATUS_DRAFT)
+
+            skipped_draft_segments = 0
             for segment in segments:
-                # Get latest annotation edit for this segment (DRAFT/PENDING/SUBMITTED/APPROVED)
                 latest_edit = None
                 for edit in segment.annotation_edits:
-                    if edit.status in (
-                        AnnotationEdit.STATUS_DRAFT,
-                        AnnotationEdit.STATUS_PENDING,
-                        AnnotationEdit.STATUS_SUBMITTED,
-                        AnnotationEdit.STATUS_APPROVED,
-                    ):
+                    if edit.status in exportable_statuses:
                         if latest_edit is None or edit.edited_at > latest_edit.edited_at:
                             latest_edit = edit
+
+                if latest_edit is None and not include_drafts:
+                    # Distinguish "still a draft" from "never annotated" so the log
+                    # says which, rather than both looking like missing data.
+                    if any(
+                        e.status == AnnotationEdit.STATUS_DRAFT
+                        for e in segment.annotation_edits
+                    ):
+                        skipped_draft_segments += 1
+                        logger.info(
+                            f"ZIP skip segment {segment.segment_index}: annotation is "
+                            f"still a DRAFT (not finalised). Pass include_drafts=true "
+                            f"to export work in progress."
+                        )
 
                 if not latest_edit or not latest_edit.utterance_corrections:
                     logger.info(f"ZIP skip segment {segment.segment_index}: no edits or no utterance corrections")
@@ -2580,7 +2608,35 @@ Format for all text files: `filename_prefix|text_content`
             zf.writestr("README.md", readme_content.encode("utf-8"))
             files_added += 1
 
-        logger.info(f"ZIP total: {files_added} files added for job {job_id} (layout={layout})")
+        logger.info(
+            f"ZIP total: {files_added} files added for job {job_id} (layout={layout}, "
+            f"skipped_draft_segments={skipped_draft_segments})"
+        )
+
+        # Everything this job has is still a draft. Handing back a ZIP holding
+        # only the README would look like the export silently lost the data, so
+        # say what actually happened and how to get it.
+        if skipped_draft_segments > 0 and not any(
+            seg for seg in segments
+            if any(
+                e.status in (
+                    AnnotationEdit.STATUS_PENDING,
+                    AnnotationEdit.STATUS_SUBMITTED,
+                    AnnotationEdit.STATUS_APPROVED,
+                )
+                for e in seg.annotation_edits
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Tidak ada segmen yang sudah difinalisasi pada job ini "
+                    f"({skipped_draft_segments} segmen masih berstatus draft). "
+                    f"Minta annotator menekan \"Finalkan Segmen\", atau ulangi "
+                    f"permintaan dengan include_drafts=true untuk mengunduh "
+                    f"pekerjaan yang belum selesai."
+                ),
+            )
 
         zip_buffer.seek(0)
         safe_name = (job.original_filename or "dataset").rsplit(".", 1)[0]
