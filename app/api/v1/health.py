@@ -1,9 +1,12 @@
 """Health check endpoints."""
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.services.health_service import get_health_service, HealthService
 from app.schemas.job import HealthResponse, ErrorResponse
@@ -108,3 +111,24 @@ async def liveness_probe():
     Returns 200 if the service is running (even if degraded).
     """
     return {"status": "alive"}
+
+
+@router.get(
+    "/health/handover",
+    summary="Handover deploy check",
+    tags=["Health"],
+)
+async def handover_check():
+    """
+    Confirm that a deploy reached the server.
+
+    Used by the next maintainers to test the handover deploy flow
+    (push to main → git pull on server → rebuild). If this endpoint
+    responds, the running container includes this commit.
+    """
+    return {
+        "status": "ok",
+        "message": "Handover test endpoint is live",
+        "environment": settings.environment,
+        "server_time": datetime.now(timezone.utc).isoformat(),
+    }
